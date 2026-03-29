@@ -33,6 +33,7 @@ Then align [Anchor.toml](Anchor.toml) `solana_version` with the version **`ancho
 ## Vault program
 
 - `initialize` — PDA vault, USDC ATA (owner = vault PDA), strategy, `agent`, `allowed_programs` whitelist.
+- `set_allowed_programs` — **owner only**; replaces `Vault.allowed_programs` (max 16 program ids).
 - `deposit` — SPL transfer from owner USDC ATA into vault USDC ATA.
 - `withdraw` — SPL transfer from vault USDC ATA to owner USDC ATA; **owner only**; vault PDA signs via `invoke_signed`.
 - `execute_swap_cpi` — `invoke_signed` into a **whitelisted** program id (first remaining account); remaining accounts follow that program's instruction layout.
@@ -139,6 +140,15 @@ The agent contains a simple CLI that:
 Use a **mainnet-beta** `RPC_URL` when `RUN_SWAP_CLI=1`: Jupiter `/build` returns mainnet routes and address lookup tables; a devnet RPC will fail with missing ALT / cluster mismatch.
 
 Enable it by setting `RUN_SWAP_CLI=1` in `agent/.env`. See [`agent/.env.example`](agent/.env.example) for required env vars.
+
+#### Agent vs owner (who signs, SOL, multiple vaults)
+
+- **`execute_swap_cpi`** accepts `authority` signer if and only if `authority` is **`Vault.owner`** or **`Vault.agent`** (see [`programs/yield-vault/src/lib.rs`](programs/yield-vault/src/lib.rs)). The vault PDA still “signs” token flows via `invoke_signed` inside the program.
+- **Outer transaction fee payer** is whoever you pass as **`AUTHORITY_KEYPAIR`** in `agent/.env` (that key must match `owner` or `agent` on-chain for the vault you target). Fund **that** wallet with **SOL** on the cluster you use (mainnet-beta for Jupiter `/build`): network fees, and sometimes **rent** for new accounts when Jupiter’s `/build` uses `payer` = that pubkey.
+- **Swap input tokens** (e.g. USDC) come from the **vault’s token ATAs**, not from the agent’s personal token accounts, as long as the route spends from vault balances.
+- **Owner does not have to sign** a swap tx when the **agent** key is `Vault.agent` and you set `AUTHORITY_KEYPAIR` to the agent keypair; the owner is still the logical “customer” because `Vault` PDA is derived from **`["vault", owner_pubkey]`** (`VAULT_OWNER_PUBKEY` in env).
+- **One agent key can drive many vaults**: each user has their own vault PDA (different `owner`). Use the same agent key as `AUTHORITY_KEYPAIR` and change **`VAULT_OWNER_PUBKEY`** per user; each vault must have been **`initialize`d** with **`agent`** equal to that agent’s pubkey.
+- **`withdraw`** stays **owner-only**; the agent cannot pull user USDC to the owner’s wallet unless you add a different instruction later.
 
 ## Spec
 

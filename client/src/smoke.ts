@@ -130,6 +130,20 @@ async function main() {
   const vaultAlready = await connection.getAccountInfo(vaultPda);
   if (vaultAlready) {
     console.log("Vault PDA already initialized, skipping initialize.");
+    if (process.env.UPDATE_ALLOWED_PROGRAMS === "1") {
+      console.log(
+        "UPDATE_ALLOWED_PROGRAMS=1, updating allowed_programs count:",
+        allowedPrograms.length
+      );
+      const sig = await (program.methods as any)
+        .setAllowedPrograms(allowedPrograms)
+        .accounts({
+          owner: owner.publicKey,
+          vault: vaultPda,
+        })
+        .rpc();
+      console.log("set_allowed_programs:", sig);
+    }
   } else {
     console.log(
       "Initializing vault (agent = agent key, strategy Conservative, allowed_programs count:",

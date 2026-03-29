@@ -73,17 +73,25 @@ function wrapAsExecuteSwapCpiIx(args: {
   const innerData = Buffer.from(args.inner.data, "base64");
   const data = encodeExecuteSwapCpiData(innerData);
 
+  const innerKeys = args.inner.accounts.map((a) => {
+    const pubkey = new PublicKey(a.pubkey);
+    // Jupiter marks taker (vault PDA) as signer; the vault cannot sign the v0 tx.
+    // `yield_vault` signs the PDA via `invoke_signed` during CPI.
+    const isVaultPda = pubkey.equals(args.vault);
+    return {
+      pubkey,
+      isSigner: isVaultPda ? false : a.isSigner,
+      isWritable: a.isWritable,
+    };
+  });
+
   return new TransactionInstruction({
     programId: args.vaultProgramId,
     keys: [
       { pubkey: args.authority, isSigner: true, isWritable: true },
       { pubkey: args.vault, isSigner: false, isWritable: true },
       { pubkey: innerProgramId, isSigner: false, isWritable: false },
-      ...args.inner.accounts.map((a) => ({
-        pubkey: new PublicKey(a.pubkey),
-        isSigner: a.isSigner,
-        isWritable: a.isWritable,
-      })),
+      ...innerKeys,
     ],
     data,
   });
@@ -104,16 +112,14 @@ export type BuildVaultSwapParams = {
 export type BuiltVaultSwap = {
   build: JupiterBuildResponse;
   whitelistedProgramIds: string[];
-  blockhash: {
-    recentBlockhash: string;
-    lastValidBlockHeight: number;
-  };
   simulateUnsigned?: {
     unitsConsumed: number | null;
     err: unknown;
     logs: string[] | null;
   };
-  tx: VersionedTransaction;
+  ixs: TransactionInstruction[];
+  alts: ReturnType<typeof altsFromJupiter>;
+  estimatedCuLimit: number;
 };
 
 export async function buildVaultSwapTx(params: BuildVaultSwapParams): Promise<BuiltVaultSwap> {
@@ -197,28 +203,21 @@ export async function buildVaultSwapTx(params: BuildVaultSwapParams): Promise<Bu
       ? COMPUTE_UNIT_LIMIT_MAX
       : Math.min(Math.ceil(unitsConsumed * 1.2), COMPUTE_UNIT_LIMIT_MAX);
 
-  const finalMessage = new TransactionMessage({
-    payerKey: authority,
-    recentBlockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
-      ...computeBudgetIxs,
-      ...wrappedSwapIxs,
-    ],
-  }).compileToV0Message(alts);
-
-  const tx = new VersionedTransaction(finalMessage);
-
   return {
     build,
     whitelistedProgramIds,
-    blockhash: { recentBlockhash, lastValidBlockHeight },
     simulateUnsigned: {
       unitsConsumed,
       err: simulationResult.value.err,
       logs: simulationResult.value.logs ?? null,
     },
-    tx,
+    ixs: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
+      ...computeBudgetIxs,
+      ...wrappedSwapIxs,
+    ],
+    alts,
+    estimatedCuLimit,
   };
 }
 

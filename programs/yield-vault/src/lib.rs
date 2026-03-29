@@ -27,6 +27,16 @@ pub mod yield_vault {
         Ok(())
     }
 
+    pub fn set_allowed_programs(
+        ctx: Context<SetAllowedPrograms>,
+        allowed_programs: Vec<Pubkey>,
+    ) -> Result<()> {
+        require!(allowed_programs.len() <= 16, ErrorCode::TooManyPrograms);
+        let vault = &mut ctx.accounts.vault;
+        vault.allowed_programs = allowed_programs;
+        Ok(())
+    }
+
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
         token::transfer(
             CpiContext::new(
@@ -82,13 +92,17 @@ pub mod yield_vault {
             vault.allowed_programs.iter().any(|p| *p == program_id),
             ErrorCode::ProgramNotWhitelisted
         );
+        let vault_key = vault.key();
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
             .map(|a| {
+                // Outer tx cannot include a PDA signature; Jupiter still expects the taker PDA as a
+                // signer on the inner ix. `invoke_signed` authorizes the vault PDA via seeds.
+                let is_signer = a.key() == vault_key || a.is_signer;
                 if a.is_writable {
-                    AccountMeta::new(a.key(), a.is_signer)
+                    AccountMeta::new(a.key(), is_signer)
                 } else {
-                    AccountMeta::new_readonly(a.key(), a.is_signer)
+                    AccountMeta::new_readonly(a.key(), is_signer)
                 }
             })
             .collect();
@@ -147,6 +161,19 @@ pub struct Initialize<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetAllowedPrograms<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
 }
 
 #[derive(Accounts)]

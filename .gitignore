@@ -1,0 +1,11 @@
+target/
+.anchor/
+test-ledger/
+.DS_Store
+node_modules/
+dist/
+.env
+client/keys/*.json
+*.log
+_gen*.py
+Cargo.lock

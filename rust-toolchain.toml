@@ -1,0 +1,4 @@
+[toolchain]
+# Anchor 0.32.x: IDL build expects rustc 1.89+ (see Anchor 0.32 release notes).
+channel = "1.89.0"
+components = ["rustfmt", "clippy"]

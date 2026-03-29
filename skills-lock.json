@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "integrating-jupiter": {
+      "source": "jup-ag/agent-skills",
+      "sourceType": "github",
+      "computedHash": "44fc690e998e3df19e78a09d911e4aeb8875f52311731dc5f628c903873dd0ad"
+    },
+    "solana-dev": {
+      "source": "solana-foundation/solana-dev-skill",
+      "sourceType": "github",
+      "computedHash": "18f5ee72c18e54a3ed05dd1d93211045404ccb45cfd4683907ce5ead7d9579ce"
+    }
+  }
+}

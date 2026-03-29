@@ -2,7 +2,11 @@ const BASE = "https://api.jup.ag";
 
 export type JupiterFetchInit = RequestInit & { headers?: Record<string, string> };
 
-export function jupiterFetch<T>(apiKey: string, path: string, init?: JupiterFetchInit): Promise<T> {
+export async function jupiterFetch<T>(
+  apiKey: string,
+  path: string,
+  init?: JupiterFetchInit
+): Promise<T> {
   if (!apiKey) throw new Error("Missing JUPITER_API_KEY");
   const url = `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
   const res = await fetch(url, {

@@ -99,6 +99,15 @@ The [`client/`](client/) package runs **`initialize`** (strategy **Conservative*
 
 The **agent** key is only required as a pubkey in `initialize`; keep `keys/agent.json` if you later sign **`execute_swap_cpi`**.
 
+**BN / ESM note** — the client imports **`BN` from `bn.js`** (not from `@coral-xyz/anchor`), because some Node ESM builds do not expose `BN` as a named export from Anchor.
+
+**What “good” looks like** — the script deposits **1_000_000** and withdraws **500_000** raw units (6 decimals ⇒ 1.0 and 0.5 tokens). If the vault already exists from a previous run, it prints `Vault PDA already initialized, skipping initialize.` After a successful run, **owner ATA** balance should reflect: `starting − 1_000_000 + 500_000`, and **vault ATA** should hold **500_000** raw units left from the net deposit.
+
+Example devnet transactions (signatures from a successful smoke run):
+
+- Deposit — [3Mh6me3PFB8i8g9vjxVAQqoeTi9RtjUfyth9jFmaQJuWHYcReKeCReFNDE8FmDxGAQRhcLzDioWpesok5aHEMGpJ](https://explorer.solana.com/tx/3Mh6me3PFB8i8g9vjxVAQqoeTi9RtjUfyth9jFmaQJuWHYcReKeCReFNDE8FmDxGAQRhcLzDioWpesok5aHEMGpJ?cluster=devnet)
+- Withdraw — [5DNbi5UDoXMAdN7aeK7xjpiPgSchGkPDejFQc3wzx51u4iqpehhGngJuE6BvzEGxp9jvFx89Xo9p43avBHpa5T6f](https://explorer.solana.com/tx/5DNbi5UDoXMAdN7aeK7xjpiPgSchGkPDejFQc3wzx51u4iqpehhGngJuE6BvzEGxp9jvFx89Xo9p43avBHpa5T6f?cluster=devnet)
+
 ### Upgrading the deployed program (same address)
 
 Yes. Solana **upgrades** a program **in place**: the **program id** stays the pubkey of `target/deploy/yield_vault-keypair.json`. After you change Rust, run `anchor build` (so `declare_id!` matches that pubkey), then `anchor deploy --provider.cluster devnet` again — the **upgrade authority** wallet (usually the same deployer key in `solana config`) signs, and bytecode at that address is replaced. User vault accounts and PDAs tied to that program id are unchanged; only logic/IDL updates require clients to use a matching IDL and, if you use on-chain IDL, `anchor deploy` will refresh it.
@@ -113,6 +122,23 @@ npm start
 ```
 
 Uses Jupiter REST (`api.jup.ag`) with `x-api-key`. Rebalance allocation logic and vault CPI wiring are follow-up work.
+
+### Jupiter integration (next step)
+
+**Jupiter does not provide a devnet-equivalent** for swap routing and liquidity comparable to mainnet. Expect to validate **`execute_swap_cpi`** (whitelist + remaining accounts from a Jupiter-built instruction) on **mainnet-beta** with **small amounts**, **`JUPITER_API_KEY`**, preflight/simulation, and a dedicated RPC. Custody flows (`initialize`, `deposit`, `withdraw`) can stay on **devnet** for cheap iteration. More context: [what-we-build.md](what-we-build.md) (section **Clusters**).
+
+#### Swap via CPI (agent CLI)
+
+The agent contains a simple CLI that:
+
+- calls `GET /swap/v2/build` with `taker = vault PDA`
+- prints the **unique program ids** you must include in `Vault.allowed_programs`
+- wraps Jupiter's `setupInstructions` / `swapInstruction` / `cleanupInstruction` as **multiple** calls to `execute_swap_cpi` in one v0 transaction
+- simulates the transaction to estimate compute units (then rebuilds with ~1.2x buffer)
+
+Use a **mainnet-beta** `RPC_URL` when `RUN_SWAP_CLI=1`: Jupiter `/build` returns mainnet routes and address lookup tables; a devnet RPC will fail with missing ALT / cluster mismatch.
+
+Enable it by setting `RUN_SWAP_CLI=1` in `agent/.env`. See [`agent/.env.example`](agent/.env.example) for required env vars.
 
 ## Spec
 

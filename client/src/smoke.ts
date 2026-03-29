@@ -1,5 +1,5 @@
 /**
- * Devnet smoke: initialize vault (strategy Conservative, empty CPI whitelist),
+ * Smoke: initialize vault (strategy Conservative), optional CPI whitelist via ALLOWED_PROGRAMS,
  * then deposit and withdraw using SPL mint (created automatically or MINT from env).
  */
 import "dotenv/config";
@@ -31,11 +31,24 @@ function loadIdl(): Idl {
   return JSON.parse(readFileSync(idlPath, "utf-8")) as Idl;
 }
 
+/** Comma- or whitespace-separated base58 pubkeys (for `initialize` CPI whitelist). */
+function parseAllowedPrograms(): PublicKey[] {
+  const raw = process.env.ALLOWED_PROGRAMS?.trim();
+  if (!raw) return [];
+  const parts = raw.split(/[\s,]+/).filter(Boolean);
+  if (parts.length > 16) {
+    throw new Error("ALLOWED_PROGRAMS: at most 16 program ids (on-chain limit).");
+  }
+  return parts.map((s) => new PublicKey(s));
+}
+
 async function main() {
   const rpc = process.env.ANCHOR_PROVIDER_URL ?? "https://api.devnet.solana.com";
   const ownerPath = process.env.OWNER_KEYPAIR ?? "./keys/owner.json";
   const agentPath = process.env.AGENT_KEYPAIR ?? "./keys/agent.json";
   const mintEnv = process.env.MINT?.trim();
+  const allowedPrograms = parseAllowedPrograms();
+  const skipTransfers = process.env.SKIP_DEPOSIT_WITHDRAW === "1";
 
   const owner = loadKeypair(ownerPath);
   const agent = loadKeypair(agentPath);
@@ -44,7 +57,7 @@ async function main() {
   const balance = await connection.getBalance(owner.publicKey);
   if (balance < 0.05 * 1e9) {
     console.warn(
-      "Owner balance is low; fund with SOL on devnet (airdrop or transfer) before continuing."
+      "Owner SOL balance is low; fund the owner wallet on this cluster before continuing."
     );
   }
 
@@ -93,9 +106,16 @@ async function main() {
     const bal = await connection.getTokenAccountBalance(ownerAta.address);
     console.log("Owner token balance (raw):", bal.value.amount);
     if (bal.value.amount === "0") {
-      throw new Error(
-        "OWNER_KEYPAIR ATA has 0 tokens. Fund it (faucet for devnet USDC or mint from authority), then re-run."
-      );
+      if (skipTransfers) {
+        console.warn(
+          "Owner ATA has 0 tokens, but SKIP_DEPOSIT_WITHDRAW=1 so we will still run initialize."
+        );
+      } else {
+        throw new Error(
+          "OWNER_KEYPAIR ATA has 0 tokens. Fund it (faucet for devnet USDC or mint from authority), then re-run. " +
+            "Or set SKIP_DEPOSIT_WITHDRAW=1 to only run initialize."
+        );
+      }
     }
   }
 
@@ -103,6 +123,7 @@ async function main() {
     [Buffer.from("vault"), owner.publicKey.toBuffer()],
     programId
   );
+  console.log("Vault PDA:", vaultPda.toBase58());
 
   const strategy = { conservative: {} };
 
@@ -110,9 +131,13 @@ async function main() {
   if (vaultAlready) {
     console.log("Vault PDA already initialized, skipping initialize.");
   } else {
-    console.log("Initializing vault (agent = agent key, strategy Conservative, whitelist empty)…");
+    console.log(
+      "Initializing vault (agent = agent key, strategy Conservative, allowed_programs count:",
+      allowedPrograms.length,
+      ")…"
+    );
     const initSig = await program.methods
-      .initialize(agent.publicKey, strategy, [])
+      .initialize(agent.publicKey, strategy, allowedPrograms)
       .accounts({
         owner: owner.publicKey,
         usdcMint: mintPk,
@@ -125,6 +150,12 @@ async function main() {
   }
 
   const vaultUsdcAta = await getAssociatedTokenAddress(mintPk, vaultPda, true);
+
+  if (skipTransfers) {
+    console.log("SKIP_DEPOSIT_WITHDRAW=1, skipping deposit/withdraw.");
+    console.log("Vault token ATA:", vaultUsdcAta.toBase58());
+    return;
+  }
 
   const depositAmount = new BN(1_000_000);
   console.log("Deposit", depositAmount.toString(), "raw units…");

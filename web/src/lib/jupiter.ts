@@ -1,0 +1,86 @@
+export interface JupiterPriceEntry {
+  usdPrice: number;
+  decimals: number;
+  liquidity?: number;
+  priceChange24h?: number;
+}
+
+export async function fetchPrices(
+  mintIds: string[]
+): Promise<Record<string, number>> {
+  if (mintIds.length === 0) return {};
+
+  const result: Record<string, number> = {};
+  const batches: string[][] = [];
+  for (let i = 0; i < mintIds.length; i += 50) {
+    batches.push(mintIds.slice(i, i + 50));
+  }
+
+  await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        const res = await fetch(`/api/jupiter/prices?ids=${batch.join(",")}`);
+        if (!res.ok) return;
+        const json = await res.json() as Record<string, JupiterPriceEntry>;
+        for (const [mint, data] of Object.entries(json)) {
+          if (data?.usdPrice != null) {
+            result[mint] = data.usdPrice;
+          }
+        }
+      } catch {
+        // price fetch failure is non-fatal
+      }
+    })
+  );
+
+  return result;
+}
+
+export interface JupiterTokenInfo {
+  id?: string;
+  address?: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  icon?: string;
+  logoURI?: string;
+}
+
+export async function fetchTokenMetadata(
+  mintIds: string[]
+): Promise<Record<string, JupiterTokenInfo>> {
+  if (mintIds.length === 0) return {};
+
+  const result: Record<string, JupiterTokenInfo> = {};
+  const batches: string[][] = [];
+  for (let i = 0; i < mintIds.length; i += 50) {
+    batches.push(mintIds.slice(i, i + 50));
+  }
+
+  await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        const res = await fetch(`/api/jupiter/tokens?ids=${batch.join(",")}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        const data = json.data as Record<string, JupiterTokenInfo> | undefined;
+        if (data && typeof data === "object") {
+          for (const [mint, token] of Object.entries(data)) {
+            if (token) {
+              result[mint] = token;
+            }
+          }
+        }
+      } catch {
+        // metadata fetch failure is non-fatal
+      }
+    })
+  );
+
+  return result;
+}
+
+export function getTokenIcon(meta: JupiterTokenInfo | undefined): string | undefined {
+  if (!meta) return undefined;
+  return meta.icon || meta.logoURI || undefined;
+}

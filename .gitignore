@@ -5,6 +5,8 @@ test-ledger/
 node_modules/
 dist/
 .env
+.env.local
+.next/
 client/keys/*.json
 *.log
 _gen*.py

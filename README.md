@@ -36,6 +36,7 @@ Then align [Anchor.toml](Anchor.toml) `solana_version` with the version **`ancho
 - `set_allowed_programs` — **owner only**; replaces `Vault.allowed_programs` (max 16 program ids).
 - `deposit` — SPL transfer from owner USDC ATA into vault USDC ATA.
 - `withdraw` — SPL transfer from vault USDC ATA to owner USDC ATA; **owner only**; vault PDA signs via `invoke_signed`.
+- `withdraw_spl` — same as `withdraw` but for **any mint**: transfers from a vault-owned token account (`authority` = vault PDA) to the owner’s account for that mint. Use when post-swap balances live in a non–deposit-mint ATA; the vault token account must already exist.
 - `execute_swap_cpi` — `invoke_signed` into a **whitelisted** program id (first remaining account); remaining accounts follow that program's instruction layout.
 
 Build:
@@ -148,7 +149,7 @@ Enable it by setting `RUN_SWAP_CLI=1` in `agent/.env`. See [`agent/.env.example`
 - **Swap input tokens** (e.g. USDC) come from the **vault’s token ATAs**, not from the agent’s personal token accounts, as long as the route spends from vault balances.
 - **Owner does not have to sign** a swap tx when the **agent** key is `Vault.agent` and you set `AUTHORITY_KEYPAIR` to the agent keypair; the owner is still the logical “customer” because `Vault` PDA is derived from **`["vault", owner_pubkey]`** (`VAULT_OWNER_PUBKEY` in env).
 - **One agent key can drive many vaults**: each user has their own vault PDA (different `owner`). Use the same agent key as `AUTHORITY_KEYPAIR` and change **`VAULT_OWNER_PUBKEY`** per user; each vault must have been **`initialize`d** with **`agent`** equal to that agent’s pubkey.
-- **`withdraw`** stays **owner-only**; the agent cannot pull user USDC to the owner’s wallet unless you add a different instruction later.
+- **`withdraw`** / **`withdraw_spl`** stay **owner-only**; the agent cannot pull user tokens to the owner’s wallet unless you add a different instruction later.
 
 ## Spec
 

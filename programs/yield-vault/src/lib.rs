@@ -74,6 +74,30 @@ pub mod yield_vault {
         Ok(())
     }
 
+    /// Owner pulls **any** SPL mint from a vault-owned token account into the owner's ATA for that mint.
+    /// The vault must already hold a token account for `mint` (e.g. created by a prior swap or `createAssociatedTokenAccount`).
+    /// For the mint used at `initialize`, `withdraw` is equivalent but uses ATA constraints; this instruction accepts any
+    /// vault token account whose authority is the vault PDA.
+    pub fn withdraw_spl(ctx: Context<WithdrawSpl>, amount: u64) -> Result<()> {
+        require!(amount > 0, ErrorCode::ZeroAmount);
+        let vault = &ctx.accounts.vault;
+        let owner_key = ctx.accounts.owner.key();
+        let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault_token_ata.to_account_info(),
+                    to: ctx.accounts.owner_token_ata.to_account_info(),
+                    authority: ctx.accounts.vault.to_account_info(),
+                },
+                signer,
+            ),
+            amount,
+        )?;
+        Ok(())
+    }
 
     /// CPI into a whitelisted program. Pass remaining accounts as:
     /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
@@ -230,6 +254,32 @@ pub struct Withdraw<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct WithdrawSpl<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+    pub mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = owner,
+    )]
+    pub owner_token_ata: Account<'info, TokenAccount>,
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = vault,
+    )]
+    pub vault_token_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
 
 #[derive(Accounts)]
 pub struct ExecuteSwap<'info> {

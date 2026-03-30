@@ -71,6 +71,26 @@ export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
   return "Growth";
 }
 
+/**
+ * Known program IDs that Jupiter routes through.
+ * Pre-populated in the vault whitelist so agent can execute swaps immediately.
+ * Max 16 entries on-chain; these cover Jupiter v6 + common AMM programs.
+ */
+const JUPITER_WHITELIST: PublicKey[] = [
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  // Jupiter Aggregator v6
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",   // SPL Token
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",   // Token-2022
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",  // Associated Token
+  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",   // Orca Whirlpool
+  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  // Raydium AMM v4
+  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  // Raydium CLMM
+  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",   // Meteora DLMM
+  "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  // Meteora Pools
+  "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY",   // Phoenix
+  "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX",    // Serum/OpenBook
+  "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb",   // OpenBook v2
+].map((s) => new PublicKey(s));
+
 export async function initializeVault(
   provider: AnchorProvider,
   strategy: StrategyName
@@ -79,7 +99,7 @@ export async function initializeVault(
   const owner = provider.wallet.publicKey;
 
   const sig = await program.methods
-    .initialize(AGENT_PUBKEY, strategyArg(strategy), [])
+    .initialize(AGENT_PUBKEY, strategyArg(strategy), JUPITER_WHITELIST)
     .accounts({
       owner,
       usdcMint: USDC_MINT,
@@ -137,6 +157,21 @@ export async function withdrawUsdc(
       vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
+    .rpc();
+
+  return sig;
+}
+
+export async function setAllowedPrograms(
+  provider: AnchorProvider,
+  programs: PublicKey[],
+) {
+  const program = getProgram(provider);
+  const owner = provider.wallet.publicKey;
+
+  const sig = await program.methods
+    .setAllowedPrograms(programs)
+    .accounts({ owner })
     .rpc();
 
   return sig;

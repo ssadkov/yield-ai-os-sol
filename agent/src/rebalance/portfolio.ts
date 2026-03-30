@@ -1,0 +1,161 @@
+import { Connection, PublicKey } from "@solana/web3.js";
+import { jupiterFetch } from "../jupiter.ts";
+import type { TokenDef, StrategyName, Allocation } from "./tokens.ts";
+import { STRATEGY_ALLOCATIONS, USDC } from "./tokens.ts";
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAssociatedTokenAddressSync } from "./spl.ts";
+
+export interface VaultInfo {
+  strategy: StrategyName;
+  owner: PublicKey;
+  bump: number;
+  allowedPrograms: PublicKey[];
+}
+
+export interface TokenBalance {
+  token: TokenDef;
+  /** Raw amount in smallest units */
+  rawAmount: bigint;
+  /** UI amount (raw / 10^decimals) */
+  uiAmount: number;
+}
+
+export interface PortfolioSnapshot {
+  vault: VaultInfo;
+  balances: TokenBalance[];
+  /** USD price per token (keyed by mint string) */
+  prices: Map<string, number>;
+  totalValueUsd: number;
+  allocations: Allocation[];
+}
+
+/**
+ * Read vault account raw data and parse strategy + allowed_programs.
+ * Uses raw deserialization to avoid pulling in full Anchor in the agent.
+ */
+export async function readVaultAccount(
+  connection: Connection,
+  vaultPda: PublicKey,
+): Promise<VaultInfo> {
+  const info = await connection.getAccountInfo(vaultPda, "confirmed");
+  if (!info) throw new Error(`Vault PDA ${vaultPda.toBase58()} not found`);
+
+  // Anchor account layout: 8-byte discriminator, then fields
+  const data = info.data;
+  let offset = 8;
+
+  const bump = data.readUInt8(offset);
+  offset += 1;
+
+  const owner = new PublicKey(data.subarray(offset, offset + 32));
+  offset += 32;
+
+  // agent (skip)
+  offset += 32;
+
+  // strategy enum: 1-byte index → 0=Conservative, 1=Balanced, 2=Growth
+  const strategyIdx = data.readUInt8(offset);
+  offset += 1;
+  const strategyMap: StrategyName[] = ["Conservative", "Balanced", "Growth"];
+  const strategy = strategyMap[strategyIdx];
+  if (!strategy) throw new Error(`Unknown strategy index: ${strategyIdx}`);
+
+  // last_rebalance_ts: i64 (skip)
+  offset += 8;
+
+  // allowed_programs: Vec<Pubkey> → 4-byte len + N*32
+  const programCount = data.readUInt32LE(offset);
+  offset += 4;
+  const allowedPrograms: PublicKey[] = [];
+  for (let i = 0; i < programCount; i++) {
+    allowedPrograms.push(new PublicKey(data.subarray(offset, offset + 32)));
+    offset += 32;
+  }
+
+  return { strategy, owner, bump, allowedPrograms };
+}
+
+export async function getTokenBalances(
+  connection: Connection,
+  vaultPda: PublicKey,
+  tokens: TokenDef[],
+): Promise<TokenBalance[]> {
+  const results: TokenBalance[] = [];
+
+  for (const token of tokens) {
+    const mint = new PublicKey(token.mint);
+    const programId = token.isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+    const ata = getAssociatedTokenAddressSync(mint, vaultPda, true, programId);
+
+    let rawAmount = 0n;
+    try {
+      const resp = await connection.getTokenAccountBalance(ata, "confirmed");
+      rawAmount = BigInt(resp.value.amount);
+    } catch {
+      // ATA doesn't exist yet — balance is 0
+    }
+
+    const uiAmount = Number(rawAmount) / 10 ** token.decimals;
+    results.push({ token, rawAmount, uiAmount });
+  }
+
+  return results;
+}
+
+interface JupiterPriceEntry {
+  usdPrice: number;
+  decimals?: number;
+}
+
+type JupiterPriceResponse = Record<string, JupiterPriceEntry>;
+
+export async function fetchPrices(
+  apiKey: string,
+  mints: string[],
+): Promise<Map<string, number>> {
+  const ids = mints.join(",");
+  const resp = await jupiterFetch<JupiterPriceResponse>(
+    apiKey,
+    `/price/v3?ids=${ids}`,
+    { method: "GET" },
+  );
+
+  const prices = new Map<string, number>();
+  for (const [mint, info] of Object.entries(resp)) {
+    if (info?.usdPrice != null) {
+      prices.set(mint, info.usdPrice);
+    }
+  }
+
+  // USDC is always $1
+  if (!prices.has(USDC.mint)) {
+    prices.set(USDC.mint, 1.0);
+  }
+
+  return prices;
+}
+
+export async function takeSnapshot(args: {
+  connection: Connection;
+  vaultPda: PublicKey;
+  apiKey: string;
+}): Promise<PortfolioSnapshot> {
+  const { connection, vaultPda, apiKey } = args;
+
+  const vault = await readVaultAccount(connection, vaultPda);
+  const allocations = STRATEGY_ALLOCATIONS[vault.strategy];
+  const tokens = allocations.map((a) => a.token);
+  const mints = tokens.map((t) => t.mint);
+
+  const [balances, prices] = await Promise.all([
+    getTokenBalances(connection, vaultPda, tokens),
+    fetchPrices(apiKey, mints),
+  ]);
+
+  let totalValueUsd = 0;
+  for (const b of balances) {
+    const price = prices.get(b.token.mint) ?? 0;
+    totalValueUsd += b.uiAmount * price;
+  }
+
+  return { vault, balances, prices, totalValueUsd, allocations };
+}

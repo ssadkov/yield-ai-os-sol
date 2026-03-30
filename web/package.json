@@ -22,6 +22,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "bn.js": "^5.2.3",
+    "bs58": "^6.0.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.1",
     "next": "^16.2.1",

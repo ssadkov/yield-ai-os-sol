@@ -3,12 +3,16 @@
 import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useVault } from "@/hooks/useVault";
-import { USDC_DECIMALS } from "@/lib/constants";
-import type { StrategyName } from "@/lib/vault";
+import { useVaultAssets } from "@/hooks/useVaultAssets";
+import { useVaultPnl } from "@/hooks/useVaultPnl";
+import { useRebalance } from "@/hooks/useRebalance";
+import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
+import { deriveVaultPda, type StrategyName } from "@/lib/vault";
 
-function formatUsdc(raw: number): string {
-  const ui = raw / 10 ** USDC_DECIMALS;
-  return ui.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
+const COLLAPSED_COUNT = 7;
+
+function orbExplorerUrl(vaultAddress: string): string {
+  return `https://orbmarkets.io/address/${vaultAddress}/history?hideSpam=true`;
 }
 
 function formatTimestamp(ts: number): string {
@@ -18,14 +22,40 @@ function formatTimestamp(ts: number): string {
 
 const strategyHelp: Record<StrategyName, string> = {
   Conservative: "Lower risk. Target mix: 60% USDC / 40% USDY.",
-  Balanced: "Medium risk. Target mix: 30% USDC / 30% yield stables / 20% BTC / 20% equities.",
-  Growth: "Higher risk. Target mix: 10% USDC / 20% sUSDe / 35% BTC / 35% equities.",
+  Balanced: "Medium risk. Target mix: 30% USDC / 30% USDY / 20% cbBTC / 20% SPYx.",
+  Growth: "Higher risk. Target mix: 10% USDC / 20% USDY / 35% cbBTC / 35% SPYx.",
 };
 
 export function VaultCard() {
   const { publicKey } = useWallet();
-  const { vault, vaultUsdcBalance, strategyName, txPending, error, withdraw, lastTxSig, refresh, loading } = useVault();
-  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const { vault, strategyName, txPending, error, lastTxSig, refresh, loading } = useVault();
+  const { rebalance, approveWhitelist, rebalancing, result: rebalanceResult, error: rebalanceError, needsWhitelist } = useRebalance();
+  const [holdingsExpanded, setHoldingsExpanded] = useState(false);
+
+  const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
+  const vaultAddress = vaultPda?.toBase58() ?? "";
+  const {
+    assets: vaultAssets,
+    totalUsd: vaultTotalUsd,
+    loading: vaultAssetsLoading,
+    refresh: refreshVaultAssets,
+  } = useVaultAssets(vaultPda);
+
+  const {
+    data: pnlData,
+    loading: pnlLoading,
+    refresh: refreshPnl,
+  } = useVaultPnl(vaultTotalUsd > 0 ? vaultTotalUsd : null);
+
+  const handleRefreshAll = async () => {
+    await Promise.all([refresh(), refreshVaultAssets(), refreshPnl()]);
+  };
+
+  const holdingsVisible = holdingsExpanded
+    ? vaultAssets
+    : vaultAssets.slice(0, COLLAPSED_COUNT);
+  const holdingsHiddenCount = vaultAssets.length - COLLAPSED_COUNT;
+  const holdingsHasMore = vaultAssets.length > COLLAPSED_COUNT;
 
   if (!publicKey) return null;
 
@@ -39,35 +69,49 @@ export function VaultCard() {
     );
   }
 
-  const handleWithdraw = async () => {
-    const val = parseFloat(withdrawAmount);
-    if (isNaN(val) || val <= 0) return;
-    try {
-      await withdraw(val);
-      setWithdrawAmount("");
-    } catch {
-      // shown via hook
-    }
-  };
-
   const lastRebalance = vault.lastRebalanceTs
     ? vault.lastRebalanceTs.toNumber()
     : 0;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Vault</h2>
+      <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <h2 className="text-lg font-semibold shrink-0">Vault</h2>
+          <a
+            href={orbExplorerUrl(vaultAddress)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs p-1.5 rounded-md border border-border bg-muted/50 text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors shrink-0"
+            title="View on explorer"
+          >
+            <svg
+              className="w-3.5 h-3.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+              />
+            </svg>
+          </a>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs bg-success/20 text-success px-2 py-0.5 rounded font-medium">
             Active
           </span>
           <button
-            onClick={refresh}
-            disabled={loading}
+            type="button"
+            onClick={handleRefreshAll}
+            disabled={loading || vaultAssetsLoading}
             className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? "..." : "Refresh"}
+            {loading || vaultAssetsLoading ? "..." : "Refresh"}
           </button>
         </div>
       </div>
@@ -96,49 +140,97 @@ export function VaultCard() {
             )}
             <button
               type="button"
-              disabled={txPending}
+              onClick={rebalance}
+              disabled={txPending || rebalancing}
               className="cursor-pointer text-xs px-2.5 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Rebalance
+              {rebalancing ? "Rebalancing..." : "Rebalance"}
             </button>
           </div>
         </div>
 
         <div>
-          <div className="text-sm text-muted-foreground">USDC Balance</div>
-          <div className="text-sm font-mono font-medium">{formatUsdc(vaultUsdcBalance)} USDC</div>
+          <div className="text-sm font-medium mb-2">Holdings</div>
+          {vaultAssets.length === 0 && !vaultAssetsLoading && (
+            <p className="text-sm text-muted-foreground py-2">No token balances</p>
+          )}
+          {vaultAssetsLoading && vaultAssets.length === 0 && (
+            <p className="text-sm text-muted-foreground py-2">Loading holdings...</p>
+          )}
+          <div className="divide-y divide-border -mx-1">
+            {holdingsVisible.map((asset) => (
+              <AssetRowItem
+                key={asset.mint}
+                asset={asset}
+                highlighted={isUsdcMint(asset.mint)}
+              />
+            ))}
+          </div>
+          {holdingsHasMore && (
+            <button
+              type="button"
+              onClick={() => setHoldingsExpanded(!holdingsExpanded)}
+              className="w-full mt-2 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {holdingsExpanded
+                ? "Show less"
+                : `Show ${holdingsHiddenCount} more tokens`}
+            </button>
+          )}
+          {vaultAssets.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-border space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Total Value
+                </span>
+                <span className="text-lg font-bold">{formatUsd(vaultTotalUsd)}</span>
+              </div>
+
+              {pnlData && (
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs text-muted-foreground">Net Deposited</span>
+                    <span className="text-xs font-mono text-muted-foreground">
+                      {formatUsd(pnlData.netDeposited)}
+                    </span>
+                  </div>
+                  {pnlData.pnl !== null && (() => {
+                    const negligible = Math.abs(pnlData.pnl) < 0.01;
+                    const positive = pnlData.pnl > 0;
+                    const colorClass = negligible
+                      ? "text-muted-foreground"
+                      : positive
+                        ? "text-success"
+                        : "text-destructive";
+                    return (
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground">PnL</span>
+                        <span className={`text-sm font-semibold ${colorClass}`}>
+                          {negligible
+                            ? "$0.00"
+                            : `${positive ? "+" : ""}${formatUsd(pnlData.pnl)}`}
+                          {!negligible && pnlData.pnlPercent !== null && (
+                            <span className="text-xs ml-1 font-normal opacity-80">
+                              ({pnlData.pnlPercent >= 0 ? "+" : ""}
+                              {pnlData.pnlPercent.toFixed(2)}%)
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+              {pnlLoading && !pnlData && (
+                <div className="text-xs text-muted-foreground">Loading PnL...</div>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Last Rebalance</span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(lastRebalance)}</span>
-        </div>
-      </div>
-
-      <div className="border-t border-border pt-4">
-        <h3 className="text-sm font-medium mb-2">Withdraw USDC</h3>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={withdrawAmount}
-              onChange={(e) => setWithdrawAmount(e.target.value)}
-              placeholder="0.00"
-              className="w-full py-2 px-3 pr-16 rounded-md bg-accent border border-border text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-medium">
-              USDC
-            </span>
-          </div>
-          <button
-            onClick={handleWithdraw}
-            disabled={txPending || !withdrawAmount || parseFloat(withdrawAmount) <= 0}
-            className="cursor-pointer py-2 px-4 rounded-md bg-destructive text-white font-medium text-sm hover:bg-destructive/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {txPending ? "..." : "Withdraw"}
-          </button>
         </div>
       </div>
 
@@ -159,6 +251,54 @@ export function VaultCard() {
           >
             {lastTxSig.slice(0, 16)}...
           </a>
+        </div>
+      )}
+
+      {needsWhitelist && (
+        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
+          <div className="text-sm font-medium">One-time setup required</div>
+          <div className="text-xs text-muted-foreground">
+            Your vault needs to whitelist Jupiter swap programs before the agent
+            can rebalance. This is a one-time on-chain transaction that you sign
+            as the vault owner. After this, all rebalances are fully automatic.
+          </div>
+          <button
+            onClick={approveWhitelist}
+            disabled={rebalancing}
+            className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {rebalancing ? "Approving..." : "Approve & Rebalance"}
+          </button>
+        </div>
+      )}
+
+      {rebalanceError && (
+        <div className="text-sm text-destructive mt-3 p-2 bg-destructive/10 rounded">
+          Rebalance: {rebalanceError}
+        </div>
+      )}
+
+      {rebalanceResult && rebalanceResult.status === "success" && (
+        <div className="mt-3 p-2 bg-success/10 rounded space-y-1">
+          <div className="text-sm text-success font-medium">Rebalance complete</div>
+          {rebalanceResult.signatures?.map((sig) => (
+            <div key={sig} className="text-xs text-muted-foreground">
+              <a
+                href={`https://explorer.solana.com/tx/${sig}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline font-mono"
+              >
+                {sig.slice(0, 16)}...
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rebalanceResult && rebalanceResult.status === "no_rebalance_needed" && (
+        <div className="mt-3 p-2 bg-muted rounded text-sm text-muted-foreground">
+          Portfolio already balanced — no swaps needed.
         </div>
       )}
     </div>

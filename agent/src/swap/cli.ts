@@ -1,8 +1,9 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
-import { Keypair, PublicKey, Connection, TransactionMessage, VersionedTransaction } from "@solana/web3.js";
+import { Keypair, PublicKey, Connection } from "@solana/web3.js";
 import { buildVaultSwapTx } from "./buildVaultSwapTx.ts";
 import { deriveVaultPda } from "./anchorIx.ts";
+import { signAndSendTx } from "./send.ts";
 
 async function assertYieldVaultReadyOnCluster(args: {
   connection: Connection;
@@ -106,32 +107,13 @@ export async function runSwapCli(): Promise<void> {
 
   if (mode !== "send") throw new Error(`Unknown MODE: ${mode}`);
 
-  const latest = await connection.getLatestBlockhash("confirmed");
-  const message = new TransactionMessage({
-    payerKey: authority.publicKey,
-    recentBlockhash: latest.blockhash,
-    instructions: built.ixs,
-  }).compileToV0Message(built.alts);
-  const tx = new VersionedTransaction(message);
-  tx.sign([authority]);
-
-  const sig = await connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 3,
+  const result = await signAndSendTx({
+    connection,
+    authority,
+    ixs: built.ixs,
+    alts: built.alts,
   });
-  console.log("Sent:", sig);
-
-  try {
-    const confirmation = await connection.confirmTransaction(
-      { signature: sig, ...latest },
-      "confirmed"
-    );
-    console.log("Confirmed:", confirmation.value.err ?? null);
-  } catch (e: any) {
-    const statuses = await connection.getSignatureStatuses([sig]);
-    console.log("Confirm error:", e?.message ?? String(e));
-    console.log("Signature status:", statuses.value[0] ?? null);
-    throw e;
-  }
+  console.log("Sent:", result.signature);
+  console.log("Confirmed:", result.err ?? null);
 }
 

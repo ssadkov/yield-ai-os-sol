@@ -1,39 +1,49 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { fetchPortfolioAssets, type AssetRow } from "@/lib/portfolioAssets";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
+import { fetchPortfolioAssets, type AssetRow, type FetchOptions } from "@/lib/portfolioAssets";
+
+const VAULT_OPTS: FetchOptions = { includeSol: false };
 
 export type { AssetRow };
 
-export function useWalletAssets() {
+/**
+ * Pass vault PDA or null. Uses a stable base58 key for deps so a new PublicKey
+ * instance each render does not retrigger fetch loops.
+ */
+export function useVaultAssets(vaultPda: PublicKey | null) {
   const { connection } = useConnection();
-  const { publicKey } = useWallet();
   const [assets, setAssets] = useState<AssetRow[]>([]);
   const [totalUsd, setTotalUsd] = useState<number>(0);
   const [loading, setLoading] = useState(false);
 
+  const vaultKey = vaultPda?.toBase58() ?? null;
+
   const refresh = useCallback(async () => {
-    if (!publicKey) {
+    if (!vaultKey) {
       setAssets([]);
       setTotalUsd(0);
       return;
     }
 
+    const owner = new PublicKey(vaultKey);
     setLoading(true);
     try {
       const { assets: rows, totalUsd: total } = await fetchPortfolioAssets(
         connection,
-        publicKey
+        owner,
+        VAULT_OPTS
       );
       setAssets(rows);
       setTotalUsd(total);
     } catch (err) {
-      console.error("Failed to fetch wallet assets:", err);
+      console.error("Failed to fetch vault assets:", err);
     } finally {
       setLoading(false);
     }
-  }, [publicKey, connection]);
+  }, [vaultKey, connection]);
 
   useEffect(() => {
     refresh();

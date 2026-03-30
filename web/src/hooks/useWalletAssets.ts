@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { fetchPortfolioAssets, type AssetRow } from "@/lib/portfolioAssets";
+import { onBalanceRefresh } from "@/lib/refreshEvent";
 
 export type { AssetRow };
 
@@ -38,6 +39,8 @@ export function useWalletAssets() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   return { assets, totalUsd, loading, refresh };
 }

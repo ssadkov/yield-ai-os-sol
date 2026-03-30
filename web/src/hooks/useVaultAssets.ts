@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { fetchPortfolioAssets, type AssetRow, type FetchOptions } from "@/lib/portfolioAssets";
+import { onBalanceRefresh } from "@/lib/refreshEvent";
 
 const VAULT_OPTS: FetchOptions = { includeSol: false };
 
@@ -48,6 +49,8 @@ export function useVaultAssets(vaultPda: PublicKey | null) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   return { assets, totalUsd, loading, refresh };
 }

@@ -5,7 +5,10 @@ const AGENT_API_URL = process.env.AGENT_API_URL || "http://localhost:3001";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { ownerPubkey } = body as { ownerPubkey?: string };
+    const { ownerPubkey, action } = body as {
+      ownerPubkey?: string;
+      action?: "rebalance" | "convert_all";
+    };
 
     if (!ownerPubkey) {
       return NextResponse.json(
@@ -17,7 +20,7 @@ export async function POST(req: NextRequest) {
     const agentRes = await fetch(`${AGENT_API_URL}/rebalance`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ownerPubkey }),
+      body: JSON.stringify({ ownerPubkey, action: action ?? "rebalance" }),
     });
 
     const data = await agentRes.json();

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { readFileSync } from "node:fs";
 import express from "express";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { rebalance } from "./rebalance/engine.ts";
+import { rebalance, convertAll } from "./rebalance/engine.ts";
 import { deriveVaultPda } from "./swap/anchorIx.ts";
 
 function loadKeypair(path: string): Keypair {
@@ -31,7 +31,10 @@ export function startServer(): void {
   });
 
   app.post("/rebalance", async (req, res) => {
-    const { ownerPubkey } = req.body as { ownerPubkey?: string };
+    const { ownerPubkey, action } = req.body as {
+      ownerPubkey?: string;
+      action?: "rebalance" | "convert_all";
+    };
 
     if (!ownerPubkey) {
       res.status(400).json({ status: "error", error: "ownerPubkey is required" });
@@ -49,7 +52,6 @@ export function startServer(): void {
       const vaultOwner = new PublicKey(ownerPubkey);
       const connection = new Connection(rpcUrl, "confirmed");
 
-      // Verify vault PDA exists
       const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
       const vaultInfo = await connection.getAccountInfo(vaultPda, "confirmed");
       if (!vaultInfo) {
@@ -57,9 +59,10 @@ export function startServer(): void {
         return;
       }
 
-      console.log(`[server] Rebalance request for owner=${ownerPubkey}`);
+      const fn = action === "convert_all" ? convertAll : rebalance;
+      console.log(`[server] ${action ?? "rebalance"} request for owner=${ownerPubkey}`);
 
-      const result = await rebalance({
+      const result = await fn({
         connection,
         authority,
         vaultProgramId,
@@ -73,7 +76,7 @@ export function startServer(): void {
       res.status(httpStatus).json(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error("[server] Rebalance error:", message);
+      console.error("[server] Error:", message);
       res.status(500).json({ status: "error", error: message });
     }
   });

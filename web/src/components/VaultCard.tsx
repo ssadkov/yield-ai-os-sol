@@ -21,9 +21,9 @@ function formatTimestamp(ts: number): string {
 }
 
 const strategyHelp: Record<StrategyName, string> = {
-  Conservative: "Lower risk. Target mix: 60% USDC / 40% USDY.",
-  Balanced: "Medium risk. Target mix: 30% USDC / 30% USDY / 20% cbBTC / 20% SPYx.",
-  Growth: "Higher risk. Target mix: 10% USDC / 20% USDY / 35% cbBTC / 35% SPYx.",
+  Conservative: "Lower risk. Target mix: 40% USDC / 60% USDY.",
+  Balanced: "Medium risk. Target mix: 20% USDC / 30% USDY / 20% cbBTC / 20% SPYx / 10% XAUt0.",
+  Growth: "Higher risk. Target mix: 15% USDY / 15% ONe / 20% cbBTC / 20% SPYx / 20% JitoSOL. No USDC.",
 };
 
 export function VaultCard() {

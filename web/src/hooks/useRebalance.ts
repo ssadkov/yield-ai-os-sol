@@ -4,7 +4,8 @@ import { useState, useCallback } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { setAllowedPrograms } from "@/lib/vault";
+import { setAllowedPrograms, fetchVaultAccount } from "@/lib/vault";
+import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 
 export interface RebalanceSwap {
   from: { symbol: string; mint: string };
@@ -71,6 +72,9 @@ export function useRebalance() {
       if (data.status === "error") {
         setError(data.error ?? "Rebalance failed");
       }
+      if (data.status === "success") {
+        triggerBalanceRefresh();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
@@ -91,8 +95,13 @@ export function useRebalance() {
         return;
       }
 
-      const programs = pendingPrograms.map((p) => new PublicKey(p));
-      await setAllowedPrograms(provider, programs);
+      const vault = await fetchVaultAccount(connection, publicKey!);
+      const existingSet = new Set(
+        (vault?.allowedPrograms ?? []).map((p) => p.toBase58())
+      );
+      for (const p of pendingPrograms) existingSet.add(p);
+      const mergedPrograms = [...existingSet].map((p) => new PublicKey(p));
+      await setAllowedPrograms(provider, mergedPrograms);
 
       setNeedsWhitelist(false);
       setPendingPrograms([]);
@@ -102,6 +111,9 @@ export function useRebalance() {
       setResult(data);
       if (data.status === "error") {
         setError(data.error ?? "Rebalance failed");
+      }
+      if (data.status === "success") {
+        triggerBalanceRefresh();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

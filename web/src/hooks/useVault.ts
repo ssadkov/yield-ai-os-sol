@@ -14,6 +14,7 @@ import {
   type StrategyName,
 } from "@/lib/vault";
 import { USDC_DECIMALS } from "@/lib/constants";
+import { onBalanceRefresh, triggerBalanceRefresh } from "@/lib/refreshEvent";
 
 export function useVault() {
   const { connection } = useConnection();
@@ -61,6 +62,8 @@ export function useVault() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => onBalanceRefresh(refresh), [refresh]);
+
   const createVault = useCallback(
     async (strategy: StrategyName) => {
       const provider = getProvider();
@@ -70,7 +73,7 @@ export function useVault() {
       try {
         const sig = await initializeVault(provider, strategy);
         setLastTxSig(sig);
-        await refresh();
+        triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -80,7 +83,7 @@ export function useVault() {
         setTxPending(false);
       }
     },
-    [getProvider, refresh]
+    [getProvider]
   );
 
   const deposit = useCallback(
@@ -93,7 +96,7 @@ export function useVault() {
         const rawAmount = Math.floor(uiAmount * 10 ** USDC_DECIMALS);
         const sig = await depositUsdc(provider, rawAmount);
         setLastTxSig(sig);
-        await refresh();
+        triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -103,7 +106,7 @@ export function useVault() {
         setTxPending(false);
       }
     },
-    [getProvider, refresh]
+    [getProvider]
   );
 
   const withdraw = useCallback(
@@ -116,7 +119,7 @@ export function useVault() {
         const rawAmount = Math.floor(uiAmount * 10 ** USDC_DECIMALS);
         const sig = await withdrawUsdc(provider, rawAmount);
         setLastTxSig(sig);
-        await refresh();
+        triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -126,7 +129,7 @@ export function useVault() {
         setTxPending(false);
       }
     },
-    [getProvider, refresh]
+    [getProvider]
   );
 
   const strategyName: StrategyName | null = vault

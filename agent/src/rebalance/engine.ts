@@ -72,41 +72,66 @@ function computeSwaps(snapshot: PortfolioSnapshot): SwapAction[] {
   return [...sells, ...buys];
 }
 
-export async function rebalance(args: {
+/**
+ * Sell ALL non-USDC holdings back to USDC (preparation for full withdrawal).
+ */
+function computeConvertAllSwaps(snapshot: PortfolioSnapshot): SwapAction[] {
+  const { balances, prices } = snapshot;
+
+  const swaps: SwapAction[] = [];
+
+  for (const balance of balances) {
+    if (balance.token.mint === USDC.mint) continue;
+    if (balance.rawAmount === 0n) continue;
+
+    const price = prices.get(balance.token.mint) ?? 0;
+    const usd = balance.uiAmount * price;
+    if (usd < MIN_SWAP_USD) continue;
+
+    swaps.push({
+      from: balance.token,
+      to: USDC,
+      rawAmount: String(balance.rawAmount),
+      amountUsd: usd,
+    });
+  }
+
+  return swaps;
+}
+
+async function executeSwaps(args: {
+  swaps: SwapAction[];
+  snapshot: PortfolioSnapshot;
   connection: Connection;
   authority: Keypair;
   vaultProgramId: PublicKey;
-  vaultOwner: PublicKey;
+  vaultPda: PublicKey;
   apiKey: string;
   rpcUrl: string;
-  slippageBps?: number;
+  slippageBps: number;
 }): Promise<RebalanceResult> {
   const {
+    swaps,
+    snapshot,
     connection,
     authority,
     vaultProgramId,
-    vaultOwner,
+    vaultPda,
     apiKey,
     rpcUrl,
-    slippageBps = DEFAULT_SLIPPAGE_BPS,
+    slippageBps,
   } = args;
-
-  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
-
-  const snapshot = await takeSnapshot({ connection, vaultPda, apiKey });
-  const swaps = computeSwaps(snapshot);
 
   if (swaps.length === 0) {
     return { status: "no_rebalance_needed", swaps: [] };
   }
 
-  // Build ALL swaps once — reuse for whitelist check AND execution
   const builds: BuiltVaultSwap[] = [];
   const allNeededPrograms = new Set<string>();
 
   for (const swap of swaps) {
     console.log(
-      `[rebalance] Building swap: ${swap.rawAmount} ${swap.from.symbol} → ${swap.to.symbol} (~$${swap.amountUsd.toFixed(2)})`,
+      `[engine] Building swap: ${swap.rawAmount} ${swap.from.symbol} → ${swap.to.symbol} (~$${swap.amountUsd.toFixed(2)})`,
     );
 
     const built = await buildVaultSwapTx({
@@ -127,21 +152,15 @@ export async function rebalance(args: {
     }
   }
 
-  // Check whitelist against the exact programs from these builds
   const whitelistedSet = new Set(
     snapshot.vault.allowedPrograms.map((p) => p.toBase58()),
   );
   const missing = [...allNeededPrograms].filter((p) => !whitelistedSet.has(p));
 
   if (missing.length > 0) {
-    return {
-      status: "needs_whitelist",
-      missingPrograms: missing,
-      swaps,
-    };
+    return { status: "needs_whitelist", missingPrograms: missing, swaps };
   }
 
-  // Execute the cached builds sequentially (same routes, same program IDs)
   const signatures: string[] = [];
 
   for (let i = 0; i < swaps.length; i++) {
@@ -149,7 +168,7 @@ export async function rebalance(args: {
     const built = builds[i];
 
     console.log(
-      `[rebalance] Sending swap ${i + 1}/${swaps.length}: ${swap.from.symbol} → ${swap.to.symbol}`,
+      `[engine] Sending swap ${i + 1}/${swaps.length}: ${swap.from.symbol} → ${swap.to.symbol}`,
     );
 
     const result = await signAndSendTx({
@@ -168,9 +187,85 @@ export async function rebalance(args: {
       };
     }
 
-    console.log(`[rebalance] Confirmed: ${result.signature}`);
+    console.log(`[engine] Confirmed: ${result.signature}`);
     signatures.push(result.signature);
   }
 
   return { status: "success", signatures, swaps };
+}
+
+export async function rebalance(args: {
+  connection: Connection;
+  authority: Keypair;
+  vaultProgramId: PublicKey;
+  vaultOwner: PublicKey;
+  apiKey: string;
+  rpcUrl: string;
+  slippageBps?: number;
+}): Promise<RebalanceResult> {
+  const {
+    connection,
+    authority,
+    vaultProgramId,
+    vaultOwner,
+    apiKey,
+    rpcUrl,
+    slippageBps = DEFAULT_SLIPPAGE_BPS,
+  } = args;
+
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const snapshot = await takeSnapshot({ connection, vaultPda, apiKey });
+  const swaps = computeSwaps(snapshot);
+
+  return executeSwaps({
+    swaps,
+    snapshot,
+    connection,
+    authority,
+    vaultProgramId,
+    vaultPda,
+    apiKey,
+    rpcUrl,
+    slippageBps,
+  });
+}
+
+/**
+ * Convert all non-USDC vault holdings into USDC.
+ * Used before a full withdrawal.
+ */
+export async function convertAll(args: {
+  connection: Connection;
+  authority: Keypair;
+  vaultProgramId: PublicKey;
+  vaultOwner: PublicKey;
+  apiKey: string;
+  rpcUrl: string;
+  slippageBps?: number;
+}): Promise<RebalanceResult> {
+  const {
+    connection,
+    authority,
+    vaultProgramId,
+    vaultOwner,
+    apiKey,
+    rpcUrl,
+    slippageBps = DEFAULT_SLIPPAGE_BPS,
+  } = args;
+
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const snapshot = await takeSnapshot({ connection, vaultPda, apiKey });
+  const swaps = computeConvertAllSwaps(snapshot);
+
+  return executeSwaps({
+    swaps,
+    snapshot,
+    connection,
+    authority,
+    vaultProgramId,
+    vaultPda,
+    apiKey,
+    rpcUrl,
+    slippageBps,
+  });
 }

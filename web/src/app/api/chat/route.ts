@@ -70,6 +70,21 @@ export async function POST(req: NextRequest) {
     const owner = new PublicKey(ownerPubkey);
     const [vaultPda] = deriveVaultPda(owner);
 
+    const getUiText = (m: UIMessage | undefined): string => {
+      if (!m) return "";
+      return m.parts
+        .map((p) => (p.type === "text" ? p.text : ""))
+        .join("")
+        .trim();
+    };
+
+    const lastUserText = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === "user") return getUiText(messages[i]);
+      }
+      return "";
+    })();
+
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
     const [walletSnap, vaultHoldingsSnap] = await Promise.all([
@@ -77,12 +92,107 @@ export async function POST(req: NextRequest) {
       fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
     ]);
 
-    const walletUsdc =
-      walletSnap.assets.find((a) => a.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-        ?.balance ?? 0;
-    const vaultUsdc =
-      vaultHoldingsSnap.assets.find((a) => a.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-        ?.balance ?? 0;
+    const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+    const walletUsdc = walletSnap.assets.find((a) => a.mint === USDC_MINT)
+      ?.balance ?? 0;
+    const vaultUsdc = vaultHoldingsSnap.assets.find((a) => a.mint === USDC_MINT)
+      ?.balance ?? 0;
+
+    const pickTopAssets = (assets: typeof walletSnap.assets, limit: number) =>
+      assets
+        .slice()
+        .sort((a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0))
+        .slice(0, limit)
+        .map((a) => ({
+          mint: a.mint,
+          symbol: a.symbol,
+          name: a.name,
+          balance: a.balance,
+          usdPrice: a.usdPrice,
+          usdValue: a.usdValue,
+        }));
+
+    const portfolioContext = {
+      ownerPubkey,
+      vaultPda: vaultPda.toBase58(),
+      wallet: {
+        totalUsd: walletSnap.totalUsd,
+        topAssets: pickTopAssets(walletSnap.assets, 25),
+      },
+      vault: {
+        totalUsd: vaultHoldingsSnap.totalUsd,
+        topAssets: pickTopAssets(vaultHoldingsSnap.assets, 25),
+      },
+    };
+
+    // Deterministic token balance answers to avoid LLM hallucination.
+    // Handles questions like: "сколько у меня ONyc?", "how much USDC in vault?"
+    const tokenQueryMatch = lastUserText.match(
+      /\b(?:сколько|how\s+much)\b[\s\S]{0,40}\b([A-Za-z][A-Za-z0-9]{1,14})\b/i
+    );
+    if (tokenQueryMatch) {
+      const rawToken = tokenQueryMatch[1] ?? "";
+      const token = rawToken.trim();
+      const tokenUpper = token.toUpperCase();
+
+      const findBySymbol = (assets: typeof walletSnap.assets) =>
+        assets.find((a) => (a.symbol ?? "").toUpperCase() === tokenUpper) ??
+        assets.find((a) =>
+          (a.name ?? "").toUpperCase().includes(tokenUpper)
+        );
+
+      const walletAsset = findBySymbol(walletSnap.assets);
+      const vaultAsset = findBySymbol(vaultHoldingsSnap.assets);
+
+      const fmtUsd = (n: number | null | undefined) =>
+        n == null ? "unavailable" : `$${n.toFixed(2)}`;
+
+      const lines: string[] = [];
+      lines.push(`Token: ${tokenUpper}`);
+
+      if (!walletAsset && !vaultAsset) {
+        lines.push(
+          "I don't see this token in your current wallet or vault snapshot."
+        );
+      } else {
+        if (walletAsset) {
+          lines.push(
+            `Wallet: ${walletAsset.balance.toLocaleString("en-US", {
+              maximumFractionDigits: 6,
+            })} ${walletAsset.symbol} (${fmtUsd(walletAsset.usdValue)})`
+          );
+        } else {
+          lines.push("Wallet: 0");
+        }
+
+        if (vaultAsset) {
+          lines.push(
+            `Vault: ${vaultAsset.balance.toLocaleString("en-US", {
+              maximumFractionDigits: 6,
+            })} ${vaultAsset.symbol} (${fmtUsd(vaultAsset.usdValue)})`
+          );
+        } else {
+          lines.push("Vault: 0");
+        }
+      }
+
+      return createUIMessageStreamResponse({
+        status: 200,
+        stream: createUIMessageStream({
+          execute({ writer }) {
+            const id = "token-balance";
+            writer.write({ type: "text-start", id });
+            writer.write({
+              type: "text-delta",
+              id,
+              delta: lines.join("\n"),
+            });
+            writer.write({ type: "text-end", id });
+          },
+        }),
+      });
+    }
 
     let actionPreface = "";
     if (body.clientAction === "snapshot") {
@@ -140,6 +250,7 @@ export async function POST(req: NextRequest) {
       system: [
         "You are an AI portfolio assistant for a Solana vault.",
         "Your job: help the user understand their current portfolio, discuss strategy, and propose explicit actions.",
+        "Language: reply in Russian.",
         "Context:",
         `- ownerPubkey: ${ownerPubkey}`,
         `- vaultPda: ${vaultPda.toBase58()}`,
@@ -147,6 +258,12 @@ export async function POST(req: NextRequest) {
         `- vaultUsdc: ${vaultUsdc}`,
         `- walletTotalUsd: ${walletSnap.totalUsd}`,
         `- vaultTotalUsd: ${vaultHoldingsSnap.totalUsd}`,
+        "Portfolio snapshot (server-fetched, authoritative):",
+        JSON.stringify(portfolioContext, null, 2),
+        "Answering rules:",
+        "- If user asks 'how much <TOKEN> do I have', look for that token by symbol in wallet.topAssets and vault.topAssets above.",
+        "- Always respond with BOTH: token amount and USD value (if usdPrice is null, say USD value is unavailable).",
+        "- If the token is not present in the snapshot, say so explicitly (do not guess).",
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",

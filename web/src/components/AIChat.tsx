@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useChat, type UIMessage } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -82,6 +82,9 @@ export function AIChat() {
 
   const ownerPubkey = publicKey?.toBase58() ?? null;
 
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
   const [pendingConfirm, setPendingConfirm] = useState<
     "rebalance" | "convert_all" | null
   >(null);
@@ -135,6 +138,20 @@ export function AIChat() {
       lastResult?.httpStatus === 428) &&
     missingPrograms.length > 0;
 
+  const scrollToBottom = (behavior: ScrollBehavior) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const thresholdPx = 56;
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    stickToBottomRef.current = distanceFromBottom <= thresholdPx;
+  };
+
   useEffect(() => {
     if (!ownerPubkey) return;
     if (messages.length === 0) {
@@ -144,6 +161,14 @@ export function AIChat() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerPubkey]); // run once per wallet connection
+
+  // Auto-scroll: keep pinned to bottom while streaming / new messages arrive,
+  // but never fight the user if they scrolled up.
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    scrollToBottom("smooth");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, status]);
 
   const sendClientAction = async (
     action: "snapshot" | "rebalance" | "convert_all",
@@ -322,7 +347,11 @@ export function AIChat() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 min-h-0 overflow-auto p-4 space-y-3 scrollbar-pretty"
+      >
         {messages.length === 0 && (
           <div className="text-sm text-muted-foreground">
             Ask about your vault strategy, risk, or request a rebalance.

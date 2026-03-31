@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useChat, type Message } from "ai/react";
+import { useChat, type UIMessage } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
@@ -28,11 +29,50 @@ function parseClientActionResult(text: string): ClientActionResult | null {
   }
 }
 
-function latestAssistantMessage(messages: Message[]): Message | null {
+function getMessageText(message: UIMessage): string {
+  return message.parts
+    .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+}
+
+function latestAssistantMessage(messages: UIMessage[]): UIMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "assistant") return messages[i]!;
   }
   return null;
+}
+
+const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
+
+function MessageBubble({ message }: { message: UIMessage }) {
+  const isUser = message.role === "user";
+  const label = isUser ? "You" : "AI";
+
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div className={`max-w-[85%] ${isUser ? "text-right" : "text-left"}`}>
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          {label}
+        </div>
+        <div
+          className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap wrap-break-word border ${
+            isUser
+              ? "bg-primary text-primary-foreground border-primary/30"
+              : "bg-accent text-foreground border-border"
+          }`}
+        >
+          {message.parts.map((part, i) => {
+            if (part.type === "text") {
+              return <span key={`${message.id}-${i}`}>{part.text}</span>;
+            }
+            // Ignore non-text parts for now (tools etc.)
+            return null;
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function AIChat() {
@@ -47,20 +87,36 @@ export function AIChat() {
   >(null);
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
+  const [input, setInput] = useState("");
 
   const {
     messages,
-    input,
-    handleInputChange,
-    handleSubmit,
-    append,
-    isLoading,
     error,
-    setInput,
-  } = useChat({
-    api: "/api/chat",
-    body: ownerPubkey ? { ownerPubkey } : {},
-  });
+    sendMessage,
+    status,
+    clearError,
+  } = useChat({ transport: chatTransport });
+
+  const isLoading = status !== "ready";
+
+  const sendText = async (
+    text: string,
+    extraBody?: Record<string, unknown>
+  ): Promise<void> => {
+    if (!ownerPubkey) {
+      setApproveError("Wallet pubkey not ready yet");
+      return;
+    }
+    await sendMessage(
+      { text },
+      {
+        body: {
+          ownerPubkey,
+          ...(extraBody ?? {}),
+        },
+      }
+    );
+  };
 
   const lastAssistant = useMemo(
     () => latestAssistantMessage(messages),
@@ -68,7 +124,8 @@ export function AIChat() {
   );
 
   const lastResult = useMemo(() => {
-    const txt = lastAssistant?.content ?? "";
+    if (!lastAssistant) return null;
+    const txt = getMessageText(lastAssistant);
     return parseClientActionResult(txt);
   }, [lastAssistant]);
 
@@ -81,42 +138,34 @@ export function AIChat() {
   useEffect(() => {
     if (!ownerPubkey) return;
     if (messages.length === 0) {
-      void append({
-        role: "user",
-        content:
-          "Summarize my current wallet and vault holdings. Explain what strategy my vault is set to. Also summarize my recent deposit/withdraw history (last 10) and net deposited.",
-      });
+      void sendText(
+        "Summarize my current wallet and vault holdings. Explain what strategy my vault is set to. Also summarize my recent deposit/withdraw history (last 10) and net deposited."
+      );
     }
-  }, [ownerPubkey]); // intentionally not depending on messages/append
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerPubkey]); // run once per wallet connection
 
   const sendClientAction = async (
     action: "snapshot" | "rebalance" | "convert_all",
     confirmed?: boolean
   ) => {
     if (!ownerPubkey) return;
-    await append(
-      {
-        role: "user",
-        content:
-          action === "snapshot"
-            ? "Refresh snapshot."
-            : action === "rebalance"
-              ? confirmed
-                ? "Rebalance now (confirmed)."
-                : "I want to rebalance."
-              : confirmed
-                ? "Convert all vault tokens to USDC now (confirmed)."
-                : "I want to convert all vault tokens to USDC.",
-      },
-      {
-        body: {
-          ownerPubkey,
-          clientAction: action,
-          confirmed: !!confirmed,
-          executionEnabled: !!confirmed,
-        },
-      }
-    );
+    const text =
+      action === "snapshot"
+        ? "Refresh snapshot."
+        : action === "rebalance"
+          ? confirmed
+            ? "Rebalance now (confirmed)."
+            : "I want to rebalance."
+          : confirmed
+            ? "Convert all vault tokens to USDC now (confirmed)."
+            : "I want to convert all vault tokens to USDC.";
+
+    await sendText(text, {
+      clientAction: action,
+      confirmed: !!confirmed,
+      executionEnabled: !!confirmed,
+    });
   };
 
   const approveWhitelist = async () => {
@@ -146,11 +195,9 @@ export function AIChat() {
       const merged = [...existing].map((p) => new PublicKey(p));
       await setAllowedPrograms(provider, merged);
 
-      await append({
-        role: "user",
-        content:
-          "I signed the whitelist approval transaction. Please retry the action that failed.",
-      });
+      await sendText(
+        "I signed the whitelist approval transaction. Please retry the action that failed."
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setApproveError(msg);
@@ -167,6 +214,19 @@ export function AIChat() {
         </div>
         <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground">
           Connect your wallet to use chat.
+        </div>
+      </div>
+    );
+  }
+
+  if (!ownerPubkey) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-card flex flex-col h-full min-h-[420px]">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold">AI Chat</h3>
+        </div>
+        <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground">
+          Wallet connected, loading public key...
         </div>
       </div>
     );
@@ -262,47 +322,47 @@ export function AIChat() {
         </div>
       )}
 
-      <div className="flex-1 overflow-auto p-4 space-y-3">
+      <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
         {messages.length === 0 && (
           <div className="text-sm text-muted-foreground">
             Ask about your vault strategy, risk, or request a rebalance.
           </div>
         )}
         {messages.map((m) => (
-          <div key={m.id} className="space-y-1">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-              {m.role}
-            </div>
-            <div className="text-sm whitespace-pre-wrap wrap-break-word">
-              {m.content}
-            </div>
-          </div>
+          <MessageBubble key={m.id} message={m} />
         ))}
-        {(error || approveError) && null}
       </div>
 
       <form
         onSubmit={(e) => {
           setApproveError(null);
-          handleSubmit(e);
+          e.preventDefault();
+          clearError();
+          const text = input.trim();
+          if (!text) return;
+          void sendText(text);
+          setInput("");
         }}
         className="p-3 border-t border-border"
       >
         <div className="flex gap-2">
           <input
             value={input}
-            onChange={handleInputChange}
+            onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about your strategy or request an action..."
-            className="flex-1 py-2 px-3 rounded-md bg-accent border border-border text-sm"
+            className="flex-1 py-2.5 px-3 rounded-md bg-accent border border-border text-sm"
           />
           <button
             type="submit"
             disabled={isLoading || !input.trim()}
-            className="cursor-pointer py-2 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="cursor-pointer py-2.5 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={() => {
               if (!input.trim()) return;
               // If the user types "rebalance" or "convert", we still require confirmation via buttons.
-              if (/\\brebalance\\b/i.test(input) || /\\bconvert\\b/i.test(input)) {
+              if (
+                /\\brebalance\\b/i.test(input) ||
+                /\\bconvert\\b/i.test(input)
+              ) {
                 setInput(input + " (no execution without confirmation)");
               }
             }}

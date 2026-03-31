@@ -1,5 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { streamText, tool, type Message } from "ai";
+import {
+  streamText,
+  tool,
+  convertToModelMessages,
+  type UIMessage,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+} from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -27,7 +34,10 @@ function openRouterModel() {
     },
   });
 
-  return client(model);
+  // OpenAI provider defaults to the Responses API (POST /responses),
+  // but OpenRouter is OpenAI-*compatible* via Chat Completions (POST /chat/completions).
+  // Force chat mode to avoid "Invalid Responses API request".
+  return client.chat(model as never);
 }
 
 async function getConnection(): Promise<Connection> {
@@ -37,7 +47,7 @@ async function getConnection(): Promise<Connection> {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
-      messages?: Message[];
+      messages?: UIMessage[];
       ownerPubkey?: string;
       clientAction?: "snapshot" | "rebalance" | "convert_all";
       confirmed?: boolean;
@@ -112,10 +122,13 @@ export async function POST(req: NextRequest) {
 
     const result = streamText({
       model,
-      messages,
+      messages: await convertToModelMessages(messages),
       system: [
         "You are an AI portfolio assistant for a Solana vault.",
         "Your job: help the user understand their current portfolio, discuss strategy, and propose explicit actions.",
+        "Context:",
+        `- ownerPubkey: ${ownerPubkey}`,
+        `- vaultPda: ${vaultPda.toBase58()}`,
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
@@ -134,12 +147,13 @@ export async function POST(req: NextRequest) {
         getPortfolioSnapshot: tool({
           description:
             "Fetch wallet + vault snapshot (current holdings, USD values, vault strategy, whitelist).",
-          parameters: z.object({
-            ownerPubkey: z.string(),
+          inputSchema: z.object({
+            ownerPubkey: z.string().optional(),
           }),
-          execute: async ({ ownerPubkey }) => {
+          execute: async ({ ownerPubkey: toolOwnerPubkey }) => {
             const connection = await getConnection();
-            const owner = new PublicKey(ownerPubkey);
+            const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            const owner = new PublicKey(resolvedOwnerPubkey);
 
             const [vaultPda] = deriveVaultPda(owner);
             const vault = await fetchVaultAccount(connection, owner);
@@ -150,7 +164,7 @@ export async function POST(req: NextRequest) {
             ]);
 
             return {
-              ownerPubkey,
+              ownerPubkey: resolvedOwnerPubkey,
               vault: vault
                 ? {
                     vaultPda: vaultPda.toBase58(),
@@ -170,11 +184,11 @@ export async function POST(req: NextRequest) {
         rebalanceVault: tool({
           description:
             "Trigger an offchain agent rebalance for the owner's vault. Requires explicit confirmation.",
-          parameters: z.object({
-            ownerPubkey: z.string(),
+          inputSchema: z.object({
+            ownerPubkey: z.string().optional(),
             confirmed: z.boolean().default(false),
           }),
-          execute: async ({ ownerPubkey, confirmed }) => {
+          execute: async ({ ownerPubkey: toolOwnerPubkey, confirmed }) => {
             if (!executionEnabled) {
               return {
                 status: "error",
@@ -190,12 +204,16 @@ export async function POST(req: NextRequest) {
               };
             }
 
+            const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
             const agentBase =
               process.env.AGENT_API_URL || "http://localhost:3001";
             const res = await fetch(`${agentBase}/rebalance`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ownerPubkey, action: "rebalance" }),
+              body: JSON.stringify({
+                ownerPubkey: resolvedOwnerPubkey,
+                action: "rebalance",
+              }),
             });
             const data = (await res.json()) as Record<string, unknown>;
 
@@ -206,11 +224,11 @@ export async function POST(req: NextRequest) {
         convertAllToUsdc: tool({
           description:
             "Convert all vault holdings to USDC via the agent (pre-withdraw). Requires explicit confirmation.",
-          parameters: z.object({
-            ownerPubkey: z.string(),
+          inputSchema: z.object({
+            ownerPubkey: z.string().optional(),
             confirmed: z.boolean().default(false),
           }),
-          execute: async ({ ownerPubkey, confirmed }) => {
+          execute: async ({ ownerPubkey: toolOwnerPubkey, confirmed }) => {
             if (!executionEnabled) {
               return {
                 status: "error",
@@ -226,12 +244,16 @@ export async function POST(req: NextRequest) {
               };
             }
 
+            const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
             const agentBase =
               process.env.AGENT_API_URL || "http://localhost:3001";
             const res = await fetch(`${agentBase}/rebalance`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ownerPubkey, action: "convert_all" }),
+              body: JSON.stringify({
+                ownerPubkey: resolvedOwnerPubkey,
+                action: "convert_all",
+              }),
             });
             const data = (await res.json()) as Record<string, unknown>;
 
@@ -242,20 +264,21 @@ export async function POST(req: NextRequest) {
         getVaultHistory: tool({
           description:
             "Fetch a compact vault deposit/withdraw history summary for the owner's vault PDA.",
-          parameters: z.object({
-            ownerPubkey: z.string(),
+          inputSchema: z.object({
+            ownerPubkey: z.string().optional(),
             limit: z.number().int().min(1).max(50).default(20),
           }),
-          execute: async ({ ownerPubkey, limit }) => {
+          execute: async ({ ownerPubkey: toolOwnerPubkey, limit }) => {
             const connection = await getConnection();
-            const owner = new PublicKey(ownerPubkey);
+            const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            const owner = new PublicKey(resolvedOwnerPubkey);
             const [vaultPda] = deriveVaultPda(owner);
 
             const data = await fetchVaultHistory(connection, PROGRAM_ID, vaultPda);
             const entries = data.entries.slice(-limit);
 
             return {
-              ownerPubkey,
+              ownerPubkey: resolvedOwnerPubkey,
               vaultPda: vaultPda.toBase58(),
               totalDeposited: data.totalDeposited,
               totalWithdrawn: data.totalWithdrawn,
@@ -267,15 +290,40 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const response = result.toDataStreamResponse({
-      getErrorMessage: (err) =>
-        err instanceof Error ? err.message : String(err),
+    return result.toUIMessageStreamResponse({
+      onError: (error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        // IMPORTANT: must return a string (becomes errorText in the stream).
+        return msg.includes("OPENROUTER_API_KEY")
+          ? "Server is missing OPENROUTER_API_KEY."
+          : "Chat request failed. Check server logs.";
+      },
     });
-
-    return response;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+
+    // IMPORTANT: useChat expects a UI message stream response.
+    // If we return JSON here, the client will throw "Invalid Responses API request".
+    return createUIMessageStreamResponse({
+      status: 500,
+      statusText: "Internal Server Error",
+      stream: createUIMessageStream({
+        execute({ writer }) {
+          const id = "server-error";
+          writer.write({ type: "text-start", id });
+          writer.write({
+            type: "text-delta",
+            id,
+            delta:
+              "Server error while processing chat.\n" +
+              (message.includes("OPENROUTER_API_KEY")
+                ? "Missing OPENROUTER_API_KEY on the server."
+                : "Check the server logs for details."),
+          });
+          writer.write({ type: "text-end", id });
+        },
+      }),
+    });
   }
 }
 

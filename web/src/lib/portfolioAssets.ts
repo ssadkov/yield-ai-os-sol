@@ -99,10 +99,14 @@ export async function fetchPortfolioAssets(
     const balance = rawAmount / 10 ** decimals;
     const price = prices[mint] ?? null;
 
+    const fallbackSymbol =
+      mint === USDC_MINT_STR ? "USDC" : mint.slice(0, 4) + "...";
+    const fallbackName = mint === USDC_MINT_STR ? "USD Coin" : "Unknown Token";
+
     rows.push({
       mint,
-      symbol: meta?.symbol ?? mint.slice(0, 4) + "...",
-      name: meta?.name ?? "Unknown Token",
+      symbol: meta?.symbol ?? fallbackSymbol,
+      name: meta?.name ?? fallbackName,
       logoURI: getTokenIcon(meta),
       balance,
       decimals,

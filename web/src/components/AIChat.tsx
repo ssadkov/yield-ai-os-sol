@@ -233,7 +233,7 @@ export function AIChat() {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card flex flex-col h-full min-h-[420px]">
+    <div className="rounded-lg border border-border bg-card flex flex-col h-full min-h-[420px] lg:min-h-0">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">AI Chat</h3>
         <div className="flex items-center gap-2">

@@ -26,7 +26,7 @@ export default function Home() {
           </div>
 
           {/* Right column — chat */}
-          <div className="h-full min-h-0">
+          <div className="h-full min-h-0 lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-120px)]">
             <AIChat />
           </div>
         </div>

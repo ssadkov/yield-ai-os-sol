@@ -70,6 +70,20 @@ export async function POST(req: NextRequest) {
     const owner = new PublicKey(ownerPubkey);
     const [vaultPda] = deriveVaultPda(owner);
 
+    // Always provide a compact, fresh snapshot so the assistant can answer questions
+    // like "how much USDC do I have?" without needing an explicit tool call.
+    const [walletSnap, vaultHoldingsSnap] = await Promise.all([
+      fetchPortfolioAssets(connection, owner, { includeSol: true }),
+      fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
+    ]);
+
+    const walletUsdc =
+      walletSnap.assets.find((a) => a.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        ?.balance ?? 0;
+    const vaultUsdc =
+      vaultHoldingsSnap.assets.find((a) => a.mint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        ?.balance ?? 0;
+
     let actionPreface = "";
     if (body.clientAction === "snapshot") {
       const snapVault = await fetchVaultAccount(connection, owner);
@@ -129,6 +143,10 @@ export async function POST(req: NextRequest) {
         "Context:",
         `- ownerPubkey: ${ownerPubkey}`,
         `- vaultPda: ${vaultPda.toBase58()}`,
+        `- walletUsdc: ${walletUsdc}`,
+        `- vaultUsdc: ${vaultUsdc}`,
+        `- walletTotalUsd: ${walletSnap.totalUsd}`,
+        `- vaultTotalUsd: ${vaultHoldingsSnap.totalUsd}`,
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",

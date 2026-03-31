@@ -5,7 +5,7 @@ import { WalletAssetsCard } from "@/components/WalletAssetsCard";
 import { CreateVaultCard } from "@/components/CreateVaultCard";
 import { DepositCard } from "@/components/DepositCard";
 import { VaultCard } from "@/components/VaultCard";
-import { ChatPlaceholder } from "@/components/ChatPlaceholder";
+import { AIChat } from "@/components/AIChat";
 
 export default function Home() {
   return (
@@ -27,7 +27,7 @@ export default function Home() {
 
           {/* Right column — chat */}
           <div className="h-full">
-            <ChatPlaceholder />
+            <AIChat />
           </div>
         </div>
       </main>

@@ -16,11 +16,11 @@ export default function Home() {
           {/* Left column — wallet */}
           <div className="space-y-6 min-h-0">
             <WalletAssetsCard />
-            <CreateVaultCard />
           </div>
 
           {/* Center column — vault operations */}
           <div className="space-y-6 min-h-0">
+            <CreateVaultCard />
             <DepositCard />
             <VaultCard />
           </div>

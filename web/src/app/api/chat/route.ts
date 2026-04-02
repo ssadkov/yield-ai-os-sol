@@ -14,6 +14,7 @@ import { fetchVaultAccount, deriveVaultPda, parseStrategy } from "@/lib/vault";
 import { fetchPortfolioAssets } from "@/lib/portfolioAssets";
 import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
+import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 
 export const runtime = "nodejs";
 
@@ -85,6 +86,9 @@ export async function POST(req: NextRequest) {
       return "";
     })();
 
+    const isCyrillic = /[А-Яа-яЁё]/.test(lastUserText);
+    const replyLang: "ru" | "en" = isCyrillic ? "ru" : "en";
+
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
     const [walletSnap, vaultHoldingsSnap] = await Promise.all([
@@ -149,11 +153,13 @@ export async function POST(req: NextRequest) {
         n == null ? "unavailable" : `$${n.toFixed(2)}`;
 
       const lines: string[] = [];
-      lines.push(`Token: ${tokenUpper}`);
+      lines.push(replyLang === "ru" ? `Токен: ${tokenUpper}` : `Token: ${tokenUpper}`);
 
       if (!walletAsset && !vaultAsset) {
         lines.push(
-          "I don't see this token in your current wallet or vault snapshot."
+          replyLang === "ru"
+            ? "Я не вижу этот токен в текущем снапшоте кошелька или vault."
+            : "I don't see this token in your current wallet or vault snapshot."
         );
       } else {
         if (walletAsset) {
@@ -250,7 +256,10 @@ export async function POST(req: NextRequest) {
       system: [
         "You are an AI portfolio assistant for a Solana vault.",
         "Your job: help the user understand their current portfolio, discuss strategy, and propose explicit actions.",
-        "Language: reply in Russian.",
+        replyLang === "ru"
+          ? "Language: reply in Russian."
+          : "Language: reply in English.",
+        "Always reply in the same language as the user's last message.",
         "Context:",
         `- ownerPubkey: ${ownerPubkey}`,
         `- vaultPda: ${vaultPda.toBase58()}`,
@@ -264,6 +273,21 @@ export async function POST(req: NextRequest) {
         "- If user asks 'how much <TOKEN> do I have', look for that token by symbol in wallet.topAssets and vault.topAssets above.",
         "- Always respond with BOTH: token amount and USD value (if usdPrice is null, say USD value is unavailable).",
         "- If the token is not present in the snapshot, say so explicitly (do not guess).",
+        "Strategy definitions (authoritative):",
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(STRATEGY_DEFS).map(([k, v]) => [
+              k,
+              {
+                risk: v.risk,
+                summary: v.summary,
+                targetMix: formatTargetMix(v),
+              },
+            ])
+          ),
+          null,
+          2
+        ),
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
@@ -279,6 +303,24 @@ export async function POST(req: NextRequest) {
         actionPreface ? `\nContext from the client action:\n${actionPreface}` : "",
       ].join("\n"),
       tools: {
+        getStrategyExplainer: tool({
+          description:
+            "Explain strategy meaning, risk, and target mix. Uses authoritative strategy definitions.",
+          inputSchema: z.object({
+            strategy: z.enum(["Conservative", "Balanced", "Growth"]).optional(),
+          }),
+          execute: async ({ strategy }) => {
+            const picked = strategy ?? parseStrategy((await fetchVaultAccount(connection, owner))!.strategy);
+            const def = STRATEGY_DEFS[picked];
+            return {
+              strategy: def.name,
+              risk: def.risk,
+              summary: def.summary,
+              targetMix: def.targetMix,
+              targetMixText: formatTargetMix(def),
+            };
+          },
+        }),
         getPortfolioSnapshot: tool({
           description:
             "Fetch wallet + vault snapshot (current holdings, USD values, vault strategy, whitelist).",

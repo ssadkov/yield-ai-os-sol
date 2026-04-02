@@ -8,6 +8,7 @@ import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
 import { deriveVaultPda, type StrategyName } from "@/lib/vault";
+import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 
 const COLLAPSED_COUNT = 7;
 
@@ -21,9 +22,9 @@ function formatTimestamp(ts: number): string {
 }
 
 const strategyHelp: Record<StrategyName, string> = {
-  Conservative: "Lower risk. Target mix: 40% USDC / 60% USDY.",
-  Balanced: "Medium risk. Target mix: 20% USDC / 30% USDY / 20% cbBTC / 20% SPYx / 10% XAUt0.",
-  Growth: "Higher risk. Target mix: 15% USDY / 15% ONe / 20% cbBTC / 20% SPYx / 20% JitoSOL. No USDC.",
+  Conservative: `${STRATEGY_DEFS.Conservative.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Conservative)}.`,
+  Balanced: `${STRATEGY_DEFS.Balanced.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Balanced)}.`,
+  Growth: `${STRATEGY_DEFS.Growth.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Growth)}.`,
 };
 
 export function VaultCard() {

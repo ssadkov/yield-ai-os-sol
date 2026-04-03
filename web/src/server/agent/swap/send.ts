@@ -4,6 +4,7 @@ import {
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
+  SendTransactionError,
   type AddressLookupTableAccount,
 } from "@solana/web3.js";
 
@@ -32,10 +33,27 @@ export async function signAndSendTx(params: SignAndSendParams): Promise<SendResu
   const tx = new VersionedTransaction(message);
   tx.sign([authority]);
 
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 3,
-  });
+  let signature = "";
+  try {
+    signature = await connection.sendRawTransaction(tx.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+  } catch (e: unknown) {
+    if (e instanceof SendTransactionError) {
+      const logs = await e.getLogs(connection).catch(() => null);
+      return {
+        signature: "",
+        err: {
+          name: e.name,
+          message: e.message,
+          logs,
+        },
+      };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    return { signature: "", err: { message: msg } };
+  }
 
   try {
     const confirmation = await connection.confirmTransaction({ signature, ...latest }, "confirmed");
@@ -46,7 +64,19 @@ export async function signAndSendTx(params: SignAndSendParams): Promise<SendResu
     if (status?.err) {
       return { signature, err: status.err };
     }
-    throw e;
+    if (e instanceof SendTransactionError) {
+      const logs = await e.getLogs(connection).catch(() => null);
+      return {
+        signature,
+        err: {
+          name: e.name,
+          message: e.message,
+          logs,
+        },
+      };
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    return { signature, err: { message: msg } };
   }
 }
 

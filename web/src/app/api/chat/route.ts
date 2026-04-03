@@ -117,16 +117,31 @@ export async function POST(req: NextRequest) {
           usdValue: a.usdValue,
         }));
 
+    const pickUnpricedAssets = (assets: typeof walletSnap.assets, limit: number) =>
+      assets
+        .filter((a) => a.balance > 0 && a.usdPrice == null)
+        .slice(0, limit)
+        .map((a) => ({
+          mint: a.mint,
+          symbol: a.symbol,
+          name: a.name,
+          balance: a.balance,
+        }));
+
     const portfolioContext = {
       ownerPubkey,
       vaultPda: vaultPda.toBase58(),
       wallet: {
         totalUsd: walletSnap.totalUsd,
-        topAssets: pickTopAssets(walletSnap.assets, 25),
+        assetCount: walletSnap.assets.length,
+        topAssets: pickTopAssets(walletSnap.assets, 40),
+        unpricedAssets: pickUnpricedAssets(walletSnap.assets, 25),
       },
       vault: {
         totalUsd: vaultHoldingsSnap.totalUsd,
-        topAssets: pickTopAssets(vaultHoldingsSnap.assets, 25),
+        assetCount: vaultHoldingsSnap.assets.length,
+        topAssets: pickTopAssets(vaultHoldingsSnap.assets, 40),
+        unpricedAssets: pickUnpricedAssets(vaultHoldingsSnap.assets, 25),
       },
     };
 
@@ -273,6 +288,7 @@ export async function POST(req: NextRequest) {
         "- If user asks 'how much <TOKEN> do I have', look for that token by symbol in wallet.topAssets and vault.topAssets above.",
         "- Always respond with BOTH: token amount and USD value (if usdPrice is null, say USD value is unavailable).",
         "- If the token is not present in the snapshot, say so explicitly (do not guess).",
+        "- If unpricedAssets contains tokens, explain that totals can be understated because market prices were unavailable.",
         "Strategy definitions (authoritative):",
         JSON.stringify(
           Object.fromEntries(
@@ -503,4 +519,3 @@ export async function POST(req: NextRequest) {
     });
   }
 }
-

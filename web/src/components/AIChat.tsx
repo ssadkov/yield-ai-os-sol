@@ -15,6 +15,7 @@ import {
   fetchVaultAccount,
   setAllowedPrograms,
 } from "@/lib/vault";
+import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 
 /* ── helpers ────────────────────────────────────────────── */
 
@@ -274,6 +275,19 @@ export function AIChat() {
     scrollToBottom("smooth");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, status]);
+
+  // Trigger global balance refresh when an action succeeds
+  const prevActionMessageId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!lastAssistant || isLoading) return;
+    if (prevActionMessageId.current === lastAssistant.id) return;
+
+    const txt = getMessageText(lastAssistant);
+    if (txt.startsWith("✅")) {
+      triggerBalanceRefresh();
+      prevActionMessageId.current = lastAssistant.id;
+    }
+  }, [lastAssistant, isLoading]);
 
   const sendClientAction = async (
     action: "snapshot" | "rebalance" | "convert_all",

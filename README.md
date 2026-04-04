@@ -114,7 +114,19 @@ Example devnet transactions (signatures from a successful smoke run):
 
 Yes. Solana **upgrades** a program **in place**: the **program id** stays the pubkey of `target/deploy/yield_vault-keypair.json`. After you change Rust, run `anchor build` (so `declare_id!` matches that pubkey), then `anchor deploy --provider.cluster devnet` again — the **upgrade authority** wallet (usually the same deployer key in `solana config`) signs, and bytecode at that address is replaced. User vault accounts and PDAs tied to that program id are unchanged; only logic/IDL updates require clients to use a matching IDL and, if you use on-chain IDL, `anchor deploy` will refresh it.
 
-## Agent
+## Architecture: where the agent logic lives
+
+> **All production agent logic (rebalance, convert-all, AI chat) runs inside `web/`** as Next.js API routes and server-side modules. There is **no separate agent service** to run.
+
+Key paths inside `web/`:
+- `web/src/app/api/chat/route.ts` — AI chat with portfolio context + chat-triggered actions
+- `web/src/app/api/rebalance/route.ts` — HTTP endpoint for rebalance/convert-all
+- `web/src/server/agent/runRebalance.ts` — rebalance orchestrator (called by both routes above)
+- `web/src/server/agent/rebalance/engine.ts` — swap execution engine (Jupiter + vault CPI)
+
+## Agent (standalone CLI — for debugging only)
+
+> ⚠️ The `agent/` folder is a **standalone CLI/debug tool**, not the production agent. It was used during early development to test Jupiter swap integration and vault CPI wiring. You do **not** need to run it for the web app to function.
 
 ```bash
 cd agent

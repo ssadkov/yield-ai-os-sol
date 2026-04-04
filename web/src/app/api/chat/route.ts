@@ -15,6 +15,7 @@ import { fetchPortfolioAssets } from "@/lib/portfolioAssets";
 import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
+import { runRebalanceJob } from "@/server/agent/runRebalance";
 
 export const runtime = "nodejs";
 
@@ -65,7 +66,6 @@ export async function POST(req: NextRequest) {
     }
 
     const model = openRouterModel();
-    const executionEnabled = body.executionEnabled === true;
 
     const connection = await getConnection();
     const owner = new PublicKey(ownerPubkey);
@@ -88,6 +88,39 @@ export async function POST(req: NextRequest) {
 
     const isCyrillic = /[А-Яа-яЁё]/.test(lastUserText);
     const replyLang: "ru" | "en" = isCyrillic ? "ru" : "en";
+
+    // --- Chat-based confirmation detection ---
+    // If the user typed something like "да", "yes", "confirm", "подтверждаю",
+    // and the previous assistant message was about needing confirmation for an action,
+    // we auto-enable execution and infer the action.
+    const CONFIRM_RE = /^(да|yes|confirm|подтверждаю|ок|ok|go|давай|вперед|вперёд|точно|sure|do it|execute|запускай|погнали)\s*[.!]?\s*$/i;
+
+    const prevAssistantText = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i]?.role === "assistant") return getUiText(messages[i]);
+      }
+      return "";
+    })();
+
+    const userIsConfirming = CONFIRM_RE.test(lastUserText.trim());
+
+    // Detect which action the assistant was asking about
+    let inferredAction: "rebalance" | "convert_all" | null = null;
+    if (userIsConfirming && prevAssistantText) {
+      const lower = prevAssistantText.toLowerCase();
+      if (lower.includes("convert") || lower.includes("конверт") || lower.includes("usdc") || lower.includes("продать")) {
+        inferredAction = "convert_all";
+      } else if (lower.includes("rebalance") || lower.includes("ребаланс")) {
+        inferredAction = "rebalance";
+      }
+    }
+
+    let executionEnabled = body.executionEnabled === true;
+    if (inferredAction && !executionEnabled) {
+      executionEnabled = true;
+      body.clientAction = inferredAction;
+      body.confirmed = true;
+    }
 
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
@@ -250,18 +283,20 @@ export async function POST(req: NextRequest) {
         actionPreface =
           "Client attempted an execution action without confirmation. Ask the user to confirm explicitly.";
       } else {
-        const agentBase = process.env.AGENT_API_URL || "http://localhost:3001";
         const action =
           body.clientAction === "rebalance" ? "rebalance" : "convert_all";
-        const res = await fetch(`${agentBase}/rebalance`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ownerPubkey, action }),
-        });
-        const data = (await res.json()) as Record<string, unknown>;
-        actionPreface =
-          `Client executed action=${action} (confirmed).\n` +
-          JSON.stringify({ httpStatus: res.status, ...data }, null, 2);
+        try {
+          const data = await runRebalanceJob({ ownerPubkey, action });
+          actionPreface =
+            `Client executed action=${action} (confirmed).\n` +
+            JSON.stringify(data, null, 2);
+        } catch (execErr: unknown) {
+          const errMsg = execErr instanceof Error ? execErr.message : String(execErr);
+          console.error("[chat] runRebalanceJob failed:", errMsg, execErr);
+          actionPreface =
+            `Client executed action=${action} (confirmed) but it FAILED.\nError: ${errMsg}\n` +
+            "Tell the user what went wrong. If it is a missing env var or configuration issue, explain that.";
+        }
       }
     }
 
@@ -307,10 +342,13 @@ export async function POST(req: NextRequest) {
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
-        "- Only trigger execution tools (rebalance/convert) when the user explicitly confirms.",
+        "- When the user asks to rebalance or convert to USDC, do NOT execute immediately.",
+        "  Instead, briefly explain what you are about to do and ask the user to confirm by typing 'да', 'yes', 'confirm', 'давай', etc.",
+        "  Once confirmed, the system will automatically execute the action on the next message.",
+        "- Do NOT tell the user to use UI buttons. The user can confirm via chat text.",
         "Tool usage:",
         "- Use getPortfolioSnapshot to ground your analysis in current on-chain balances.",
-        "- If execution is requested, call the relevant tool with confirmed=true.",
+        "- Do NOT call rebalanceVault or convertAllToUsdc tools directly. Actions are triggered via the client action protocol below.",
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
         "Client action protocol:",
         "- If the system prompt contains a section 'Context from the client action' with JSON, you MUST include a final line in your answer:",
@@ -398,19 +436,8 @@ export async function POST(req: NextRequest) {
             }
 
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
-            const agentBase =
-              process.env.AGENT_API_URL || "http://localhost:3001";
-            const res = await fetch(`${agentBase}/rebalance`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                ownerPubkey: resolvedOwnerPubkey,
-                action: "rebalance",
-              }),
-            });
-            const data = (await res.json()) as Record<string, unknown>;
-
-            return { httpStatus: res.status, ...data };
+            const data = await runRebalanceJob({ ownerPubkey: resolvedOwnerPubkey, action: "rebalance" });
+            return data;
           },
         }),
 
@@ -438,19 +465,8 @@ export async function POST(req: NextRequest) {
             }
 
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
-            const agentBase =
-              process.env.AGENT_API_URL || "http://localhost:3001";
-            const res = await fetch(`${agentBase}/rebalance`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                ownerPubkey: resolvedOwnerPubkey,
-                action: "convert_all",
-              }),
-            });
-            const data = (await res.json()) as Record<string, unknown>;
-
-            return { httpStatus: res.status, ...data };
+            const data = await runRebalanceJob({ ownerPubkey: resolvedOwnerPubkey, action: "convert_all" });
+            return data;
           },
         }),
 

@@ -66,7 +66,16 @@ function MessageBubble({ message }: { message: UIMessage }) {
             if (part.type === "text") {
               return <span key={`${message.id}-${i}`}>{part.text}</span>;
             }
-            // Ignore non-text parts for now (tools etc.)
+            // @ts-ignore
+            if (part.type === "tool-invocation" || part.type === "tool-call") {
+              // @ts-ignore
+              const toolName = part.toolName || part.toolInvocation?.toolName || "tool";
+              return (
+                <div key={`${message.id}-${i}`} className="text-xs italic opacity-50 my-1">
+                  [Вызов: {toolName}...]
+                </div>
+              );
+            }
             return null;
           })}
         </div>
@@ -84,6 +93,7 @@ export function AIChat() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const handledToolCallsRef = useRef(new Set<string>());
 
   const [pendingConfirm, setPendingConfirm] = useState<
     "rebalance" | "convert_all" | null
@@ -98,7 +108,9 @@ export function AIChat() {
     sendMessage,
     status,
     clearError,
-  } = useChat({ transport: chatTransport });
+  } = useChat({
+    transport: chatTransport,
+  });
 
   const isLoading = status !== "ready";
 
@@ -169,6 +181,25 @@ export function AIChat() {
     scrollToBottom("smooth");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, status]);
+
+  // Hook into AI tool invocations to automatically trigger confirmation UI
+  useEffect(() => {
+    if (!lastAssistant?.parts) return;
+    lastAssistant.parts.forEach((part: any) => {
+      if (part.type === "tool-invocation" || part.type === "tool-call") {
+        const id = part.toolCallId;
+        const toolName = part.toolName || part.toolInvocation?.toolName;
+        if (id && !handledToolCallsRef.current.has(id)) {
+          handledToolCallsRef.current.add(id);
+          if (toolName === "rebalanceVault") {
+            setPendingConfirm("rebalance");
+          } else if (toolName === "convertAllToUsdc") {
+            setPendingConfirm("convert_all");
+          }
+        }
+      }
+    });
+  }, [lastAssistant]);
 
   const sendClientAction = async (
     action: "snapshot" | "rebalance" | "convert_all",
@@ -385,16 +416,6 @@ export function AIChat() {
             type="submit"
             disabled={isLoading || !input.trim()}
             className="cursor-pointer py-2.5 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={() => {
-              if (!input.trim()) return;
-              // If the user types "rebalance" or "convert", we still require confirmation via buttons.
-              if (
-                /\\brebalance\\b/i.test(input) ||
-                /\\bconvert\\b/i.test(input)
-              ) {
-                setInput(input + " (no execution without confirmation)");
-              }
-            }}
           >
             {isLoading ? "..." : "Send"}
           </button>

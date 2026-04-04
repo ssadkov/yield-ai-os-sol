@@ -14,6 +14,7 @@ import type { ApiInstruction, JupiterBuildResponse } from "./types";
 
 const JUPITER_SWAP_V2_BASE = "/swap/v2";
 const COMPUTE_UNIT_LIMIT_MAX = 1_400_000;
+const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 
 function assertMainnetRpcForJupiterBuild(rpcUrl: string): void {
   const u = rpcUrl.toLowerCase();
@@ -110,7 +111,10 @@ export type BuiltVaultSwap = {
     err: unknown;
     logs: string[] | null;
   };
-  ixs: TransactionInstruction[];
+  txs: {
+    label: "setup" | "swap" | "cleanup_other";
+    ixs: TransactionInstruction[];
+  }[];
   alts: ReturnType<typeof altsFromJupiter>;
   estimatedCuLimit: number;
 };
@@ -144,27 +148,42 @@ export async function buildVaultSwapTx(params: BuildVaultSwapParams): Promise<Bu
   for (const ix of build.otherInstructions) uniquePrograms.add(ix.programId);
   const whitelistedProgramIds = Array.from(uniquePrograms);
 
-  const wrappedSwapIxs: TransactionInstruction[] = [
-    ...build.setupInstructions.map((ix) =>
-      wrapAsExecuteSwapCpiIx({ vaultProgramId, authority, vault, inner: ix }),
-    ),
-    wrapAsExecuteSwapCpiIx({ vaultProgramId, authority, vault, inner: build.swapInstruction }),
-    ...(build.cleanupInstruction
-      ? [
-          wrapAsExecuteSwapCpiIx({
-            vaultProgramId,
-            authority,
-            vault,
-            inner: build.cleanupInstruction,
-          }),
-        ]
-      : []),
-    ...build.otherInstructions.map((ix) =>
-      wrapAsExecuteSwapCpiIx({ vaultProgramId, authority, vault, inner: ix }),
-    ),
-  ];
+  const wrappedSetupIxs = build.setupInstructions.map((ix) =>
+    wrapAsExecuteSwapCpiIx({ vaultProgramId, authority, vault, inner: ix }),
+  );
+  const wrappedSwapIx = wrapAsExecuteSwapCpiIx({
+    vaultProgramId,
+    authority,
+    vault,
+    inner: build.swapInstruction,
+  });
+  const wrappedCleanupIxs = build.cleanupInstruction
+    ? [
+        wrapAsExecuteSwapCpiIx({
+          vaultProgramId,
+          authority,
+          vault,
+          inner: build.cleanupInstruction,
+        }),
+      ]
+    : [];
+  const wrappedOtherIxs = build.otherInstructions.map((ix) =>
+    wrapAsExecuteSwapCpiIx({ vaultProgramId, authority, vault, inner: ix }),
+  );
 
-  const computeBudgetIxs = build.computeBudgetInstructions.map(toWeb3Instruction);
+  // Jupiter may include its own ComputeBudgetProgram.setComputeUnitLimit which can
+  // override our limit if it appears later in the transaction. Keep Jupiter's
+  // compute budget instructions except setComputeUnitLimit, and always apply our
+  // final CU limit as the last compute-budget instruction.
+  const computeBudgetIxs = build.computeBudgetInstructions
+    .filter((ix) => {
+      if (ix.programId !== COMPUTE_BUDGET_PROGRAM_ID) return true;
+      const data = Buffer.from(ix.data, "base64");
+      // ComputeBudgetProgram instruction enum:
+      // 2 = SetComputeUnitLimit
+      return data.length === 0 ? true : data[0] !== 2;
+    })
+    .map(toWeb3Instruction);
 
   const recentBlockhash = bs58.encode(Buffer.from(build.blockhashWithMetadata.blockhash));
   const alts = altsFromJupiter(build.addressesByLookupTableAddress);
@@ -172,40 +191,85 @@ export async function buildVaultSwapTx(params: BuildVaultSwapParams): Promise<Bu
   const connection = new Connection(params.rpcUrl, "confirmed");
   await assertLookupTablesExist(connection, build.addressesByLookupTableAddress);
 
-  const simulationMessage = new TransactionMessage({
-    payerKey: authority,
-    recentBlockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT_MAX }),
-      ...computeBudgetIxs,
-      ...wrappedSwapIxs,
-    ],
-  }).compileToV0Message(alts);
+  // The wrapped Jupiter CPI can exceed the v0 tx size limit if we try to
+  // include setup + swap + cleanup + other in a single transaction. Split into
+  // multiple txs and estimate CU using only the swap tx (the most expensive).
+  let unitsConsumed: number | null = null;
+  let simulateErr: unknown = null;
+  let simulateLogs: string[] | null = null;
+  let estimatedCuLimit = COMPUTE_UNIT_LIMIT_MAX;
+  try {
+    const simulationMessage = new TransactionMessage({
+      payerKey: authority,
+      recentBlockhash,
+      instructions: [
+        ...computeBudgetIxs,
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT_MAX }),
+        wrappedSwapIx,
+      ],
+    }).compileToV0Message(alts);
 
-  const simulationTx = new VersionedTransaction(simulationMessage);
-  const simulationResult = await connection.simulateTransaction(simulationTx, {
-    replaceRecentBlockhash: true,
-  });
+    const simulationTx = new VersionedTransaction(simulationMessage);
+    const simulationResult = await connection.simulateTransaction(simulationTx, {
+      replaceRecentBlockhash: true,
+    });
 
-  const unitsConsumed = simulationResult.value.unitsConsumed ?? null;
-  const estimatedCuLimit =
-    unitsConsumed === null
-      ? COMPUTE_UNIT_LIMIT_MAX
-      : Math.min(Math.ceil(unitsConsumed * 1.2), COMPUTE_UNIT_LIMIT_MAX);
+    unitsConsumed = simulationResult.value.unitsConsumed ?? null;
+    simulateErr = simulationResult.value.err;
+    simulateLogs = simulationResult.value.logs ?? null;
+    estimatedCuLimit =
+      unitsConsumed === null
+        ? COMPUTE_UNIT_LIMIT_MAX
+        : Math.min(Math.ceil(unitsConsumed * 1.2), COMPUTE_UNIT_LIMIT_MAX);
+  } catch (e: unknown) {
+    simulateErr = e;
+  }
 
   return {
     build,
     whitelistedProgramIds,
     simulateUnsigned: {
       unitsConsumed,
-      err: simulationResult.value.err,
-      logs: simulationResult.value.logs ?? null,
+      err: simulateErr,
+      logs: simulateLogs,
     },
-    ixs: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
-      ...computeBudgetIxs,
-      ...wrappedSwapIxs,
-    ],
+    txs: (() => {
+      const txs: BuiltVaultSwap["txs"] = [];
+
+      if (wrappedSetupIxs.length > 0) {
+        txs.push({
+          label: "setup",
+          ixs: [
+            ...computeBudgetIxs,
+            ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
+            ...wrappedSetupIxs,
+          ],
+        });
+      }
+
+      txs.push({
+        label: "swap",
+        ixs: [
+          ...computeBudgetIxs,
+          ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
+          wrappedSwapIx,
+        ],
+      });
+
+      if (wrappedCleanupIxs.length > 0 || wrappedOtherIxs.length > 0) {
+        txs.push({
+          label: "cleanup_other",
+          ixs: [
+            ...computeBudgetIxs,
+            ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCuLimit }),
+            ...wrappedCleanupIxs,
+            ...wrappedOtherIxs,
+          ],
+        });
+      }
+
+      return txs;
+    })(),
     alts,
     estimatedCuLimit,
   };

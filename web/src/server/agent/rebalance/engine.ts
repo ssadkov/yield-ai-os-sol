@@ -141,22 +141,24 @@ async function executeSwaps(args: {
     const swap = swaps[i];
     const built = builds[i];
 
-    const result = await signAndSendTx({
-      connection,
-      authority,
-      ixs: built.ixs,
-      alts: built.alts,
-    });
+    for (const tx of built.txs) {
+      const result = await signAndSendTx({
+        connection,
+        authority,
+        ixs: tx.ixs,
+        alts: built.alts,
+      });
 
-    if (result.err) {
-      return {
-        status: "error",
-        signatures,
-        swaps,
-        error: `Swap ${swap.from.symbol}→${swap.to.symbol} failed: ${JSON.stringify(result.err)}`,
-      };
+      if (result.err) {
+        return {
+          status: "error",
+          signatures,
+          swaps,
+          error: `Swap ${swap.from.symbol}→${swap.to.symbol} (${tx.label}) failed: ${JSON.stringify(result.err)}`,
+        };
+      }
+      if (result.signature) signatures.push(result.signature);
     }
-    signatures.push(result.signature);
   }
 
   return { status: "success", signatures, swaps };

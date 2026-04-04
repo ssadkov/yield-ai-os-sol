@@ -80,8 +80,20 @@ export function AssetRowItem({
         <div className="text-sm font-mono">
           {formatBalance(asset.balance, asset.decimals)}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {formatUsd(asset.usdValue)}
+        <div className="text-xs flex items-center justify-end gap-1.5 mt-0.5">
+          <span className="text-muted-foreground">{formatUsd(asset.usdValue)}</span>
+          {asset.priceChange24h != null && (
+            <span
+              className={
+                asset.priceChange24h >= 0
+                  ? "text-success text-[10px]"
+                  : "text-destructive text-[10px]"
+              }
+            >
+              {asset.priceChange24h > 0 ? "+" : ""}
+              {asset.priceChange24h.toFixed(2)}%
+            </span>
+          )}
         </div>
       </div>
     </div>

@@ -34,6 +34,7 @@ export interface AssetRow {
   decimals: number;
   usdPrice: number | null;
   usdValue: number | null;
+  priceChange24h?: number | null;
   apr?: {
     value: number;
     source: string;
@@ -91,7 +92,8 @@ export async function fetchPortfolioAssets(
   const rows: AssetRow[] = [];
 
   if (includeSol) {
-    const solPrice = prices[SOL_MINT] ?? fallbackUsdPrice(SOL_MINT);
+    const solPriceData = prices[SOL_MINT];
+    const solPrice = solPriceData?.usdPrice ?? fallbackUsdPrice(SOL_MINT);
     const solBal = solBalance / LAMPORTS_PER_SOL;
     rows.push({
       mint: SOL_MINT,
@@ -102,13 +104,15 @@ export async function fetchPortfolioAssets(
       decimals: 9,
       usdPrice: solPrice,
       usdValue: solPrice !== null ? solBal * solPrice : null,
+      priceChange24h: solPriceData?.priceChange24h ?? null,
     });
   }
 
   for (const { mint, rawAmount, decimals } of rawTokens) {
     const meta = tokenMeta[mint];
     const balance = rawAmount / 10 ** decimals;
-    const price = prices[mint] ?? fallbackUsdPrice(mint);
+    const priceData = prices[mint];
+    const price = priceData?.usdPrice ?? fallbackUsdPrice(mint);
 
     const fallbackSymbol =
       mint === USDC_MINT_STR ? "USDC" : mint.slice(0, 4) + "...";
@@ -123,6 +127,7 @@ export async function fetchPortfolioAssets(
       decimals,
       usdPrice: price,
       usdValue: price !== null ? balance * price : null,
+      priceChange24h: priceData?.priceChange24h ?? null,
     });
   }
 

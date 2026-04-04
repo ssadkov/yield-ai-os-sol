@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   streamText,
+  generateText,
   tool,
   convertToModelMessages,
   type UIMessage,
@@ -89,12 +90,10 @@ export async function POST(req: NextRequest) {
     const isCyrillic = /[А-Яа-яЁё]/.test(lastUserText);
     const replyLang: "ru" | "en" = isCyrillic ? "ru" : "en";
 
-    // --- Chat-based confirmation detection ---
-    // If the user typed something like "да", "yes", "confirm", "подтверждаю",
-    // and the previous assistant message was about needing confirmation for an action,
-    // we auto-enable execution and infer the action.
-    const CONFIRM_RE = /^(да|yes|confirm|подтверждаю|ок|ok|go|давай|вперед|вперёд|точно|sure|do it|execute|запускай|погнали)\s*[.!]?\s*$/i;
-
+    // --- LLM-based confirmation detection ---
+    // If the previous assistant message contained @@ACTION_PROPOSAL:xxx
+    // and the user's latest message looks like it could be a confirmation,
+    // use a cheap LLM call to classify intent.
     const prevAssistantText = (() => {
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i]?.role === "assistant") return getUiText(messages[i]);
@@ -102,16 +101,23 @@ export async function POST(req: NextRequest) {
       return "";
     })();
 
-    const userIsConfirming = CONFIRM_RE.test(lastUserText.trim());
-
-    // Detect which action the assistant was asking about
+    const proposalMatch = prevAssistantText.match(/@@ACTION_PROPOSAL:(rebalance|convert_all)/);
     let inferredAction: "rebalance" | "convert_all" | null = null;
-    if (userIsConfirming && prevAssistantText) {
-      const lower = prevAssistantText.toLowerCase();
-      if (lower.includes("convert") || lower.includes("конверт") || lower.includes("usdc") || lower.includes("продать")) {
-        inferredAction = "convert_all";
-      } else if (lower.includes("rebalance") || lower.includes("ребаланс")) {
-        inferredAction = "rebalance";
+
+    if (proposalMatch && lastUserText && !body.clientAction) {
+      // There was a pending action proposal. Classify the user's reply.
+      const proposedAction = proposalMatch[1] as "rebalance" | "convert_all";
+      try {
+        const { text: classResult } = await generateText({
+          model,
+          system: "You are a yes/no classifier. The AI proposed an action and is waiting for user confirmation. Analyze the user's reply and respond with EXACTLY one word: YES or NO. YES means the user is confirming/agreeing. NO means anything else (question, refusal, new topic).",
+          prompt: `Proposed action: ${proposedAction}\nUser reply: "${lastUserText}"\n\nIs the user confirming? Reply YES or NO:`,
+        });
+        if (classResult.trim().toUpperCase().startsWith("YES")) {
+          inferredAction = proposedAction;
+        }
+      } catch (err) {
+        console.error("[chat] LLM confirmation classifier failed:", err);
       }
     }
 
@@ -285,17 +291,66 @@ export async function POST(req: NextRequest) {
       } else {
         const action =
           body.clientAction === "rebalance" ? "rebalance" : "convert_all";
+        const actionLabel = action === "rebalance" ? "Ребалансировка" : "Конвертация в USDC";
         try {
           const data = await runRebalanceJob({ ownerPubkey, action });
-          actionPreface =
-            `Client executed action=${action} (confirmed).\n` +
-            JSON.stringify(data, null, 2);
+
+          // Build a human-readable summary and return DIRECTLY (bypass LLM)
+          let summary: string;
+          if (data.status === "no_rebalance_needed") {
+            summary = replyLang === "ru"
+              ? `✅ ${actionLabel} выполнена. Свопов не потребовалось — текущие балансы уже соответствуют целевым пропорциям (или суммы слишком малы для свопов).`
+              : `✅ ${actionLabel} completed. No swaps were needed — balances already match target allocations (or amounts are too small to swap).`;
+          } else if (data.status === "success") {
+            const swapLines = (data.swaps ?? []).map(
+              (s) => `  • ${s.from.symbol} → ${s.to.symbol} ($${s.amountUsd.toFixed(2)})`
+            );
+            const sigLines = (data.signatures ?? []).map(
+              (sig) => `  🔗 https://solscan.io/tx/${sig}`
+            );
+            summary = replyLang === "ru"
+              ? `✅ ${actionLabel} выполнена!\n\nСвопы:\n${swapLines.join("\n")}\n\nТранзакции:\n${sigLines.join("\n")}`
+              : `✅ ${actionLabel} completed!\n\nSwaps:\n${swapLines.join("\n")}\n\nTransactions:\n${sigLines.join("\n")}`;
+          } else if (data.status === "needs_whitelist") {
+            const missing = (data.missingPrograms ?? []).join(", ");
+            summary = replyLang === "ru"
+              ? `⚠️ Для выполнения ${actionLabel.toLowerCase()} нужно добавить программы в whitelist вашего vault:\n${missing}\n\nНажмите кнопку "Approve whitelist" выше.`
+              : `⚠️ Your vault needs to whitelist these programs first:\n${missing}\n\nClick "Approve whitelist" above.`;
+          } else {
+            summary = replyLang === "ru"
+              ? `❌ ${actionLabel} завершилась с ошибкой: ${data.error ?? "неизвестная ошибка"}`
+              : `❌ ${actionLabel} failed: ${data.error ?? "unknown error"}`;
+          }
+
+          // Return direct stream, no LLM needed
+          return createUIMessageStreamResponse({
+            status: 200,
+            stream: createUIMessageStream({
+              execute({ writer }) {
+                const id = "action-result";
+                writer.write({ type: "text-start", id });
+                writer.write({ type: "text-delta", id, delta: summary });
+                writer.write({ type: "text-end", id });
+              },
+            }),
+          });
         } catch (execErr: unknown) {
           const errMsg = execErr instanceof Error ? execErr.message : String(execErr);
           console.error("[chat] runRebalanceJob failed:", errMsg, execErr);
-          actionPreface =
-            `Client executed action=${action} (confirmed) but it FAILED.\nError: ${errMsg}\n` +
-            "Tell the user what went wrong. If it is a missing env var or configuration issue, explain that.";
+          const summary = replyLang === "ru"
+            ? `❌ Ошибка выполнения: ${errMsg}`
+            : `❌ Execution error: ${errMsg}`;
+          return createUIMessageStreamResponse({
+            status: 200,
+            stream: createUIMessageStream({
+              execute({ writer }) {
+                const id = "action-error";
+                writer.write({ type: "text-start", id });
+                writer.write({ type: "text-delta", id, delta: summary });
+                writer.write({ type: "text-end", id });
+              },
+            }),
+          });
         }
       }
     }
@@ -342,19 +397,23 @@ export async function POST(req: NextRequest) {
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
+        "Action proposal protocol:",
         "- When the user asks to rebalance or convert to USDC, do NOT execute immediately.",
-        "  Instead, briefly explain what you are about to do and ask the user to confirm by typing 'да', 'yes', 'confirm', 'давай', etc.",
-        "  Once confirmed, the system will automatically execute the action on the next message.",
-        "- Do NOT tell the user to use UI buttons. The user can confirm via chat text.",
+        "  Instead, explain what you are about to do (which swaps, target allocations, approximate amounts based on the portfolio snapshot).",
+        "  At the VERY END of your message, append the marker @@ACTION_PROPOSAL:rebalance or @@ACTION_PROPOSAL:convert_all on a new line.",
+        "  The client will detect this marker and show the user a special action card with Confirm/Cancel buttons.",
+        "  Example: 'I will rebalance your vault...\\n@@ACTION_PROPOSAL:rebalance'",
+        "- You may also use the marker if the user agrees to an action you suggested.",
+        "- NEVER call rebalanceVault or convertAllToUsdc tools directly. They are triggered via the action proposal protocol.",
         "Tool usage:",
         "- Use getPortfolioSnapshot to ground your analysis in current on-chain balances.",
-        "- Do NOT call rebalanceVault or convertAllToUsdc tools directly. Actions are triggered via the client action protocol below.",
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
         "Client action protocol:",
         "- If the system prompt contains a section 'Context from the client action' with JSON, you MUST include a final line in your answer:",
         "  @@CLIENT_ACTION_RESULT <the exact same JSON, minified or pretty is OK, but must be valid JSON>",
         "- Do not fabricate fields in that JSON; echo it as given.",
         actionPreface ? `\nContext from the client action:\n${actionPreface}` : "",
+        actionPreface ? "\nIMPORTANT: You MUST respond with a text explanation of what happened. Never produce an empty response. Summarize the action result for the user." : "",
       ].join("\n"),
       tools: {
         getStrategyExplainer: tool({

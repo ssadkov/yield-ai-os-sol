@@ -1,49 +1,147 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useChat, type UIMessage } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { fetchVaultAccount, setAllowedPrograms } from "@/lib/vault";
+import { useChat, type UIMessage } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import {
+  fetchVaultAccount,
+  setAllowedPrograms,
+} from "@/lib/vault";
 
-type ClientActionResult = {
-  status?: string;
-  missingPrograms?: string[];
-  swaps?: unknown[];
-  signatures?: string[];
-  error?: string;
-  httpStatus?: number;
-};
+/* ── helpers ────────────────────────────────────────────── */
 
-function parseClientActionResult(text: string): ClientActionResult | null {
-  const marker = "@@CLIENT_ACTION_RESULT";
-  const idx = text.lastIndexOf(marker);
+const ACTION_PROPOSAL_RE = /@@ACTION_PROPOSAL:(rebalance|convert_all)/;
+const ACTION_RESULT_RE = /^(✅|❌|⚠️)/;
+
+function getMessageText(msg: UIMessage): string {
+  return msg.parts
+    .map((p) => (p.type === "text" ? p.text : ""))
+    .join("")
+    .trim();
+}
+
+function parseClientActionResult(text: string): Record<string, unknown> | null {
+  const tag = "@@CLIENT_ACTION_RESULT";
+  const idx = text.indexOf(tag);
   if (idx === -1) return null;
-  const raw = text.slice(idx + marker.length).trim();
   try {
-    return JSON.parse(raw) as ClientActionResult;
+    return JSON.parse(text.slice(idx + tag.length).trim()) as Record<string, unknown>;
   } catch {
     return null;
   }
 }
 
-function getMessageText(message: UIMessage): string {
-  return message.parts
-    .filter((p): p is Extract<typeof p, { type: "text" }> => p.type === "text")
-    .map((p) => p.text)
-    .join("");
-}
-
-function latestAssistantMessage(messages: UIMessage[]): UIMessage | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") return messages[i]!;
+function latestAssistantMessage(msgs: UIMessage[]): UIMessage | undefined {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i]?.role === "assistant") return msgs[i];
   }
-  return null;
+  return undefined;
 }
 
-const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
+/* ── Action Card ────────────────────────────────────────── */
+
+function ActionProposalCard({
+  text,
+  action,
+  onConfirm,
+  onCancel,
+  disabled,
+}: {
+  text: string;
+  action: "rebalance" | "convert_all";
+  onConfirm: () => void;
+  onCancel: () => void;
+  disabled: boolean;
+}) {
+  const actionLabel = action === "rebalance" ? "Rebalance" : "Convert to USDC";
+  const icon = action === "rebalance" ? "⚖️" : "💱";
+  const cleanText = text.replace(ACTION_PROPOSAL_RE, "").trim();
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[90%] text-left">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          AI — Action
+        </div>
+        <div className="rounded-2xl border-2 border-primary/40 bg-primary/5 overflow-hidden">
+          <div className="px-3 py-2 flex items-center gap-2 border-b border-primary/20 bg-primary/10">
+            <span className="text-base">{icon}</span>
+            <span className="text-xs font-semibold text-primary uppercase tracking-wider">
+              {actionLabel} — Confirmation Required
+            </span>
+          </div>
+          <div className="px-3 py-2 text-sm whitespace-pre-wrap wrap-break-word text-foreground">
+            {cleanText}
+          </div>
+          <div className="px-3 py-2 border-t border-primary/20 flex gap-2">
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={disabled}
+              className="cursor-pointer text-xs px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            >
+              ✓ Confirm {actionLabel}
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={disabled}
+              className="cursor-pointer text-xs px-4 py-2 rounded-lg border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ✗ Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActionResultBubble({ text }: { text: string }) {
+  const isSuccess = text.startsWith("✅");
+  const isError = text.startsWith("❌");
+  const isWarning = text.startsWith("⚠️");
+
+  const borderColor = isSuccess
+    ? "border-success/40"
+    : isError
+      ? "border-destructive/40"
+      : isWarning
+        ? "border-yellow-500/40"
+        : "border-border";
+  const bgColor = isSuccess
+    ? "bg-success/5"
+    : isError
+      ? "bg-destructive/5"
+      : isWarning
+        ? "bg-yellow-500/5"
+        : "bg-accent";
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[90%] text-left">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          AI — Result
+        </div>
+        <div
+          className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap wrap-break-word border-2 ${borderColor} ${bgColor}`}
+        >
+          {text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Regular message bubble ─────────────────────────────── */
 
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
@@ -64,17 +162,9 @@ function MessageBubble({ message }: { message: UIMessage }) {
         >
           {message.parts.map((part, i) => {
             if (part.type === "text") {
-              return <span key={`${message.id}-${i}`}>{part.text}</span>;
-            }
-            // @ts-ignore
-            if (part.type === "tool-invocation" || part.type === "tool-call") {
-              // @ts-ignore
-              const toolName = part.toolName || part.toolInvocation?.toolName || "tool";
-              return (
-                <div key={`${message.id}-${i}`} className="text-xs italic opacity-50 my-1">
-                  [Вызов: {toolName}...]
-                </div>
-              );
+              // Strip @@ACTION_PROPOSAL marker from regular display
+              const cleaned = part.text.replace(ACTION_PROPOSAL_RE, "").trim();
+              return <span key={`${message.id}-${i}`}>{cleaned}</span>;
             }
             return null;
           })}
@@ -83,6 +173,12 @@ function MessageBubble({ message }: { message: UIMessage }) {
     </div>
   );
 }
+
+/* ── Chat transport ───────────────────────────────────── */
+
+const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
+
+/* ── Main component ───────────────────────────────────── */
 
 export function AIChat() {
   const { connection } = useConnection();
@@ -93,14 +189,13 @@ export function AIChat() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
-  const handledToolCallsRef = useRef(new Set<string>());
 
-  const [pendingConfirm, setPendingConfirm] = useState<
-    "rebalance" | "convert_all" | null
-  >(null);
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [input, setInput] = useState("");
+  const [confirmingAction, setConfirmingAction] = useState<
+    "rebalance" | "convert_all" | null
+  >(null);
 
   const {
     messages,
@@ -144,7 +239,7 @@ export function AIChat() {
     return parseClientActionResult(txt);
   }, [lastAssistant]);
 
-  const missingPrograms = lastResult?.missingPrograms ?? [];
+  const missingPrograms = (lastResult?.missingPrograms ?? []) as string[];
   const needsWhitelist =
     (lastResult?.status === "needs_whitelist" ||
       lastResult?.httpStatus === 428) &&
@@ -172,34 +267,13 @@ export function AIChat() {
       );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerPubkey]); // run once per wallet connection
+  }, [ownerPubkey]);
 
-  // Auto-scroll: keep pinned to bottom while streaming / new messages arrive,
-  // but never fight the user if they scrolled up.
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     scrollToBottom("smooth");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, status]);
-
-  // Hook into AI tool invocations to automatically trigger confirmation UI
-  useEffect(() => {
-    if (!lastAssistant?.parts) return;
-    lastAssistant.parts.forEach((part: any) => {
-      if (part.type === "tool-invocation" || part.type === "tool-call") {
-        const id = part.toolCallId;
-        const toolName = part.toolName || part.toolInvocation?.toolName;
-        if (id && !handledToolCallsRef.current.has(id)) {
-          handledToolCallsRef.current.add(id);
-          if (toolName === "rebalanceVault") {
-            setPendingConfirm("rebalance");
-          } else if (toolName === "convertAllToUsdc") {
-            setPendingConfirm("convert_all");
-          }
-        }
-      }
-    });
-  }, [lastAssistant]);
 
   const sendClientAction = async (
     action: "snapshot" | "rebalance" | "convert_all",
@@ -212,7 +286,7 @@ export function AIChat() {
         : action === "rebalance"
           ? confirmed
             ? "Rebalance now (confirmed)."
-            : "I want to rebalance."
+            : "I want to rebalance my vault."
           : confirmed
             ? "Convert all vault tokens to USDC now (confirmed)."
             : "I want to convert all vault tokens to USDC.";
@@ -222,6 +296,16 @@ export function AIChat() {
       confirmed: !!confirmed,
       executionEnabled: !!confirmed,
     });
+  };
+
+  const handleConfirmAction = (action: "rebalance" | "convert_all") => {
+    setConfirmingAction(null);
+    void sendClientAction(action, true);
+  };
+
+  const handleCancelAction = () => {
+    setConfirmingAction(null);
+    void sendText("Cancelled — action not executed.");
   };
 
   const approveWhitelist = async () => {
@@ -261,6 +345,44 @@ export function AIChat() {
       setApproveBusy(false);
     }
   };
+
+  /* ── Render message with type detection ─────────────── */
+
+  const renderMessage = (msg: UIMessage) => {
+    if (msg.role === "user") {
+      return <MessageBubble key={msg.id} message={msg} />;
+    }
+
+    const text = getMessageText(msg);
+
+    // Check if this is the LAST assistant message with an action proposal
+    const proposalMatch = text.match(ACTION_PROPOSAL_RE);
+    const isLastAssistant = msg.id === lastAssistant?.id;
+
+    if (proposalMatch && isLastAssistant && !isLoading) {
+      const action = proposalMatch[1] as "rebalance" | "convert_all";
+      return (
+        <ActionProposalCard
+          key={msg.id}
+          text={text}
+          action={action}
+          onConfirm={() => handleConfirmAction(action)}
+          onCancel={handleCancelAction}
+          disabled={isLoading}
+        />
+      );
+    }
+
+    // Check if this is an action result (starts with emoji)
+    if (ACTION_RESULT_RE.test(text)) {
+      return <ActionResultBubble key={msg.id} text={text} />;
+    }
+
+    // Regular message (strip any stale proposal markers)
+    return <MessageBubble key={msg.id} message={msg} />;
+  };
+
+  /* ── Layout ─────────────────────────────────────────── */
 
   if (!publicKey) {
     return (
@@ -303,7 +425,7 @@ export function AIChat() {
           </button>
           <button
             type="button"
-            onClick={() => setPendingConfirm("rebalance")}
+            onClick={() => void sendText("I want to rebalance my vault according to strategy.")}
             disabled={isLoading}
             className="cursor-pointer text-xs px-2 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50"
           >
@@ -311,7 +433,7 @@ export function AIChat() {
           </button>
           <button
             type="button"
-            onClick={() => setPendingConfirm("convert_all")}
+            onClick={() => void sendText("I want to convert all vault tokens to USDC.")}
             disabled={isLoading}
             className="cursor-pointer text-xs px-2 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50"
           >
@@ -319,37 +441,6 @@ export function AIChat() {
           </button>
         </div>
       </div>
-
-      {pendingConfirm && (
-        <div className="px-4 py-3 border-b border-border bg-primary/5">
-          <div className="text-xs text-muted-foreground">
-            This will send transactions via the agent for your vault. Confirm?
-          </div>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                const act = pendingConfirm;
-                setPendingConfirm(null);
-                void sendClientAction(
-                  act === "rebalance" ? "rebalance" : "convert_all",
-                  true
-                );
-              }}
-              className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              Confirm
-            </button>
-            <button
-              type="button"
-              onClick={() => setPendingConfirm(null)}
-              className="cursor-pointer text-xs px-3 py-1.5 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
 
       {needsWhitelist && (
         <div className="px-4 py-3 border-b border-border bg-primary/10">
@@ -388,9 +479,7 @@ export function AIChat() {
             Ask about your vault strategy, risk, or request a rebalance.
           </div>
         )}
-        {messages.map((m) => (
-          <MessageBubble key={m.id} message={m} />
-        ))}
+        {messages.map(renderMessage)}
       </div>
 
       <form
@@ -427,4 +516,3 @@ export function AIChat() {
     </div>
   );
 }
-

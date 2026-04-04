@@ -18,6 +18,13 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey(
 const SOL_LOGO =
   "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png";
 
+function fallbackUsdPrice(mint: string): number | null {
+  // Keep stablecoin valuation resilient when external price APIs are unavailable.
+  // This prevents "totalUsd = 0" for obvious USD-pegged balances like USDC.
+  if (mint === USDC_MINT_STR) return 1;
+  return null;
+}
+
 export interface AssetRow {
   mint: string;
   symbol: string;
@@ -27,6 +34,11 @@ export interface AssetRow {
   decimals: number;
   usdPrice: number | null;
   usdValue: number | null;
+  priceChange24h?: number | null;
+  apr?: {
+    value: number;
+    source: string;
+  };
 }
 
 export interface FetchOptions {
@@ -80,7 +92,8 @@ export async function fetchPortfolioAssets(
   const rows: AssetRow[] = [];
 
   if (includeSol) {
-    const solPrice = prices[SOL_MINT] ?? null;
+    const solPriceData = prices[SOL_MINT];
+    const solPrice = solPriceData?.usdPrice ?? fallbackUsdPrice(SOL_MINT);
     const solBal = solBalance / LAMPORTS_PER_SOL;
     rows.push({
       mint: SOL_MINT,
@@ -91,13 +104,15 @@ export async function fetchPortfolioAssets(
       decimals: 9,
       usdPrice: solPrice,
       usdValue: solPrice !== null ? solBal * solPrice : null,
+      priceChange24h: solPriceData?.priceChange24h ?? null,
     });
   }
 
   for (const { mint, rawAmount, decimals } of rawTokens) {
     const meta = tokenMeta[mint];
     const balance = rawAmount / 10 ** decimals;
-    const price = prices[mint] ?? null;
+    const priceData = prices[mint];
+    const price = priceData?.usdPrice ?? fallbackUsdPrice(mint);
 
     const fallbackSymbol =
       mint === USDC_MINT_STR ? "USDC" : mint.slice(0, 4) + "...";
@@ -112,6 +127,7 @@ export async function fetchPortfolioAssets(
       decimals,
       usdPrice: price,
       usdValue: price !== null ? balance * price : null,
+      priceChange24h: priceData?.priceChange24h ?? null,
     });
   }
 

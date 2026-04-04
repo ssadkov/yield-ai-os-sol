@@ -26,10 +26,10 @@ function getApiBaseUrl(): string {
 
 export async function fetchPrices(
   mintIds: string[]
-): Promise<Record<string, number>> {
+): Promise<Record<string, JupiterPriceEntry>> {
   if (mintIds.length === 0) return {};
 
-  const result: Record<string, number> = {};
+  const result: Record<string, JupiterPriceEntry> = {};
   const base = getApiBaseUrl();
   const batches: string[][] = [];
   for (let i = 0; i < mintIds.length; i += 50) {
@@ -46,7 +46,7 @@ export async function fetchPrices(
         const json = await res.json() as Record<string, JupiterPriceEntry>;
         for (const [mint, data] of Object.entries(json)) {
           if (data?.usdPrice != null) {
-            result[mint] = data.usdPrice;
+            result[mint] = data;
           }
         }
       } catch {

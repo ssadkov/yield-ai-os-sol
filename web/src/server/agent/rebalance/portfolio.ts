@@ -129,13 +129,14 @@ export async function takeSnapshot(args: {
 
   const vault = await readVaultAccount(connection, vaultPda);
   const allocations = STRATEGY_ALLOCATIONS[vault.strategy];
-  // Always include USDC in the snapshot so `totalValueUsd` reflects
-  // the vault's actual value even for strategies where USDC is not part
-  // of the allocation list (e.g. Growth).
-  const tokensByMint = new Map<string, TokenDef>();
-  for (const a of allocations) tokensByMint.set(a.token.mint, a.token);
-  tokensByMint.set(USDC.mint, USDC);
-  const tokens = [...tokensByMint.values()];
+  const strategyTokens = allocations.map((a) => a.token);
+
+  // Always include USDC — the vault may hold USDC even if the strategy
+  // doesn't list it (e.g. Growth). Without it, totalValueUsd would be 0
+  // and no swaps would ever be generated.
+  const tokenSet = new Map(strategyTokens.map((t) => [t.mint, t]));
+  if (!tokenSet.has(USDC.mint)) tokenSet.set(USDC.mint, USDC);
+  const tokens = [...tokenSet.values()];
   const mints = tokens.map((t) => t.mint);
 
   const [balances, prices] = await Promise.all([

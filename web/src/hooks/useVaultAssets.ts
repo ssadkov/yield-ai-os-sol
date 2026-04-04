@@ -32,12 +32,17 @@ export function useVaultAssets(vaultPda: PublicKey | null) {
     const owner = new PublicKey(vaultKey);
     setLoading(true);
     try {
-      const { assets: rows, totalUsd: total } = await fetchPortfolioAssets(
-        connection,
-        owner,
-        VAULT_OPTS
-      );
-      setAssets(rows);
+      const [{ assets: rows, totalUsd: total }, yieldsRes] = await Promise.all([
+        fetchPortfolioAssets(connection, owner, VAULT_OPTS),
+        fetch("/api/yields").then((r) => r.json()).catch(() => ({})),
+      ]);
+
+      const merged = rows.map((r) => ({
+        ...r,
+        apr: yieldsRes[r.symbol] || yieldsRes[r.name],
+      }));
+
+      setAssets(merged);
       setTotalUsd(total);
     } catch (err) {
       console.error("Failed to fetch vault assets:", err);

@@ -60,7 +60,17 @@ export function AssetRowItem({
       <div className="flex items-center gap-3">
         <TokenIcon src={asset.logoURI} symbol={asset.symbol} />
         <div>
-          <div className="text-sm font-medium">{asset.symbol}</div>
+          <div className="text-sm font-medium flex items-center gap-2">
+            {asset.symbol}
+            {asset.apr && (
+              <span
+                className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"
+                title={`Source: ${asset.apr.source}`}
+              >
+                {asset.apr.value.toFixed(2)}% APY
+              </span>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground truncate max-w-[120px]">
             {asset.name}
           </div>
@@ -70,8 +80,20 @@ export function AssetRowItem({
         <div className="text-sm font-mono">
           {formatBalance(asset.balance, asset.decimals)}
         </div>
-        <div className="text-xs text-muted-foreground">
-          {formatUsd(asset.usdValue)}
+        <div className="text-xs flex items-center justify-end gap-1.5 mt-0.5">
+          <span className="text-muted-foreground">{formatUsd(asset.usdValue)}</span>
+          {asset.priceChange24h != null && (
+            <span
+              className={
+                asset.priceChange24h >= 0
+                  ? "text-success text-[10px]"
+                  : "text-destructive text-[10px]"
+              }
+            >
+              {asset.priceChange24h > 0 ? "+" : ""}
+              {asset.priceChange24h.toFixed(2)}%
+            </span>
+          )}
         </div>
       </div>
     </div>

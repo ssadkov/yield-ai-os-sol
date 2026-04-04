@@ -23,7 +23,7 @@
 - **Deferred (only if time): automation**
   - Scheduled/hourly rebalancing, background agents, triggers, cron jobs.
 
-### APR display for USDY, Onyc, jitoSOL
+### APR display for USDY, Onyc (DONE), jitoSOL
 
 - **Define requirements**
   - Decide where APR should be shown: Vault card, asset list rows, deposit card, or all of them.
@@ -59,7 +59,7 @@
 - **Verification**
   - Manual: charts render for all strategy tokens; no console errors.
 
-### Vault allocation pie chart
+### [x] Vault allocation pie chart
 
 - **Data**
   - Define allocation source: current vault balances by asset (and pricing method used to convert to USD value).

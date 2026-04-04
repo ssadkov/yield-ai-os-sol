@@ -7,6 +7,7 @@ import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
+import { VaultAllocationChart } from "@/components/VaultAllocationChart";
 import { deriveVaultPda, type StrategyName } from "@/lib/vault";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 
@@ -229,7 +230,9 @@ export function VaultCard() {
           )}
         </div>
 
-        <div className="flex justify-between items-center">
+        <VaultAllocationChart assets={vaultAssets} totalUsd={vaultTotalUsd} />
+
+        <div className="flex justify-between items-center mt-4 pt-4 border-t border-border">
           <span className="text-sm text-muted-foreground">Last Rebalance</span>
           <span className="text-xs text-muted-foreground">{formatTimestamp(lastRebalance)}</span>
         </div>

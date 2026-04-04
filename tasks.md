@@ -59,7 +59,7 @@
 - **Verification**
   - Manual: charts render for all strategy tokens; no console errors.
 
-### Vault allocation pie chart
+### [x] Vault allocation pie chart
 
 - **Data**
   - Define allocation source: current vault balances by asset (and pricing method used to convert to USD value).

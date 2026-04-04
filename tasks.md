@@ -23,7 +23,7 @@
 - **Deferred (only if time): automation**
   - Scheduled/hourly rebalancing, background agents, triggers, cron jobs.
 
-### APR display for USDY, Onyc, jitoSOL
+### APR display for USDY, Onyc (DONE), jitoSOL
 
 - **Define requirements**
   - Decide where APR should be shown: Vault card, asset list rows, deposit card, or all of them.

@@ -34,6 +34,10 @@ export interface AssetRow {
   decimals: number;
   usdPrice: number | null;
   usdValue: number | null;
+  apr?: {
+    value: number;
+    source: string;
+  };
 }
 
 export interface FetchOptions {

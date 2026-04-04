@@ -60,7 +60,17 @@ export function AssetRowItem({
       <div className="flex items-center gap-3">
         <TokenIcon src={asset.logoURI} symbol={asset.symbol} />
         <div>
-          <div className="text-sm font-medium">{asset.symbol}</div>
+          <div className="text-sm font-medium flex items-center gap-2">
+            {asset.symbol}
+            {asset.apr && (
+              <span
+                className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"
+                title={`Source: ${asset.apr.source}`}
+              >
+                {asset.apr.value.toFixed(2)}% APY
+              </span>
+            )}
+          </div>
           <div className="text-xs text-muted-foreground truncate max-w-[120px]">
             {asset.name}
           </div>

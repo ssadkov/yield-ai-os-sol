@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import type { VaultTxEntry } from "@/lib/vaultHistory";
 import { onBalanceRefresh } from "@/lib/refreshEvent";
@@ -32,6 +32,9 @@ export function useVaultPnl(currentValueUsd: number | null) {
 
   const ownerKey = publicKey?.toBase58() ?? null;
 
+  const currentValueUsdRef = useRef(currentValueUsd);
+  currentValueUsdRef.current = currentValueUsd;
+
   const refresh = useCallback(async () => {
     if (!ownerKey) {
       setData(null);
@@ -50,10 +53,8 @@ export function useVaultPnl(currentValueUsd: number | null) {
 
       const json: ApiResponse = await res.json();
 
-      // IMPORTANT: do not refetch history when currentValueUsd changes.
-      // PnL can be recomputed locally to avoid hammering RPC.
-      const pnl =
-        currentValueUsd !== null ? currentValueUsd - json.netDeposited : null;
+      const cv = currentValueUsdRef.current;
+      const pnl = cv !== null ? cv - json.netDeposited : null;
       const pnlPercent =
         pnl !== null && json.netDeposited > 0
           ? (pnl / json.netDeposited) * 100
@@ -79,6 +80,21 @@ export function useVaultPnl(currentValueUsd: number | null) {
     // Always load once on mount / wallet change.
     refresh();
   }, [refresh]);
+
+  // Recompute PnL when vault USD total updates (no extra /api/vault-history call).
+  useEffect(() => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const pnl =
+        currentValueUsd !== null ? currentValueUsd - prev.netDeposited : null;
+      const pnlPercent =
+        pnl !== null && prev.netDeposited > 0
+          ? (pnl / prev.netDeposited) * 100
+          : null;
+      if (prev.pnl === pnl && prev.pnlPercent === pnlPercent) return prev;
+      return { ...prev, pnl, pnlPercent };
+    });
+  }, [currentValueUsd]);
 
   // Refresh only after successful on-chain actions.
   useEffect(() => onBalanceRefresh(refresh), [refresh]);

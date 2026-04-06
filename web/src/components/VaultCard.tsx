@@ -47,7 +47,7 @@ export function VaultCard() {
     data: pnlData,
     loading: pnlLoading,
     refresh: refreshPnl,
-  } = useVaultPnl(vaultTotalUsd > 0 ? vaultTotalUsd : null);
+  } = useVaultPnl(vaultAssetsLoading ? null : vaultTotalUsd);
 
   const handleRefreshAll = async () => {
     await Promise.all([refresh(), refreshVaultAssets(), refreshPnl()]);
@@ -181,7 +181,7 @@ export function VaultCard() {
                 : `Show ${holdingsHiddenCount} more tokens`}
             </button>
           )}
-          {vaultAssets.length > 0 && (
+          {!vaultAssetsLoading && (
             <div className="mt-3 pt-3 border-t border-border space-y-2">
               <div className="flex justify-between items-center">
                 <span className="text-sm font-medium text-muted-foreground">

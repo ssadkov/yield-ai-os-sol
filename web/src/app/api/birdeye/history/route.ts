@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
   try {
     await waitIfNeeded();
     
+    console.log(`[Birdeye] Fetching history for ${address}, type=${type}, from=${time_from}`);
     const data = await fetchBirdeyeHistory(
       address,
       type,
@@ -46,10 +47,15 @@ export async function GET(req: NextRequest) {
     lastRequestTime = Date.now();
 
     if (!data) {
+      console.error(`[Birdeye] Failed to fetch data for ${address}`);
       return NextResponse.json(
         { error: "Failed to fetch data from Birdeye" },
         { status: 500 }
       );
+    }
+
+    if (!data.success || !data.data.items || data.data.items.length === 0) {
+      console.warn(`[Birdeye] Empty data for ${address}:`, JSON.stringify(data));
     }
 
     return NextResponse.json(data);

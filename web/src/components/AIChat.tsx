@@ -170,9 +170,11 @@ function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
   const label = isUser ? "You" : "AI";
 
+  const hasChart = message.parts.some((p: any) => p.toolName === "showTokenChart" || p.type?.startsWith("tool-showTokenChart"));
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-[85%] ${isUser ? "text-right" : "text-left"}`}>
+      <div className={`${hasChart && !isUser ? "w-full" : "max-w-[85%]"} ${isUser ? "text-right" : "text-left"}`}>
         <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
           {label}
         </div>
@@ -185,28 +187,50 @@ function MessageBubble({ message }: { message: UIMessage }) {
         >
           {message.parts.map((part: any, i: number) => {
             if (part.type === "text") {
-              // Strip @@ACTION_PROPOSAL marker from regular display
               const cleaned = part.text.replace(ACTION_PROPOSAL_RE, "").trim();
+              if (!cleaned) return null;
               if (isUser) {
-                return <span key={`${message.id}-${i}`}>{cleaned}</span>;
+                return <span key={`${message.id}-p${i}`}>{cleaned}</span>;
               }
               return (
-                <div key={`${message.id}-${i}`} className="prose prose-sm dark:prose-invert max-w-none break-words">
+                <div key={`${message.id}-p${i}`} className="prose prose-sm dark:prose-invert max-w-none break-words px-4 py-3">
                   <ReactMarkdown>{cleaned}</ReactMarkdown>
                 </div>
               );
             }
-            if (part.type === "tool-invocation") {
-              const { toolName, args, result } = part;
-              if (toolName === "showTokenChart") {
+            
+            // Support both standard 'tool-invocation' and prefixed 'tool-toolName' types
+            const isTool = part.type === "tool-invocation" || part.type?.startsWith("tool-");
+            if (isTool) {
+               const toolName = part.toolName || part.type?.replace("tool-", "");
+               // USE RESULT/OUTPUT if available (it has the resolved mint), otherwise fall back to input args
+               const toolData = part.result || part.output || part.args || part.input || part.toolInvocation?.args || {};
+               
+               if (toolName === "showTokenChart" && toolData.mint) {
                 return (
-                  <TokenChart 
-                    key={part.toolCallId}
-                    address={args.mint}
-                    symbol={args.symbol}
-                  />
+                  <div key={part.toolCallId || `${message.id}-t${i}`} className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40">
+                    <TokenChart 
+                      address={toolData.mint}
+                      symbol={toolData.symbol}
+                    />
+                  </div>
                 );
               }
+            }
+            return null;
+          })}
+          
+          {/* @ts-ignore */}
+          {message.toolInvocations?.map((ti: any) => {
+            if (ti.toolName === "showTokenChart" && ti.state === "result") {
+              return (
+                <div key={ti.toolCallId} className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40 mt-2">
+                  <TokenChart 
+                    address={ti.result?.mint}
+                    symbol={ti.result?.symbol}
+                  />
+                </div>
+              );
             }
             return null;
           })}
@@ -268,6 +292,7 @@ export function AIChat() {
     text: string,
     extraBody?: Record<string, unknown>
   ): Promise<void> => {
+    console.log(`[AIChat] Sending text: "${text}"`, extraBody);
     await sendMessage(
       { text },
       {

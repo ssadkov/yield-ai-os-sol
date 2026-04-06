@@ -18,7 +18,7 @@ import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { runRebalanceJob } from "@/server/agent/runRebalance";
-import { ALL_TOKENS } from "@/server/agent/rebalance/tokens";
+import { ALL_TOKENS, CBBTC } from "@/server/agent/rebalance/tokens";
 
 export const runtime = "nodejs";
 
@@ -422,11 +422,13 @@ export async function POST(req: NextRequest) {
         "Tool usage:",
         "- Use getPortfolioSnapshot to ground your analysis in current on-chain balances.",
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
-        "- If the user asks for a chart, price history, or performance of a specific token, use the showTokenChart tool.",
-        "- Default to the 7-day or 1-month range if the user doesn't specify.",
+        "- IMPORTANT: If the user asks for a chart, price history, or performance of a specific token, you MUST call the showTokenChart tool immediately.",
+        "- Default to the 1-month range if the user doesn't specify.",
         actionPreface ? `\nContext from the client action:\n${actionPreface}` : "",
         actionPreface ? "\nIMPORTANT: You MUST respond with a text explanation of what happened. Never produce an empty response. Summarize the action result for the user." : "",
       ].join("\n"),
+      // @ts-ignore - maxSteps might be experimental or typed differently in this version
+      maxSteps: 5,
       tools: {
         getStrategyExplainer: tool({
           description:
@@ -576,20 +578,32 @@ export async function POST(req: NextRequest) {
         showTokenChart: tool({
           description: "Display a historical price chart for a token.",
           inputSchema: z.object({
-            symbol: z.string().describe("The token symbol (e.g. SOL, USDC, ONe, AAPL.x)"),
+            symbol: z.string().describe("The token symbol (e.g. SOL, USDC, ONe, BTC, Bitcoin)"),
             mint: z.string().optional().describe("The token mint address if known"),
           }),
           execute: async ({ symbol, mint }) => {
+            console.log(`[chat] showTokenChart tool called for symbol=${symbol}, mint=${mint}`);
             let resolvedMint = mint;
             let resolvedSymbol = symbol;
             
+            const symUpper = symbol.toUpperCase();
             if (!resolvedMint) {
-              const token = ALL_TOKENS.find(t => t.symbol.toLowerCase() === symbol.toLowerCase());
+              const symLower = symbol.toLowerCase();
+              const token = ALL_TOKENS.find(t => 
+                t.symbol.toLowerCase() === symLower || 
+                (t.symbol.toLowerCase() === "cbbtc" && (symLower === "btc" || symLower === "bitcoin")) ||
+                (t.symbol.toLowerCase() === "oney" && (symLower === "one" || symLower === "onyc" || symLower === "ony"))
+              );
+
               if (token) {
                 resolvedMint = token.mint;
                 resolvedSymbol = token.symbol;
-              } else if (symbol.toUpperCase() === "SOL") {
+              } else if (symUpper === "SOL") {
                 resolvedMint = "So11111111111111111111111111111111111111112";
+                resolvedSymbol = "SOL";
+              } else if (symUpper === "BTC" || symUpper === "BITCOIN") {
+                resolvedMint = CBBTC.mint;
+                resolvedSymbol = "cbBTC";
               }
             }
 

@@ -136,7 +136,7 @@ export function TokenChart({ address, symbol, defaultType = "1H" }: TokenChartPr
 
   return (
     <div className={`
-      ${isFullscreen ? "fixed inset-0 z-50 bg-background/95 backdrop-blur-md p-4 sm:p-8" : "w-full my-4"}
+      ${isFullscreen ? "fixed inset-0 z-50 bg-background/95 backdrop-blur-md p-4 sm:p-8" : "w-full"}
     `}>
       <div className={`
         relative rounded-2xl border border-border/60 bg-card/50 overflow-hidden shadow-xl glassmorphism

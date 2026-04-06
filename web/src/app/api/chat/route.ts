@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { KNOWLEDGE_BASE_RULES } from "@/config/chat-hints";
 import {
   streamText,
   generateText,
@@ -60,18 +61,12 @@ export async function POST(req: NextRequest) {
 
     const messages = body.messages ?? [];
     const ownerPubkey = body.ownerPubkey;
-    if (!ownerPubkey) {
-      return NextResponse.json(
-        { error: "ownerPubkey is required" },
-        { status: 400 }
-      );
-    }
 
     const model = openRouterModel();
 
     const connection = await getConnection();
-    const owner = new PublicKey(ownerPubkey);
-    const [vaultPda] = deriveVaultPda(owner);
+    const owner = ownerPubkey ? new PublicKey(ownerPubkey) : null;
+    const vaultPda = owner ? deriveVaultPda(owner)[0] : null;
 
     const getUiText = (m: UIMessage | undefined): string => {
       if (!m) return "";
@@ -131,19 +126,24 @@ export async function POST(req: NextRequest) {
 
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
-    const [walletSnap, vaultHoldingsSnap] = await Promise.all([
-      fetchPortfolioAssets(connection, owner, { includeSol: true }),
-      fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
-    ]);
+    const [walletSnap, vaultHoldingsSnap] = owner && vaultPda
+      ? await Promise.all([
+          fetchPortfolioAssets(connection, owner, { includeSol: true }),
+          fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
+        ])
+      : [null, null];
+
+    const safeWalletSnap = walletSnap ?? { totalUsd: 0, assets: [] as NonNullable<typeof walletSnap>["assets"] };
+    const safeVaultHoldingsSnap = vaultHoldingsSnap ?? { totalUsd: 0, assets: [] as NonNullable<typeof vaultHoldingsSnap>["assets"] };
 
     const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-    const walletUsdc = walletSnap.assets.find((a) => a.mint === USDC_MINT)
+    const walletUsdc = safeWalletSnap.assets.find((a) => a.mint === USDC_MINT)
       ?.balance ?? 0;
-    const vaultUsdc = vaultHoldingsSnap.assets.find((a) => a.mint === USDC_MINT)
+    const vaultUsdc = safeVaultHoldingsSnap.assets.find((a) => a.mint === USDC_MINT)
       ?.balance ?? 0;
 
-    const pickTopAssets = (assets: typeof walletSnap.assets, limit: number) =>
+    const pickTopAssets = (assets: typeof safeWalletSnap.assets, limit: number) =>
       assets
         .slice()
         .sort((a, b) => (b.usdValue ?? 0) - (a.usdValue ?? 0))
@@ -157,7 +157,7 @@ export async function POST(req: NextRequest) {
           usdValue: a.usdValue,
         }));
 
-    const pickUnpricedAssets = (assets: typeof walletSnap.assets, limit: number) =>
+    const pickUnpricedAssets = (assets: typeof safeWalletSnap.assets, limit: number) =>
       assets
         .filter((a) => a.balance > 0 && a.usdPrice == null)
         .slice(0, limit)
@@ -168,22 +168,22 @@ export async function POST(req: NextRequest) {
           balance: a.balance,
         }));
 
-    const portfolioContext = {
+    const portfolioContext = owner && vaultPda && walletSnap && vaultHoldingsSnap ? {
       ownerPubkey,
       vaultPda: vaultPda.toBase58(),
       wallet: {
-        totalUsd: walletSnap.totalUsd,
-        assetCount: walletSnap.assets.length,
-        topAssets: pickTopAssets(walletSnap.assets, 40),
-        unpricedAssets: pickUnpricedAssets(walletSnap.assets, 25),
+        totalUsd: safeWalletSnap.totalUsd,
+        assetCount: safeWalletSnap.assets.length,
+        topAssets: pickTopAssets(safeWalletSnap.assets, 40),
+        unpricedAssets: pickUnpricedAssets(safeWalletSnap.assets, 25),
       },
       vault: {
-        totalUsd: vaultHoldingsSnap.totalUsd,
-        assetCount: vaultHoldingsSnap.assets.length,
-        topAssets: pickTopAssets(vaultHoldingsSnap.assets, 40),
-        unpricedAssets: pickUnpricedAssets(vaultHoldingsSnap.assets, 25),
+        totalUsd: safeVaultHoldingsSnap.totalUsd,
+        assetCount: safeVaultHoldingsSnap.assets.length,
+        topAssets: pickTopAssets(safeVaultHoldingsSnap.assets, 40),
+        unpricedAssets: pickUnpricedAssets(safeVaultHoldingsSnap.assets, 25),
       },
-    };
+    } : { status: "Wallet not connected or missing context" };
 
     // Deterministic token balance answers to avoid LLM hallucination.
     // Handles questions like: "сколько у меня ONyc?", "how much USDC in vault?"
@@ -195,14 +195,14 @@ export async function POST(req: NextRequest) {
       const token = rawToken.trim();
       const tokenUpper = token.toUpperCase();
 
-      const findBySymbol = (assets: typeof walletSnap.assets) =>
+      const findBySymbol = (assets: typeof safeWalletSnap.assets) =>
         assets.find((a) => (a.symbol ?? "").toUpperCase() === tokenUpper) ??
         assets.find((a) =>
           (a.name ?? "").toUpperCase().includes(tokenUpper)
         );
 
-      const walletAsset = findBySymbol(walletSnap.assets);
-      const vaultAsset = findBySymbol(vaultHoldingsSnap.assets);
+      const walletAsset = findBySymbol(safeWalletSnap.assets);
+      const vaultAsset = findBySymbol(safeVaultHoldingsSnap.assets);
 
       const fmtUsd = (n: number | null | undefined) =>
         n == null ? "unavailable" : `$${n.toFixed(2)}`;
@@ -256,7 +256,7 @@ export async function POST(req: NextRequest) {
     }
 
     let actionPreface = "";
-    if (body.clientAction === "snapshot") {
+    if (body.clientAction === "snapshot" && owner && vaultPda) {
       const snapVault = await fetchVaultAccount(connection, owner);
       const [wallet, vaultHoldings] = await Promise.all([
         fetchPortfolioAssets(connection, owner, { includeSol: true }),
@@ -294,6 +294,7 @@ export async function POST(req: NextRequest) {
           body.clientAction === "rebalance" ? "rebalance" : "convert_all";
         const actionLabel = action === "rebalance" ? "Ребалансировка" : "Конвертация в USDC";
         try {
+          if (!ownerPubkey) throw new Error("Wallet not connected");
           const data = await runRebalanceJob({ ownerPubkey, action });
 
           // Build a human-readable summary and return DIRECTLY (bypass LLM)
@@ -361,6 +362,7 @@ export async function POST(req: NextRequest) {
       messages: await convertToModelMessages(messages),
       system: [
         "You are an AI portfolio assistant for a Solana vault.",
+        KNOWLEDGE_BASE_RULES,
         "Your job: help the user understand their current portfolio, discuss strategy, and propose explicit actions.",
         replyLang === "ru"
           ? "Language: reply in Russian."
@@ -368,11 +370,11 @@ export async function POST(req: NextRequest) {
         "Always reply in the same language as the user's last message.",
         "Context:",
         `- ownerPubkey: ${ownerPubkey}`,
-        `- vaultPda: ${vaultPda.toBase58()}`,
+        `- vaultPda: ${vaultPda?.toBase58() ?? "N/A"}`,
         `- walletUsdc: ${walletUsdc}`,
         `- vaultUsdc: ${vaultUsdc}`,
-        `- walletTotalUsd: ${walletSnap.totalUsd}`,
-        `- vaultTotalUsd: ${vaultHoldingsSnap.totalUsd}`,
+        `- walletTotalUsd: ${safeWalletSnap.totalUsd}`,
+        `- vaultTotalUsd: ${safeVaultHoldingsSnap.totalUsd}`,
         "Portfolio snapshot (server-fetched, authoritative):",
         JSON.stringify(portfolioContext, null, 2),
         "Answering rules:",
@@ -430,7 +432,8 @@ export async function POST(req: NextRequest) {
             strategy: z.enum(["Conservative", "Balanced", "Aggressive"]).optional(),
           }),
           execute: async ({ strategy }) => {
-            const picked = strategy ?? parseStrategy((await fetchVaultAccount(connection, owner))!.strategy);
+            if (!ownerPubkey) throw new Error("Wallet not connected");
+            const picked = strategy ?? parseStrategy((await fetchVaultAccount(connection, new PublicKey(ownerPubkey)))!.strategy);
             const def = STRATEGY_DEFS[picked];
             return {
               strategy: def.name,
@@ -448,8 +451,9 @@ export async function POST(req: NextRequest) {
             ownerPubkey: z.string().optional(),
           }),
           execute: async ({ ownerPubkey: toolOwnerPubkey }) => {
-            const connection = await getConnection();
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            if (!resolvedOwnerPubkey) throw new Error("Wallet not connected");
+            const connection = await getConnection();
             const owner = new PublicKey(resolvedOwnerPubkey);
 
             const [vaultPda] = deriveVaultPda(owner);
@@ -502,6 +506,7 @@ export async function POST(req: NextRequest) {
             }
 
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            if (!resolvedOwnerPubkey) throw new Error("Wallet not connected");
             const data = await runRebalanceJob({ ownerPubkey: resolvedOwnerPubkey, action: "rebalance" });
             return data;
           },
@@ -531,6 +536,7 @@ export async function POST(req: NextRequest) {
             }
 
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            if (!resolvedOwnerPubkey) throw new Error("Wallet not connected");
             const data = await runRebalanceJob({ ownerPubkey: resolvedOwnerPubkey, action: "convert_all" });
             return data;
           },
@@ -544,8 +550,9 @@ export async function POST(req: NextRequest) {
             limit: z.number().int().min(1).max(50).default(20),
           }),
           execute: async ({ ownerPubkey: toolOwnerPubkey, limit }) => {
-            const connection = await getConnection();
             const resolvedOwnerPubkey = toolOwnerPubkey ?? ownerPubkey;
+            if (!resolvedOwnerPubkey) throw new Error("Wallet not connected");
+            const connection = await getConnection();
             const owner = new PublicKey(resolvedOwnerPubkey);
             const [vaultPda] = deriveVaultPda(owner);
 

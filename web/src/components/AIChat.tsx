@@ -9,13 +9,16 @@ import {
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { useChat, type UIMessage } from "@ai-sdk/react";
+import { useChat } from "@ai-sdk/react";
+import ReactMarkdown from "react-markdown";
 import { DefaultChatTransport } from "ai";
 import {
   fetchVaultAccount,
   setAllowedPrograms,
 } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
+import { CHAT_HINTS } from "@/config/chat-hints";
+import { useVault } from "@/hooks/useVault";
 
 /* -- helpers ---------------------------------------------- */
 
@@ -155,17 +158,24 @@ function MessageBubble({ message }: { message: UIMessage }) {
           {label}
         </div>
         <div
-          className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap wrap-break-word border ${
+          className={`rounded-2xl px-4 py-3 text-sm wrap-break-word border ${
             isUser
-              ? "bg-primary text-primary-foreground border-primary/30"
-              : "bg-accent text-foreground border-border"
+              ? "whitespace-pre-wrap bg-primary text-primary-foreground border-primary/30"
+              : "bg-accent/50 text-foreground border-border/60"
           }`}
         >
           {message.parts.map((part, i) => {
             if (part.type === "text") {
               // Strip @@ACTION_PROPOSAL marker from regular display
               const cleaned = part.text.replace(ACTION_PROPOSAL_RE, "").trim();
-              return <span key={`${message.id}-${i}`}>{cleaned}</span>;
+              if (isUser) {
+                return <span key={`${message.id}-${i}`}>{cleaned}</span>;
+              }
+              return (
+                <div key={`${message.id}-${i}`} className="prose prose-sm dark:prose-invert max-w-none break-words">
+                  <ReactMarkdown>{cleaned}</ReactMarkdown>
+                </div>
+              );
             }
             return null;
           })}
@@ -185,8 +195,21 @@ export function AIChat() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { publicKey, signTransaction, signAllTransactions } = wallet;
+  const { vault } = useVault();
 
   const ownerPubkey = publicKey?.toBase58() ?? null;
+
+  const chatState = !publicKey
+    ? "unconnected"
+    : !vault
+      ? "no_vault"
+      : "has_vault";
+
+  const hints = CHAT_HINTS[chatState];
+
+  const handleHintClick = (prompt: string) => {
+    void sendText(prompt);
+  };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -214,15 +237,11 @@ export function AIChat() {
     text: string,
     extraBody?: Record<string, unknown>
   ): Promise<void> => {
-    if (!ownerPubkey) {
-      setApproveError("Wallet pubkey not ready yet");
-      return;
-    }
     await sendMessage(
       { text },
       {
         body: {
-          ownerPubkey,
+          ownerPubkey: ownerPubkey ?? undefined,
           ...(extraBody ?? {}),
         },
       }
@@ -398,62 +417,10 @@ export function AIChat() {
 
   /* -- Layout ----------------------------------------------- */
 
-  if (!publicKey) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-card flex flex-col h-full min-h-[420px]">
-        <div className="px-4 py-3 border-b border-border">
-          <h3 className="text-sm font-semibold">AI Chat</h3>
-        </div>
-        <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground">
-          Connect your wallet to use chat.
-        </div>
-      </div>
-    );
-  }
-
-  if (!ownerPubkey) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-card flex flex-col h-full min-h-[420px]">
-        <div className="px-4 py-3 border-b border-border">
-          <h3 className="text-sm font-semibold">AI Chat</h3>
-        </div>
-        <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground">
-          Wallet connected, loading public key...
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="rounded-lg border border-border bg-card flex flex-col h-full min-h-[420px] lg:min-h-0">
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">AI Chat</h3>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void sendClientAction("snapshot")}
-            disabled={isLoading}
-            className="cursor-pointer text-xs px-2 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50"
-          >
-            Snapshot
-          </button>
-          <button
-            type="button"
-            onClick={() => void sendText("I want to rebalance my vault according to strategy.")}
-            disabled={isLoading}
-            className="cursor-pointer text-xs px-2 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50"
-          >
-            Rebalance
-          </button>
-          <button
-            type="button"
-            onClick={() => void sendText("I want to convert all vault tokens to USDC.")}
-            disabled={isLoading}
-            className="cursor-pointer text-xs px-2 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50"
-          >
-            Convert all
-          </button>
-        </div>
       </div>
 
       {needsWhitelist && (
@@ -495,6 +462,22 @@ export function AIChat() {
         )}
         {messages.map(renderMessage)}
       </div>
+
+      {hints && hints.length > 0 && (
+        <div className="px-4 py-3 bg-accent/20 overflow-x-auto whitespace-nowrap hide-scrollbar border-t border-primary/20 flex gap-3 shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+          {hints.map((hint, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => handleHintClick(hint.prompt)}
+              disabled={isLoading}
+              className="cursor-pointer text-sm font-medium px-4 py-2 rounded-lg border border-primary/30 bg-background text-foreground hover:bg-primary/20 hover:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/40 hover:-translate-y-0.5 active:translate-y-0 transition-all shadow-sm disabled:opacity-50 shrink-0"
+            >
+              {hint.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form
         onSubmit={(e) => {

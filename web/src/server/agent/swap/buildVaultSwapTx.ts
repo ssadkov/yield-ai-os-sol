@@ -220,7 +220,10 @@ export async function buildVaultSwapTx(params: BuildVaultSwapParams): Promise<Bu
     estimatedCuLimit =
       unitsConsumed === null
         ? COMPUTE_UNIT_LIMIT_MAX
-        : Math.min(Math.ceil(unitsConsumed * 1.2), COMPUTE_UNIT_LIMIT_MAX);
+        : Math.min(
+            Math.max(Math.ceil(unitsConsumed * 1.4), 400_000),
+            COMPUTE_UNIT_LIMIT_MAX,
+          );
   } catch (e: unknown) {
     simulateErr = e;
   }

@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const JUPITER_API_KEY = process.env.JUPITER_API_KEY || "";
-const BASE = "https://api.jup.ag";
-
+const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "";
 const PRICE_CACHE_TTL_MS = 60 * 1000; // 1 minute
 
 type PriceCacheEntry = {
@@ -56,33 +54,52 @@ async function fetchPrices(ids: string | null | undefined) {
 
   if (uncached.length > 0) {
     try {
-      const headers: Record<string, string> = {};
-      if (JUPITER_API_KEY) {
-        headers["x-api-key"] = JUPITER_API_KEY;
-      }
+      if (!RPC_URL) throw new Error("Missing NEXT_PUBLIC_RPC_URL");
 
-      const uncachedIds = uncached.join(",");
-      const res = await fetch(`${BASE}/price/v3?ids=${uncachedIds}`, { headers });
-      
-      if (res.ok) {
-        const json = await res.json();
-        // Supports both raw and data-wrapped endpoints from Jupiter
-        const fetchedPrices = "data" in json ? json.data : json;
+      // Use Helius getAssetBatch to fetch multiple prices at once
+      const response = await fetch(RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "get-prices",
+          method: "getAssetBatch",
+          params: {
+            ids: uncached,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const json = await response.json();
+        const heliusAssets = json.result;
         
-        for (const [mint, priceData] of Object.entries(fetchedPrices as Record<string, unknown>)) {
-          if (priceData) {
-            result[mint] = priceData;
-            priceCache.set(mint, {
-              value: priceData,
-              expiresAt: now + PRICE_CACHE_TTL_MS,
-            });
+        if (Array.isArray(heliusAssets)) {
+          for (const asset of heliusAssets) {
+            if (!asset || !asset.id) continue;
+            
+            const priceInfo = asset.token_info?.price_info;
+            if (priceInfo && priceInfo.price_per_token != null) {
+              const priceData = {
+                id: asset.id,
+                usdPrice: priceInfo.price_per_token,
+                price: priceInfo.price_per_token, // Compatibility
+                decimals: asset.token_info.decimals || 0,
+              };
+              
+              result[asset.id] = priceData;
+              priceCache.set(asset.id, {
+                value: priceData,
+                expiresAt: now + PRICE_CACHE_TTL_MS,
+              });
+            }
           }
         }
       } else {
-        console.error("Jupiter Prices API responded with error:", res.status, await res.text());
+        console.error("Helius API responded with error:", response.status);
       }
     } catch (err) {
-      console.error("Jupiter Prices API failed:", err);
+      console.error("Helius Prices API failed:", err);
     }
   }
 

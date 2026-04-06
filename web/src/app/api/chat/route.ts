@@ -631,6 +631,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    console.error("[chat] Server error:", err);
 
     // IMPORTANT: useChat expects a UI message stream response.
     // If we return JSON here, the client will throw "Invalid Responses API request".

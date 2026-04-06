@@ -128,10 +128,10 @@ export async function POST(req: NextRequest) {
     // like "how much USDC do I have?" without needing an explicit tool call.
     const [walletSnap, vaultHoldingsSnap, vaultAccount] = owner && vaultPda
       ? await Promise.all([
-          fetchPortfolioAssets(connection, owner, { includeSol: true }),
-          fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
-          fetchVaultAccount(connection, owner),
-        ])
+        fetchPortfolioAssets(connection, owner, { includeSol: true }),
+        fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
+        fetchVaultAccount(connection, owner),
+      ])
       : [null, null, null];
 
     const currentStrategyName = vaultAccount ? parseStrategy(vaultAccount.strategy) : null;
@@ -273,11 +273,11 @@ export async function POST(req: NextRequest) {
             vaultPda: vaultPda.toBase58(),
             vault: snapVault
               ? {
-                  strategy: parseStrategy(snapVault.strategy),
-                  allowedPrograms: (snapVault.allowedPrograms ?? []).map((p) =>
-                    p.toBase58()
-                  ),
-                }
+                strategy: parseStrategy(snapVault.strategy),
+                allowedPrograms: (snapVault.allowedPrograms ?? []).map((p) =>
+                  p.toBase58()
+                ),
+              }
               : null,
             wallet,
             vaultHoldings,
@@ -473,13 +473,13 @@ export async function POST(req: NextRequest) {
               ownerPubkey: resolvedOwnerPubkey,
               vault: vault
                 ? {
-                    vaultPda: vaultPda.toBase58(),
-                    strategy: parseStrategy(vault.strategy),
-                    lastRebalanceTs: vault.lastRebalanceTs?.toString?.() ?? null,
-                    allowedPrograms: (vault.allowedPrograms ?? []).map((p) =>
-                      p.toBase58()
-                    ),
-                  }
+                  vaultPda: vaultPda.toBase58(),
+                  strategy: parseStrategy(vault.strategy),
+                  lastRebalanceTs: vault.lastRebalanceTs?.toString?.() ?? null,
+                  allowedPrograms: (vault.allowedPrograms ?? []).map((p) =>
+                    p.toBase58()
+                  ),
+                }
                 : null,
               wallet,
               vaultHoldings,

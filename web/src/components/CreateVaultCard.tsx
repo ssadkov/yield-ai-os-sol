@@ -8,7 +8,7 @@ import type { StrategyName } from "@/lib/vault";
 const strategies: { name: StrategyName; description: string }[] = [
   { name: "Conservative", description: "60% USDC / 40% USDY" },
   { name: "Balanced", description: "30% USDC / 30% yield stables / 20% BTC / 20% equities" },
-  { name: "Growth", description: "10% USDC / 20% sUSDe / 35% BTC / 35% equities" },
+  { name: "Aggressive", description: "15% USDY / 15% ONe / 20% cbBTC / 20% SPYx / 20% JitoSOL" },
 ];
 
 export function CreateVaultCard() {

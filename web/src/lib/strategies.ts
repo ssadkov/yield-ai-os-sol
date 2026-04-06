@@ -29,8 +29,8 @@ export const STRATEGY_DEFS: Record<StrategyName, StrategyDef> = {
       { symbol: "XAUt0", weightPct: 10 },
     ],
   },
-  Growth: {
-    name: "Growth",
+  Aggressive: {
+    name: "Aggressive",
     risk: "high",
     summary: "Higher risk. Maximizes growth exposure; can be more volatile.",
     targetMix: [

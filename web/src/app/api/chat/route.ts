@@ -17,6 +17,7 @@ import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { runRebalanceJob } from "@/server/agent/runRebalance";
+import { ALL_TOKENS } from "@/server/agent/rebalance/tokens";
 
 export const runtime = "nodejs";
 
@@ -394,6 +395,12 @@ export async function POST(req: NextRequest) {
           null,
           2
         ),
+        "Token Context (explain why we hold these if asked):",
+        JSON.stringify(
+          ALL_TOKENS.map((t) => ({ symbol: t.symbol, description: t.description ?? "" })),
+          null,
+          2
+        ),
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
@@ -420,7 +427,7 @@ export async function POST(req: NextRequest) {
           description:
             "Explain strategy meaning, risk, and target mix. Uses authoritative strategy definitions.",
           inputSchema: z.object({
-            strategy: z.enum(["Conservative", "Balanced", "Growth"]).optional(),
+            strategy: z.enum(["Conservative", "Balanced", "Aggressive"]).optional(),
           }),
           execute: async ({ strategy }) => {
             const picked = strategy ?? parseStrategy((await fetchVaultAccount(connection, owner))!.strategy);

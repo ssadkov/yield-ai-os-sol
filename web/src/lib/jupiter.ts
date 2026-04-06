@@ -32,28 +32,39 @@ export async function fetchPrices(
   const result: Record<string, JupiterPriceEntry> = {};
   const base = getApiBaseUrl();
   const batches: string[][] = [];
+  // Use batches of 50 to avoid too large payloads or param limits
   for (let i = 0; i < mintIds.length; i += 50) {
     batches.push(mintIds.slice(i, i + 50));
   }
 
-  await Promise.all(
-    batches.map(async (batch) => {
-      try {
-        const res = await fetch(
-          `${base}/api/jupiter/prices?ids=${batch.join(",")}`
-        );
-        if (!res.ok) return;
-        const json = await res.json() as Record<string, JupiterPriceEntry>;
-        for (const [mint, data] of Object.entries(json)) {
-          if (data?.usdPrice != null) {
-            result[mint] = data;
-          }
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    try {
+      const res = await fetch(`${base}/api/jupiter/prices`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: batch }),
+      });
+      if (!res.ok) continue;
+      const json = (await res.json()) as Record<string, JupiterPriceEntry>;
+      
+      // The new API v2 wraps prices in `data` field
+      const data = "data" in json ? (json.data as unknown as Record<string, JupiterPriceEntry>) : json;
+      
+      for (const [mint, entry] of Object.entries(data)) {
+        if (entry?.usdPrice != null) {
+          result[mint] = entry;
         }
-      } catch {
-        // price fetch failure is non-fatal
       }
-    })
-  );
+    } catch {
+      // price fetch failure is non-fatal
+    }
+    
+    // Sleep to respect the 1 request per second API rate limit on free tier
+    if (i < batches.length - 1) {
+      await new Promise(r => setTimeout(r, 1100));
+    }
+  }
 
   return result;
 }
@@ -80,27 +91,33 @@ export async function fetchTokenMetadata(
     batches.push(mintIds.slice(i, i + 50));
   }
 
-  await Promise.all(
-    batches.map(async (batch) => {
-      try {
-        const res = await fetch(
-          `${base}/api/jupiter/tokens?ids=${batch.join(",")}`
-        );
-        if (!res.ok) return;
-        const json = await res.json();
-        const data = json.data as Record<string, JupiterTokenInfo> | undefined;
-        if (data && typeof data === "object") {
-          for (const [mint, token] of Object.entries(data)) {
-            if (token) {
-              result[mint] = token;
-            }
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    try {
+      const res = await fetch(`${base}/api/jupiter/tokens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: batch }),
+      });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const data = json.data as Record<string, JupiterTokenInfo> | undefined;
+      if (data && typeof data === "object") {
+        for (const [mint, token] of Object.entries(data)) {
+          if (token) {
+            result[mint] = token;
           }
         }
-      } catch {
-        // metadata fetch failure is non-fatal
       }
-    })
-  );
+    } catch {
+      // metadata fetch failure is non-fatal
+    }
+    
+    // Sleep to respect the API rate limit context
+    if (i < batches.length - 1) {
+      await new Promise(r => setTimeout(r, 1100));
+    }
+  }
 
   return result;
 }

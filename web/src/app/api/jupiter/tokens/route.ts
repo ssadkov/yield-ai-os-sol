@@ -76,6 +76,20 @@ async function mapWithConcurrency<T, R>(
 
 export async function GET(req: NextRequest) {
   const ids = req.nextUrl.searchParams.get("ids");
+  return fetchTokens(ids);
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const json = await req.json();
+    const ids = Array.isArray(json.ids) ? json.ids.join(",") : json.ids;
+    return fetchTokens(ids);
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+}
+
+async function fetchTokens(ids: string | null | undefined) {
   if (!ids) {
     return NextResponse.json({ error: "ids parameter required" }, { status: 400 });
   }
@@ -88,7 +102,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ data: {} });
   }
 
-  const headers: Record<string, string> = { "x-api-key": JUPITER_API_KEY };
+  const headers: Record<string, string> = {};
+  if (JUPITER_API_KEY) {
+     headers["x-api-key"] = JUPITER_API_KEY;
+  }
+  
   const result: Record<string, unknown> = {};
 
   const now = Date.now();
@@ -103,8 +121,8 @@ export async function GET(req: NextRequest) {
     uncached.push(mint);
   }
 
-  // Limit concurrency to avoid rate limiting at api.jup.ag
-  const CONCURRENCY = 5;
+  // Limit concurrency to avoid rate limiting at api.jup.ag (1 RPS for free tier)
+  const CONCURRENCY = 1;
   await mapWithConcurrency(uncached, CONCURRENCY, async (mint) => {
     const meta = await fetchTokenWithRetry(mint, headers);
     if (meta) {
@@ -117,6 +135,8 @@ export async function GET(req: NextRequest) {
     } else {
       tokenCache.set(mint, { kind: "miss", expiresAt: Date.now() + MISS_TTL_MS });
     }
+    // Added 1.1s delay between iterations to respect the 1 API Req/sec rate limit
+    await sleep(1100);
     return null;
   });
 

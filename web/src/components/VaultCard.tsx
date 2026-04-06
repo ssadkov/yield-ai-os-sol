@@ -25,7 +25,7 @@ function formatTimestamp(ts: number): string {
 const strategyHelp: Record<StrategyName, string> = {
   Conservative: `${STRATEGY_DEFS.Conservative.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Conservative)}.`,
   Balanced: `${STRATEGY_DEFS.Balanced.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Balanced)}.`,
-  Growth: `${STRATEGY_DEFS.Growth.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Growth)}.`,
+  Aggressive: `${STRATEGY_DEFS.Aggressive.summary} Target mix: ${formatTargetMix(STRATEGY_DEFS.Aggressive)}.`,
 };
 
 export function VaultCard() {

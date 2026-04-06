@@ -49,7 +49,7 @@ export async function readVaultAccount(
 
   const strategyIdx = data.readUInt8(offset);
   offset += 1;
-  const strategyMap: StrategyName[] = ["Conservative", "Balanced", "Growth"];
+  const strategyMap: StrategyName[] = ["Conservative", "Balanced", "Aggressive"];
   const strategy = strategyMap[strategyIdx];
   if (!strategy) throw new Error(`Unknown strategy index: ${strategyIdx}`);
 
@@ -132,7 +132,7 @@ export async function takeSnapshot(args: {
   const strategyTokens = allocations.map((a) => a.token);
 
   // Always include USDC — the vault may hold USDC even if the strategy
-  // doesn't list it (e.g. Growth). Without it, totalValueUsd would be 0
+  // doesn't list it (e.g. Aggressive). Without it, totalValueUsd would be 0
   // and no swaps would ever be generated.
   const tokenSet = new Map(strategyTokens.map((t) => [t.mint, t]));
   if (!tokenSet.has(USDC.mint)) tokenSet.set(USDC.mint, USDC);

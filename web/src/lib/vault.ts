@@ -12,13 +12,13 @@ import {
 import { PROGRAM_ID, USDC_MINT, AGENT_PUBKEY } from "./constants";
 import idlJson from "@/idl/yield_vault.json";
 
-export type StrategyName = "Conservative" | "Balanced" | "Growth";
+export type StrategyName = "Conservative" | "Balanced" | "Aggressive";
 
 function strategyArg(name: StrategyName) {
   const map: Record<StrategyName, object> = {
     Conservative: { conservative: {} },
     Balanced: { balanced: {} },
-    Growth: { growth: {} },
+    Aggressive: { growth: {} },
   };
   return map[name];
 }
@@ -68,7 +68,7 @@ export async function fetchVaultAccount(
 export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
   if ("conservative" in s) return "Conservative";
   if ("balanced" in s) return "Balanced";
-  return "Growth";
+  return "Aggressive";
 }
 
 /**

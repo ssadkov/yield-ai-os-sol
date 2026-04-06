@@ -304,15 +304,7 @@ export function AIChat() {
     stickToBottomRef.current = distanceFromBottom <= thresholdPx;
   };
 
-  useEffect(() => {
-    if (!ownerPubkey) return;
-    if (messages.length === 0) {
-      void sendText(
-        "Summarize my current wallet and vault holdings. Explain what strategy my vault is set to. Also summarize my recent deposit/withdraw history (last 10) and net deposited."
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownerPubkey]);
+
 
   useEffect(() => {
     scrollToBottom("smooth");
@@ -487,23 +479,43 @@ export function AIChat() {
         className="flex-1 min-h-0 overflow-auto p-4 space-y-3 scrollbar-pretty"
       >
         {messages.length === 0 && (
-          <div className="text-sm text-muted-foreground">
-            Ask about your vault strategy, risk, or request a rebalance.
+          <div className="h-full flex flex-col items-center justify-center p-6 text-center">
+            <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+              <span className="text-2xl">🤖</span>
+            </div>
+            <h4 className="text-lg font-semibold mb-2">How can I help you?</h4>
+            <p className="text-sm text-muted-foreground mb-8 max-w-[280px]">
+              Ask me about your strategy, portfolio, or request a rebalance.
+            </p>
+            
+            <div className="flex flex-col gap-3 w-full max-w-[320px]">
+              {hints.map((hint, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => handleHintClick(hint.prompt)}
+                  disabled={isLoading}
+                  className="w-full cursor-pointer text-sm font-medium px-4 py-3 rounded-xl border border-primary/20 bg-background text-foreground hover:bg-primary/10 hover:border-primary/40 transition-all shadow-sm disabled:opacity-50"
+                >
+                  {hint.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {messages.map(renderMessage)}
         {isAssistantThinking && <TypingBubble />}
       </div>
 
-      {hints && hints.length > 0 && (
+      {messages.length > 0 && hints && hints.length > 0 && (
         <div className="px-4 py-3 bg-accent/20 overflow-x-auto whitespace-nowrap hide-scrollbar border-t border-primary/20 flex gap-3 shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
           {hints.map((hint, i) => (
             <button
-              key={i}
-              type="button"
-              onClick={() => handleHintClick(hint.prompt)}
-              disabled={isLoading}
-              className="cursor-pointer text-sm font-medium px-4 py-2 rounded-lg border border-primary/30 bg-background text-foreground hover:bg-primary/20 hover:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/40 hover:-translate-y-0.5 active:translate-y-0 transition-all shadow-sm disabled:opacity-50 shrink-0"
+               key={i}
+               type="button"
+               onClick={() => handleHintClick(hint.prompt)}
+               disabled={isLoading}
+               className="cursor-pointer text-sm font-medium px-4 py-2 rounded-lg border border-primary/30 bg-background text-foreground hover:bg-primary/20 hover:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/40 hover:-translate-y-0.5 active:translate-y-0 transition-all shadow-sm disabled:opacity-50 shrink-0"
             >
               {hint.label}
             </button>

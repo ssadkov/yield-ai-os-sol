@@ -126,12 +126,15 @@ export async function POST(req: NextRequest) {
 
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
-    const [walletSnap, vaultHoldingsSnap] = owner && vaultPda
+    const [walletSnap, vaultHoldingsSnap, vaultAccount] = owner && vaultPda
       ? await Promise.all([
           fetchPortfolioAssets(connection, owner, { includeSol: true }),
           fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
+          fetchVaultAccount(connection, owner),
         ])
-      : [null, null];
+      : [null, null, null];
+
+    const currentStrategyName = vaultAccount ? parseStrategy(vaultAccount.strategy) : null;
 
     const safeWalletSnap = walletSnap ?? { totalUsd: 0, assets: [] as NonNullable<typeof walletSnap>["assets"] };
     const safeVaultHoldingsSnap = vaultHoldingsSnap ?? { totalUsd: 0, assets: [] as NonNullable<typeof vaultHoldingsSnap>["assets"] };
@@ -371,6 +374,8 @@ export async function POST(req: NextRequest) {
         "Context:",
         `- ownerPubkey: ${ownerPubkey}`,
         `- vaultPda: ${vaultPda?.toBase58() ?? "N/A"}`,
+        `- currentVaultStrategy: ${currentStrategyName ?? "None (No vault created yet)"}`,
+        currentStrategyName ? "IMPORTANT: If the user asks to rebalance and a strategy is already set, do NOT ask for a choice. Compare current holdings with the target mix of this strategy and propose the @@ACTION_PROPOSAL:rebalance immediately." : "",
         `- walletUsdc: ${walletUsdc}`,
         `- vaultUsdc: ${vaultUsdc}`,
         `- walletTotalUsd: ${safeWalletSnap.totalUsd}`,

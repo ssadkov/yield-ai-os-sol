@@ -45,7 +45,7 @@ export const CHAT_HINTS: Record<ChatHintState, ChatHint[]> = {
     },
     {
       label: "Rebalance",
-      prompt: "I want to rebalance my vault.",
+      prompt: "Rebalance my vault according to my current strategy.",
     }
   ],
 };

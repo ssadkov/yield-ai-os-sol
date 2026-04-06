@@ -18,7 +18,18 @@ import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { runRebalanceJob, runIndividualSwapJob } from "@/server/agent/runRebalance";
-import { ALL_TOKENS, CBBTC, USDC } from "@/server/agent/rebalance/tokens";
+import { fetchPrices } from "@/lib/jupiter";
+import {
+  compactCatalogForPrompt,
+  listTradeableByCategory,
+  resolveMintForPriceQuery,
+  resolveTokenMintForChart,
+  resolveTokenForSwap,
+  searchTradeableCatalog,
+  TRADEABLE_TOKEN_CATALOG,
+  XSTOCKS_DIVIDEND_NOTE,
+} from "@/lib/tokenCatalog";
+import { ALL_TOKENS, USDC } from "@/server/agent/rebalance/tokens";
 
 export const runtime = "nodejs";
 
@@ -482,6 +493,10 @@ export async function POST(req: NextRequest) {
           null,
           2
         ),
+        "Tradeable token catalog (optional buys / education — symbols, names, mints). For live USD prices use getTradeableTokenPrices; for filtering use lookupTradeableCatalog:",
+        compactCatalogForPrompt(),
+        "xStocks (tokenized equities) note:",
+        XSTOCKS_DIVIDEND_NOTE,
         "Safety rules:",
         "- Never instruct the user to share private keys or seed phrases.",
         "- Never attempt withdrawals. Owner withdrawals must be done by the user outside this chat.",
@@ -501,6 +516,9 @@ export async function POST(req: NextRequest) {
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
         "- IMPORTANT: If the user asks for a chart, price history, or performance of a specific token, you MUST call the showTokenChart tool immediately.",
         "- Default to the 1-month range if the user doesn't specify.",
+        "- If the user asks for the current price or exchange rate of a token that may be in the tradeable catalog (or strategy tokens), call getTradeableTokenPrices with symbols or mints. Do not invent prices.",
+        "- If the user asks which tokens are available for optional purchase, categories, or searches by name, call lookupTradeableCatalog.",
+        "- After lookupTradeableCatalog or getTradeableTokenPrices returns, always write at least one short sentence in the user's language summarizing the result (the UI also shows tool output, but text must not be empty).",
         actionPreface ? `\nContext from the client action:\n${actionPreface}` : "",
         actionPreface ? "\nIMPORTANT: You MUST respond with a text explanation of what happened. Never produce an empty response. Summarize the action result for the user." : "",
       ].join("\n"),
@@ -669,32 +687,32 @@ export async function POST(req: NextRequest) {
           }),
           execute: async ({ symbol, mint }) => {
             console.log(`[chat] showTokenChart tool called for symbol=${symbol}, mint=${mint}`);
-            let resolvedMint = mint;
+            let resolvedMint = mint ?? null;
             let resolvedSymbol = symbol;
-            
-            const symUpper = symbol.toUpperCase();
-            if (!resolvedMint) {
-              const symLower = symbol.toLowerCase();
-              const token = ALL_TOKENS.find(t => 
-                t.symbol.toLowerCase() === symLower || 
-                (t.symbol.toLowerCase() === "cbbtc" && (symLower === "btc" || symLower === "bitcoin")) ||
-                (t.symbol.toLowerCase() === "oney" && (symLower === "one" || symLower === "onyc" || symLower === "ony"))
-              );
 
+            if (!resolvedMint) {
+              const token = ALL_TOKENS.find(
+                (t) =>
+                  t.symbol.toLowerCase() === symbol.toLowerCase() ||
+                  (t.symbol.toLowerCase() === "oney" &&
+                    ["one", "onyc", "ony"].includes(symbol.toLowerCase())),
+              );
               if (token) {
                 resolvedMint = token.mint;
                 resolvedSymbol = token.symbol;
-              } else if (symUpper === "SOL") {
-                resolvedMint = "So11111111111111111111111111111111111111112";
-                resolvedSymbol = "SOL";
-              } else if (symUpper === "BTC" || symUpper === "BITCOIN") {
-                resolvedMint = CBBTC.mint;
-                resolvedSymbol = "cbBTC";
+              } else {
+                const hit = resolveTokenMintForChart(symbol);
+                if (hit) {
+                  resolvedMint = hit.mint;
+                  resolvedSymbol = hit.symbol;
+                }
               }
             }
 
             if (!resolvedMint) {
-               return { error: `Could not find mint for symbol ${symbol}. Ask user for mint address.` };
+              return {
+                error: `Could not find mint for symbol ${symbol}. Ask user for mint address.`,
+              };
             }
 
             return {
@@ -703,6 +721,105 @@ export async function POST(req: NextRequest) {
             };
           },
         }),
+
+        lookupTradeableCatalog: tool({
+          description:
+            "Search or list tradeable tokens (Blockchain, Solana ecosystem, xStocks, Gold) with mints and full names. Use when the user asks what they can buy, optional tokens, or searches by name/symbol.",
+          inputSchema: z.object({
+            category: z
+              .enum(["Blockchain", "Solana ecosystem", "xStocks", "Gold"])
+              .optional()
+              .describe("Filter by category; omit to search across all"),
+            query: z
+              .string()
+              .optional()
+              .describe("Filter by symbol, name, or mint substring"),
+          }),
+          execute: async ({ category, query }) => {
+            let list = category
+              ? listTradeableByCategory(category)
+              : [...TRADEABLE_TOKEN_CATALOG];
+            if (query?.trim()) {
+              list = searchTradeableCatalog(query);
+              if (category) {
+                list = list.filter((e) => e.category === category);
+              }
+            }
+            const cap = 80;
+            const trimmed = list.slice(0, cap);
+            return {
+              totalMatched: list.length,
+              truncated: list.length > cap,
+              xStocksDividendNote:
+                !category || category === "xStocks"
+                  ? XSTOCKS_DIVIDEND_NOTE
+                  : undefined,
+              tokens: trimmed.map((t) => ({
+                category: t.category,
+                symbol: t.symbol,
+                query: t.query,
+                name: t.name,
+                mint: t.mint,
+                decimals: t.decimals,
+              })),
+            };
+          },
+        }),
+
+        getTradeableTokenPrices: tool({
+          description:
+            "Fetch current USD price for tokens from the tradeable catalog or strategy token list (same price pipeline as the app). Pass symbols and/or mints.",
+          inputSchema: z
+            .object({
+              symbols: z
+                .array(z.string())
+                .max(20)
+                .optional()
+                .describe("Symbols, e.g. JUP, SOL, SPYx, ETH (WETH portal)"),
+              mints: z
+                .array(z.string())
+                .max(20)
+                .optional()
+                .describe("Solana mint addresses"),
+            })
+            .refine(
+              (d) => (d.symbols?.length ?? 0) + (d.mints?.length ?? 0) > 0,
+              { message: "Provide at least one symbol or mint." },
+            ),
+          execute: async ({ symbols, mints }) => {
+            const mintSet = new Set<string>();
+            if (mints?.length) {
+              for (const m of mints) {
+                if (m.trim()) mintSet.add(m.trim());
+              }
+            }
+            if (symbols?.length) {
+              for (const s of symbols) {
+                const resolved = resolveMintForPriceQuery(s);
+                if (resolved) mintSet.add(resolved);
+              }
+            }
+            const ids = [...mintSet];
+            if (ids.length === 0) {
+              return { error: "Provide at least one symbol or mint." };
+            }
+            const prices = await fetchPrices(ids);
+            const out = ids.map((mint) => {
+              const p = prices[mint];
+              const fromCat = TRADEABLE_TOKEN_CATALOG.find((t) => t.mint === mint);
+              const fromSt = ALL_TOKENS.find((t) => t.mint === mint);
+              return {
+                mint,
+                symbol: fromCat?.symbol ?? fromSt?.symbol ?? null,
+                name: fromCat?.name ?? null,
+                usdPrice: p?.usdPrice ?? null,
+                decimals: p?.decimals ?? fromCat?.decimals ?? fromSt?.decimals ?? null,
+              };
+            });
+            return { prices: out };
+          },
+        }),
+
         proposeSwap: tool({
           description: "Propose an individual swap (buy or sell) between two tokens in the vault.",
           inputSchema: z.object({
@@ -711,27 +828,8 @@ export async function POST(req: NextRequest) {
             amount: z.string().describe("Amount to swap. Can be a number ('2.5'), 'all', or a percentage ('50%')"),
           }),
           execute: async ({ inputSymbol, outputSymbol, amount }) => {
-            const findToken = (sym: string) => {
-              const s = sym.toUpperCase().trim();
-              // Add common alias mapping
-              const aliases: Record<string, string> = {
-                "ЗОЛОТО": "XAUt0",
-                "GOLD": "XAUt0",
-                "БИТКОИН": "cbBTC",
-                "БИТОК": "cbBTC",
-                "BTC": "cbBTC",
-                "BITCOIN": "cbBTC",
-                "СОЛАНА": "SOL",
-                "СОЛ": "SOL",
-              };
-              const targetSym = aliases[s] || s;
-              
-              return ALL_TOKENS.find(t => t.symbol.toUpperCase() === targetSym) || 
-                     (targetSym === "SOL" ? { symbol: "SOL", mint: "So11111111111111111111111111111111111111112", decimals: 9 } : null);
-            };
-
-            const fromToken = findToken(inputSymbol);
-            const toToken = findToken(outputSymbol);
+            const fromToken = resolveTokenForSwap(inputSymbol);
+            const toToken = resolveTokenForSwap(outputSymbol);
 
             if (!fromToken || !toToken) {
               return { error: `One of the tokens (${inputSymbol} or ${outputSymbol}) is not supported.` };

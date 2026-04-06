@@ -53,6 +53,10 @@ function assistantMessageIsVisuallyEmpty(message: UIMessage): boolean {
     const toolData = part.result || part.output || part.args || part.input || {};
     if (toolName === "showTokenChart" && toolData?.mint) sawSomething = true;
     if (toolName === "proposeSwap" && (toolData?.marker || toolData?.error)) sawSomething = true;
+    if (toolName === "lookupTradeableCatalog" && Array.isArray((toolData as any)?.tokens))
+      sawSomething = true;
+    if (toolName === "getTradeableTokenPrices" && Array.isArray((toolData as any)?.prices))
+      sawSomething = true;
   }
   return !sawSomething;
 }
@@ -264,6 +268,92 @@ function ProposeSwapToolSummary({
   return null;
 }
 
+function LookupCatalogToolSummary({ toolData }: { toolData: Record<string, unknown> }) {
+  const tokens = toolData.tokens as
+    | Array<{
+        category: string;
+        symbol: string;
+        name: string;
+        mint: string;
+      }>
+    | undefined;
+  const note = toolData.xStocksDividendNote as string | undefined;
+  const total = toolData.totalMatched as number | undefined;
+  const truncated = toolData.truncated as boolean | undefined;
+  if (!tokens?.length) {
+    const err = toolData.error as string | undefined;
+    if (err) {
+      return (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {err}
+        </div>
+      );
+    }
+    return (
+      <p className="text-xs text-muted-foreground">No tokens matched.</p>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs space-y-2 max-h-[320px] overflow-y-auto">
+      {note && <p className="text-muted-foreground leading-snug">{note}</p>}
+      <ul className="space-y-1.5 list-none">
+        {tokens.map((t, i) => (
+          <li key={`${t.mint}-${i}`} className="border-b border-border/40 pb-1.5 last:border-0 last:pb-0">
+            <span className="font-semibold text-foreground">{t.symbol}</span>
+            <span className="text-muted-foreground"> — {t.name}</span>
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              {t.category} · <span className="font-mono break-all">{t.mint}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {total != null && (
+        <p className="text-[10px] text-muted-foreground">
+          {truncated ? `Showing first ${tokens.length} of ${total} matches.` : `${total} token(s).`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TokenPricesToolSummary({ toolData }: { toolData: Record<string, unknown> }) {
+  const err = toolData.error as string | undefined;
+  if (err) {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+        {err}
+      </div>
+    );
+  }
+  const prices = toolData.prices as
+    | Array<{
+        mint: string;
+        symbol: string | null;
+        name: string | null;
+        usdPrice: number | null;
+      }>
+    | undefined;
+  if (!prices?.length) return null;
+  return (
+    <div className="rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs space-y-1.5">
+      <div className="font-semibold text-primary mb-1">Prices (USD)</div>
+      <ul className="space-y-1 list-none">
+        {prices.map((p, i) => (
+          <li key={`${p.mint}-${i}`} className="flex justify-between gap-2 border-b border-border/30 pb-1 last:border-0">
+            <span>
+              {p.symbol ?? "—"}
+              {p.name ? <span className="text-muted-foreground"> ({p.name})</span> : null}
+            </span>
+            <span className="font-mono shrink-0">
+              {p.usdPrice != null ? `$${Number(p.usdPrice).toFixed(4)}` : "N/A"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
   const label = isUser ? "You" : "AI";
@@ -303,7 +393,10 @@ function MessageBubble({ message }: { message: UIMessage }) {
                 key={part.toolCallId || `${message.id}-t${i}`}
                 className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40"
               >
-                <TokenChart address={String(toolData.mint)} symbol={toolData.symbol as string | undefined} />
+                <TokenChart
+                  address={String(toolData.mint)}
+                  symbol={String(toolData.symbol ?? "Token")}
+                />
               </div>
             );
           }
@@ -316,6 +409,23 @@ function MessageBubble({ message }: { message: UIMessage }) {
                 </div>
               );
             }
+          }
+          if (toolName === "lookupTradeableCatalog") {
+            return (
+              <div key={part.toolCallId || `${message.id}-t${i}`} className="px-4 py-2 w-full">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                  Token catalog
+                </div>
+                <LookupCatalogToolSummary toolData={toolData} />
+              </div>
+            );
+          }
+          if (toolName === "getTradeableTokenPrices") {
+            return (
+              <div key={part.toolCallId || `${message.id}-t${i}`} className="px-4 py-2 w-full">
+                <TokenPricesToolSummary toolData={toolData} />
+              </div>
+            );
           }
         }
         return null;
@@ -337,6 +447,23 @@ function MessageBubble({ message }: { message: UIMessage }) {
           return (
             <div key={ti.toolCallId} className="px-4 py-2 mt-2">
               <ProposeSwapToolSummary toolData={ti.result || {}} />
+            </div>
+          );
+        }
+        if (ti.toolName === "lookupTradeableCatalog" && ti.state === "result") {
+          return (
+            <div key={ti.toolCallId} className="px-4 py-2 mt-2 w-full">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                Token catalog
+              </div>
+              <LookupCatalogToolSummary toolData={ti.result || {}} />
+            </div>
+          );
+        }
+        if (ti.toolName === "getTradeableTokenPrices" && ti.state === "result") {
+          return (
+            <div key={ti.toolCallId} className="px-4 py-2 mt-2 w-full">
+              <TokenPricesToolSummary toolData={ti.result || {}} />
             </div>
           );
         }

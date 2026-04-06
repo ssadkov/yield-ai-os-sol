@@ -200,7 +200,7 @@ async function main() {
     }
   }
 
-  const jsonPath = path.join(__dirname, "..", "token-catalog-draft.json");
+  const jsonPath = path.join(__dirname, "..", "src", "config", "token-catalog.json");
   fs.writeFileSync(jsonPath, JSON.stringify(flat, null, 2), "utf8");
   console.log(`\nWrote ${jsonPath}`);
   console.log(`Icons under ${outDir}`);

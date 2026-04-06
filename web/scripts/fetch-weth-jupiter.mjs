@@ -97,7 +97,7 @@ async function main() {
 
   console.log(JSON.stringify(row, null, 2));
 
-  const draftPath = path.join(__dirname, "..", "token-catalog-draft.json");
+  const draftPath = path.join(__dirname, "..", "src", "config", "token-catalog.json");
   if (fs.existsSync(draftPath)) {
     const arr = JSON.parse(fs.readFileSync(draftPath, "utf8"));
     const idx = arr.findIndex(

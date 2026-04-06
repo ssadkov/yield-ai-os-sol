@@ -9,7 +9,7 @@ import {
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { AnchorProvider } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { useChat } from "@ai-sdk/react";
+import { useChat, type UIMessage } from "@ai-sdk/react";
 import ReactMarkdown from "react-markdown";
 import { DefaultChatTransport } from "ai";
 import {
@@ -25,11 +25,29 @@ import { useVault } from "@/hooks/useVault";
 const ACTION_PROPOSAL_RE = /@@ACTION_PROPOSAL:(rebalance|convert_all)/;
 const ACTION_RESULT_RE = /^(✅|❌|⚠️)/;
 
-function getMessageText(msg: UIMessage): string {
+function getMessageText(msg: any): string {
+  if (!msg.parts) return "";
   return msg.parts
-    .map((p) => (p.type === "text" ? p.text : ""))
+    .map((p: any) => (p.type === "text" ? p.text : ""))
     .join("")
     .trim();
+}
+
+function TypingBubble() {
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[85%] text-left">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          AI
+        </div>
+        <div className="rounded-2xl px-4 py-3 bg-accent/50 text-foreground border border-border/60 flex items-center gap-1.5 min-w-[60px]">
+          <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+          <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+          <span className="w-1.5 h-1.5 bg-muted-foreground rounded-full animate-bounce"></span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function parseClientActionResult(text: string): Record<string, unknown> | null {
@@ -164,7 +182,7 @@ function MessageBubble({ message }: { message: UIMessage }) {
               : "bg-accent/50 text-foreground border-border/60"
           }`}
         >
-          {message.parts.map((part, i) => {
+          {message.parts.map((part: any, i: number) => {
             if (part.type === "text") {
               // Strip @@ACTION_PROPOSAL marker from regular display
               const cleaned = part.text.replace(ACTION_PROPOSAL_RE, "").trim();
@@ -253,6 +271,13 @@ export function AIChat() {
     [messages]
   );
 
+  const lastMessageText = useMemo(() => {
+    if (messages.length === 0) return "";
+    return getMessageText(messages[messages.length - 1]);
+  }, [messages]);
+
+  const isAssistantThinking = status !== "ready" && messages[messages.length - 1]?.role === "user";
+
   const lastResult = useMemo(() => {
     if (!lastAssistant) return null;
     const txt = getMessageText(lastAssistant);
@@ -290,10 +315,16 @@ export function AIChat() {
   }, [ownerPubkey]);
 
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
     scrollToBottom("smooth");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length, status]);
+  }, [messages.length, status, lastMessageText]);
+
+  useEffect(() => {
+    // If messages are streaming, keep sticking to bottom
+    if (status !== "ready" && stickToBottomRef.current) {
+        scrollToBottom("auto");
+    }
+  }, [lastMessageText, status]);
 
   // Trigger global balance refresh when an action succeeds
   const prevActionMessageId = useRef<string | null>(null);
@@ -461,6 +492,7 @@ export function AIChat() {
           </div>
         )}
         {messages.map(renderMessage)}
+        {isAssistantThinking && <TypingBubble />}
       </div>
 
       {hints && hints.length > 0 && (

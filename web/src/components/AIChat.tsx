@@ -19,6 +19,7 @@ import {
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { CHAT_HINTS } from "@/config/chat-hints";
 import { useVault } from "@/hooks/useVault";
+import { TokenChart } from "./TokenChart";
 
 /* -- helpers ---------------------------------------------- */
 
@@ -194,6 +195,18 @@ function MessageBubble({ message }: { message: UIMessage }) {
                   <ReactMarkdown>{cleaned}</ReactMarkdown>
                 </div>
               );
+            }
+            if (part.type === "tool-invocation") {
+              const { toolName, args, result } = part;
+              if (toolName === "showTokenChart") {
+                return (
+                  <TokenChart 
+                    key={part.toolCallId}
+                    address={args.mint}
+                    symbol={args.symbol}
+                  />
+                );
+              }
             }
             return null;
           })}

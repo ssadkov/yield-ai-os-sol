@@ -422,10 +422,8 @@ export async function POST(req: NextRequest) {
         "Tool usage:",
         "- Use getPortfolioSnapshot to ground your analysis in current on-chain balances.",
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
-        "Client action protocol:",
-        "- If the system prompt contains a section 'Context from the client action' with JSON, you MUST include a final line in your answer:",
-        "  @@CLIENT_ACTION_RESULT <the exact same JSON, minified or pretty is OK, but must be valid JSON>",
-        "- Do not fabricate fields in that JSON; echo it as given.",
+        "- If the user asks for a chart, price history, or performance of a specific token, use the showTokenChart tool.",
+        "- Default to the 7-day or 1-month range if the user doesn't specify.",
         actionPreface ? `\nContext from the client action:\n${actionPreface}` : "",
         actionPreface ? "\nIMPORTANT: You MUST respond with a text explanation of what happened. Never produce an empty response. Summarize the action result for the user." : "",
       ].join("\n"),
@@ -571,6 +569,37 @@ export async function POST(req: NextRequest) {
               totalWithdrawn: data.totalWithdrawn,
               netDeposited: data.netDeposited,
               entries,
+            };
+          },
+        }),
+
+        showTokenChart: tool({
+          description: "Display a historical price chart for a token.",
+          inputSchema: z.object({
+            symbol: z.string().describe("The token symbol (e.g. SOL, USDC, ONe, AAPL.x)"),
+            mint: z.string().optional().describe("The token mint address if known"),
+          }),
+          execute: async ({ symbol, mint }) => {
+            let resolvedMint = mint;
+            let resolvedSymbol = symbol;
+            
+            if (!resolvedMint) {
+              const token = ALL_TOKENS.find(t => t.symbol.toLowerCase() === symbol.toLowerCase());
+              if (token) {
+                resolvedMint = token.mint;
+                resolvedSymbol = token.symbol;
+              } else if (symbol.toUpperCase() === "SOL") {
+                resolvedMint = "So11111111111111111111111111111111111111112";
+              }
+            }
+
+            if (!resolvedMint) {
+               return { error: `Could not find mint for symbol ${symbol}. Ask user for mint address.` };
+            }
+
+            return {
+              symbol: resolvedSymbol,
+              mint: resolvedMint,
             };
           },
         }),

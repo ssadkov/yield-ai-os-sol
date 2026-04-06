@@ -3,6 +3,8 @@
 import { useState } from "react";
 import type { AssetRow as AssetRowType } from "@/lib/portfolioAssets";
 import { USDC_MINT_STR } from "@/lib/constants";
+import { TrendingUp, X } from "lucide-react";
+import { TokenChart } from "./TokenChart";
 
 function TokenIcon({ src, symbol }: { src?: string; symbol: string }) {
   const [failed, setFailed] = useState(false);
@@ -51,7 +53,10 @@ export function AssetRowItem({
   asset: AssetRowType;
   highlighted?: boolean;
 }) {
+  const [showChart, setShowChart] = useState(false);
+
   return (
+    <>
     <div
       className={`flex items-center justify-between py-2.5 px-3 rounded-md ${
         highlighted ? "border border-primary/50 bg-primary/5 -mx-2" : ""
@@ -94,9 +99,57 @@ export function AssetRowItem({
               {asset.priceChange24h.toFixed(2)}%
             </span>
           )}
+          
+          {/* Small chart button */}
+          {!isUsdcMint(asset.mint) && (
+            <button
+              onClick={() => setShowChart(true)}
+              className="p-1 hover:bg-accent rounded-md text-muted-foreground hover:text-primary transition-colors cursor-pointer ml-1"
+              title="Show Chart"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
     </div>
+
+      {/* Basic Modal Implementation */}
+      {showChart && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
+           <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden p-1">
+              <button 
+                onClick={() => setShowChart(false)}
+                className="absolute top-4 right-4 z-50 p-2 hover:bg-accent rounded-full text-muted-foreground hover:text-foreground transition-all cursor-pointer bg-card/80 backdrop-blur-md border border-border/50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              
+              <div className="p-2 sm:p-4">
+                <TokenChart 
+                  address={asset.mint} 
+                  symbol={asset.symbol} 
+                />
+              </div>
+              
+              <div className="px-6 pb-4 flex justify-end">
+                <button 
+                  onClick={() => setShowChart(false)}
+                  className="text-sm font-semibold text-muted-foreground hover:text-foreground hover:underline transition-all cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+           </div>
+           
+           {/* Background click to close */}
+           <div 
+             className="absolute inset-0 -z-10 cursor-pointer" 
+             onClick={() => setShowChart(false)}
+           />
+        </div>
+      )}
+    </>
   );
 }
 

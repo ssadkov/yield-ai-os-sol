@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import type { VaultTxEntry } from "@/lib/vaultHistory";
+import { onBalanceRefresh } from "@/lib/refreshEvent";
 
 export interface VaultPnl {
   entries: VaultTxEntry[];
@@ -49,6 +50,8 @@ export function useVaultPnl(currentValueUsd: number | null) {
 
       const json: ApiResponse = await res.json();
 
+      // IMPORTANT: do not refetch history when currentValueUsd changes.
+      // PnL can be recomputed locally to avoid hammering RPC.
       const pnl =
         currentValueUsd !== null ? currentValueUsd - json.netDeposited : null;
       const pnlPercent =
@@ -70,11 +73,15 @@ export function useVaultPnl(currentValueUsd: number | null) {
     } finally {
       setLoading(false);
     }
-  }, [ownerKey, currentValueUsd]);
+  }, [ownerKey]);
 
   useEffect(() => {
+    // Always load once on mount / wallet change.
     refresh();
   }, [refresh]);
+
+  // Refresh only after successful on-chain actions.
+  useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   return { data, loading, error, refresh };
 }

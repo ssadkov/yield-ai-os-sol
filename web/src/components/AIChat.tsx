@@ -23,7 +23,8 @@ import { TokenChart } from "./TokenChart";
 
 /* -- helpers ---------------------------------------------- */
 
-const ACTION_PROPOSAL_RE = /@@ACTION_PROPOSAL:(rebalance|convert_all)/;
+const ACTION_PROPOSAL_RE = /@@ACTION_PROPOSAL:(rebalance|convert_all|individual_swap)/;
+const INDIVIDUAL_SWAP_RE = /@@ACTION_PROPOSAL:individual_swap:([^:]+):([^:]+):([^:]+):([^:]+):([^:]+):([^:]+):([^:\n]+)/;
 const ACTION_RESULT_RE = /^(✅|❌|⚠️)/;
 
 function getMessageText(msg: any): string {
@@ -32,6 +33,28 @@ function getMessageText(msg: any): string {
     .map((p: any) => (p.type === "text" ? p.text : ""))
     .join("")
     .trim();
+}
+
+function stripActionMarkers(raw: string): string {
+  return raw.replace(ACTION_PROPOSAL_RE, "").replace(INDIVIDUAL_SWAP_RE, "").trim();
+}
+
+/** True if the assistant message would render no text, chart, or tool summary. */
+function assistantMessageIsVisuallyEmpty(message: UIMessage): boolean {
+  let sawSomething = false;
+  for (const part of message.parts as any[]) {
+    if (part.type === "text") {
+      if (stripActionMarkers(part.text || "").length > 0) sawSomething = true;
+      continue;
+    }
+    const isTool = part.type === "tool-invocation" || String(part.type || "").startsWith("tool-");
+    if (!isTool) continue;
+    const toolName = part.toolName || String(part.type || "").replace(/^tool-/, "");
+    const toolData = part.result || part.output || part.args || part.input || {};
+    if (toolName === "showTokenChart" && toolData?.mint) sawSomething = true;
+    if (toolName === "proposeSwap" && (toolData?.marker || toolData?.error)) sawSomething = true;
+  }
+  return !sawSomething;
 }
 
 function TypingBubble() {
@@ -77,16 +100,24 @@ function ActionProposalCard({
   onConfirm,
   onCancel,
   disabled,
+  swapParams,
 }: {
   text: string;
-  action: "rebalance" | "convert_all";
+  action: "rebalance" | "convert_all" | "individual_swap";
   onConfirm: () => void;
   onCancel: () => void;
   disabled: boolean;
+  swapParams?: any;
 }) {
-  const actionLabel = action === "rebalance" ? "Rebalance" : "Convert to USDC";
+  const actionLabel = 
+    action === "rebalance" ? "Rebalance" : 
+    action === "convert_all" ? "Convert to USDC" : 
+    "Token Swap";
+    
   const icon = action === "rebalance" ? "⚖️" : "💱";
-  const cleanText = text.replace(ACTION_PROPOSAL_RE, "").trim();
+  
+  const rawCleanText = text.replace(ACTION_PROPOSAL_RE, "").split("@@ACTION_PROPOSAL")[0].trim();
+  const cleanText = rawCleanText.replace(/individual_swap:[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:[^:]+:[^:\n]+/, "").trim();
 
   return (
     <div className="flex justify-start">
@@ -94,32 +125,62 @@ function ActionProposalCard({
         <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
           AI — Action
         </div>
-        <div className="rounded-2xl border-2 border-primary/40 bg-primary/5 overflow-hidden">
+        <div className="rounded-2xl border-2 border-primary/40 bg-primary/5 overflow-hidden shadow-md">
           <div className="px-3 py-2 flex items-center gap-2 border-b border-primary/20 bg-primary/10">
             <span className="text-base">{icon}</span>
             <span className="text-xs font-semibold text-primary uppercase tracking-wider">
               {actionLabel} — Confirmation Required
             </span>
           </div>
-          <div className="px-3 py-2 text-sm whitespace-pre-wrap wrap-break-word text-foreground">
-            {cleanText}
+          
+          {action === "individual_swap" && swapParams && (
+            <div className="px-4 py-4 bg-background/40 flex flex-col items-center gap-3 border-b border-primary/10">
+               <div className="flex items-center gap-4">
+                  <div className="flex flex-col items-center">
+                    <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center font-bold text-sm">
+                      {swapParams.inputSymbol[0]}
+                    </div>
+                    <span className="text-[10px] font-medium mt-1">{swapParams.inputSymbol}</span>
+                  </div>
+                  <div className="text-muted-foreground">→</div>
+                  <div className="flex flex-col items-center">
+                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center font-bold text-sm">
+                      {swapParams.outputSymbol[0]}
+                    </div>
+                    <span className="text-[10px] font-medium mt-1">{swapParams.outputSymbol}</span>
+                  </div>
+               </div>
+               <div className="text-center">
+                  <div className="text-lg font-bold">
+                    {swapParams.uiAmount} {swapParams.inputSymbol}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Approx. ${Number(swapParams.amountUsd).toFixed(2)}
+                  </div>
+               </div>
+            </div>
+          )}
+
+          <div className="px-4 py-3 text-sm whitespace-pre-wrap wrap-break-word text-foreground prose prose-sm dark:prose-invert max-w-none">
+            <ReactMarkdown>{cleanText}</ReactMarkdown>
           </div>
-          <div className="px-3 py-2 border-t border-primary/20 flex gap-2">
+          
+          <div className="px-3 py-3 border-t border-primary/20 flex gap-2 bg-primary/5">
             <button
               type="button"
               onClick={onConfirm}
               disabled={disabled}
-              className="cursor-pointer text-xs px-4 py-2 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              className="flex-1 cursor-pointer text-xs px-4 py-2.5 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
             >
-              ✓ Confirm {actionLabel}
+              Confirm {actionLabel}
             </button>
             <button
               type="button"
               onClick={onCancel}
               disabled={disabled}
-              className="cursor-pointer text-xs px-4 py-2 rounded-lg border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="cursor-pointer text-xs px-4 py-2.5 rounded-lg border border-border bg-background hover:bg-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              ✗ Cancel
+              Cancel
             </button>
           </div>
         </div>
@@ -166,11 +227,130 @@ function ActionResultBubble({ text }: { text: string }) {
 
 /* -- Regular message bubble ------------------------------- */
 
+function ProposeSwapToolSummary({
+  toolData,
+}: {
+  toolData: Record<string, unknown>;
+}) {
+  const err = toolData.error as string | undefined;
+  if (err) {
+    return (
+      <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-foreground">
+        <span className="font-semibold text-destructive">Swap proposal failed: </span>
+        {err}
+      </div>
+    );
+  }
+  const inputSymbol = toolData.inputSymbol as string | undefined;
+  const outputSymbol = toolData.outputSymbol as string | undefined;
+  const uiAmount = toolData.uiAmount as string | undefined;
+  const amountUsd = toolData.amountUsd as number | undefined;
+  if (inputSymbol && outputSymbol) {
+    return (
+      <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-foreground">
+        <div className="font-semibold text-primary mb-1">Proposed swap</div>
+        <div>
+          Sell {uiAmount ?? "?"} {inputSymbol} → {outputSymbol}
+          {amountUsd != null && !Number.isNaN(amountUsd) && (
+            <span className="text-muted-foreground"> (≈ ${Number(amountUsd).toFixed(2)})</span>
+          )}
+        </div>
+        <div className="text-muted-foreground mt-1">
+          Confirm using the action card when it appears, or ask again if you do not see it.
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
   const label = isUser ? "You" : "AI";
 
   const hasChart = message.parts.some((p: any) => p.toolName === "showTokenChart" || p.type?.startsWith("tool-showTokenChart"));
+
+  const inner = (
+    <>
+      {message.parts.map((part: any, i: number) => {
+        if (part.type === "text") {
+          const cleaned = stripActionMarkers(part.text || "");
+          if (!cleaned) return null;
+          if (isUser) {
+            return <span key={`${message.id}-p${i}`}>{cleaned}</span>;
+          }
+          return (
+            <div key={`${message.id}-p${i}`} className="prose prose-sm dark:prose-invert max-w-none wrap-break-word px-4 py-3">
+              <ReactMarkdown>{cleaned}</ReactMarkdown>
+            </div>
+          );
+        }
+
+        // Support both standard 'tool-invocation' and prefixed 'tool-toolName' types
+        const isTool = part.type === "tool-invocation" || part.type?.startsWith("tool-");
+        if (isTool) {
+          const toolName = part.toolName || part.type?.replace("tool-", "");
+          const toolData = (part.result ||
+            part.output ||
+            part.args ||
+            part.input ||
+            part.toolInvocation?.args ||
+            {}) as Record<string, unknown>;
+
+          if (toolName === "showTokenChart" && toolData.mint) {
+            return (
+              <div
+                key={part.toolCallId || `${message.id}-t${i}`}
+                className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40"
+              >
+                <TokenChart address={String(toolData.mint)} symbol={toolData.symbol as string | undefined} />
+              </div>
+            );
+          }
+          if (toolName === "proposeSwap") {
+            const summary = <ProposeSwapToolSummary toolData={toolData} />;
+            if (summary) {
+              return (
+                <div key={part.toolCallId || `${message.id}-t${i}`} className="px-4 py-2">
+                  {summary}
+                </div>
+              );
+            }
+          }
+        }
+        return null;
+      })}
+
+      {/* @ts-ignore */}
+      {message.toolInvocations?.map((ti: any) => {
+        if (ti.toolName === "showTokenChart" && ti.state === "result") {
+          return (
+            <div
+              key={ti.toolCallId}
+              className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40 mt-2"
+            >
+              <TokenChart address={ti.result?.mint} symbol={ti.result?.symbol} />
+            </div>
+          );
+        }
+        if (ti.toolName === "proposeSwap" && ti.state === "result") {
+          return (
+            <div key={ti.toolCallId} className="px-4 py-2 mt-2">
+              <ProposeSwapToolSummary toolData={ti.result || {}} />
+            </div>
+          );
+        }
+        return null;
+      })}
+
+      {!isUser && assistantMessageIsVisuallyEmpty(message) && (
+        <div className="px-4 py-3 text-xs text-muted-foreground border-t border-dashed border-border/60">
+          No readable reply was displayed (only internal markers or empty text). If you asked for a trade, wait for the
+          confirmation card or send your message again. Check the browser console if this keeps happening.
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -185,55 +365,7 @@ function MessageBubble({ message }: { message: UIMessage }) {
               : "bg-accent/50 text-foreground border-border/60"
           }`}
         >
-          {message.parts.map((part: any, i: number) => {
-            if (part.type === "text") {
-              const cleaned = part.text.replace(ACTION_PROPOSAL_RE, "").trim();
-              if (!cleaned) return null;
-              if (isUser) {
-                return <span key={`${message.id}-p${i}`}>{cleaned}</span>;
-              }
-              return (
-                <div key={`${message.id}-p${i}`} className="prose prose-sm dark:prose-invert max-w-none break-words px-4 py-3">
-                  <ReactMarkdown>{cleaned}</ReactMarkdown>
-                </div>
-              );
-            }
-            
-            // Support both standard 'tool-invocation' and prefixed 'tool-toolName' types
-            const isTool = part.type === "tool-invocation" || part.type?.startsWith("tool-");
-            if (isTool) {
-               const toolName = part.toolName || part.type?.replace("tool-", "");
-               // USE RESULT/OUTPUT if available (it has the resolved mint), otherwise fall back to input args
-               const toolData = part.result || part.output || part.args || part.input || part.toolInvocation?.args || {};
-               
-               if (toolName === "showTokenChart" && toolData.mint) {
-                return (
-                  <div key={part.toolCallId || `${message.id}-t${i}`} className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40">
-                    <TokenChart 
-                      address={toolData.mint}
-                      symbol={toolData.symbol}
-                    />
-                  </div>
-                );
-              }
-            }
-            return null;
-          })}
-          
-          {/* @ts-ignore */}
-          {message.toolInvocations?.map((ti: any) => {
-            if (ti.toolName === "showTokenChart" && ti.state === "result") {
-              return (
-                <div key={ti.toolCallId} className="w-full -mx-4 -mb-3 first:-mt-3 overflow-hidden border-y border-border/40 mt-2">
-                  <TokenChart 
-                    address={ti.result?.mint}
-                    symbol={ti.result?.symbol}
-                  />
-                </div>
-              );
-            }
-            return null;
-          })}
+          {inner}
         </div>
       </div>
     </div>
@@ -370,7 +502,7 @@ export function AIChat() {
   }, [lastAssistant, isLoading]);
 
   const sendClientAction = async (
-    action: "snapshot" | "rebalance" | "convert_all",
+    action: "snapshot" | "rebalance" | "convert_all" | "individual_swap",
     confirmed?: boolean
   ) => {
     if (!ownerPubkey) return;
@@ -389,12 +521,30 @@ export function AIChat() {
       clientAction: action,
       confirmed: !!confirmed,
       executionEnabled: !!confirmed,
+      ...(confirmed && action === "individual_swap" ? { 
+        swapParams: {
+          ...(messages[messages.length - 1] as any).swapParams,
+          amountUsd: Number((messages[messages.length - 1] as any).swapParams?.amountUsd || 0)
+        } 
+      } : {})
     });
   };
 
-  const handleConfirmAction = (action: "rebalance" | "convert_all") => {
+  const handleConfirmAction = (action: "rebalance" | "convert_all" | "individual_swap", params?: any) => {
     setConfirmingAction(null);
-    void sendClientAction(action, true);
+    if (action === "individual_swap" && params) {
+       void sendText("Confirm swap.", {
+         clientAction: "individual_swap",
+         confirmed: true,
+         executionEnabled: true,
+         swapParams: {
+           ...params,
+           amountUsd: Number(params.amountUsd || 0)
+         }
+       });
+    } else {
+       void sendClientAction(action as any, true);
+    }
   };
 
   const handleCancelAction = () => {
@@ -453,14 +603,35 @@ export function AIChat() {
     const proposalMatch = text.match(ACTION_PROPOSAL_RE);
     const isLastAssistant = msg.id === lastAssistant?.id;
 
-    if (proposalMatch && isLastAssistant && !isLoading) {
-      const action = proposalMatch[1] as "rebalance" | "convert_all";
+    // Show as soon as the marker is present (do not wait for stream end); buttons stay disabled while loading.
+    if (proposalMatch && isLastAssistant) {
+      const action = proposalMatch[1] as "rebalance" | "convert_all" | "individual_swap";
+      
+      let swapParams = null;
+      if (action === "individual_swap") {
+        const swapMatch = text.match(INDIVIDUAL_SWAP_RE);
+        if (swapMatch) {
+          swapParams = {
+            inputMint: swapMatch[1],
+            outputMint: swapMatch[2],
+            inputSymbol: swapMatch[3],
+            outputSymbol: swapMatch[4],
+            amount: swapMatch[5],
+            uiAmount: swapMatch[6],
+            amountUsd: swapMatch[7],
+          };
+          // Attach to msg for handleConfirmAction
+          (msg as any).swapParams = swapParams;
+        }
+      }
+
       return (
         <ActionProposalCard
           key={msg.id}
           text={text}
           action={action}
-          onConfirm={() => handleConfirmAction(action)}
+          swapParams={swapParams}
+          onConfirm={() => handleConfirmAction(action, swapParams)}
           onCancel={handleCancelAction}
           disabled={isLoading}
         />

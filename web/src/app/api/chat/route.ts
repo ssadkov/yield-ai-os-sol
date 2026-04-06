@@ -17,8 +17,8 @@ import { fetchPortfolioAssets } from "@/lib/portfolioAssets";
 import { PROGRAM_ID, RPC_URL } from "@/lib/constants";
 import { fetchVaultHistory } from "@/lib/vaultHistory";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
-import { runRebalanceJob } from "@/server/agent/runRebalance";
-import { ALL_TOKENS, CBBTC } from "@/server/agent/rebalance/tokens";
+import { runRebalanceJob, runIndividualSwapJob } from "@/server/agent/runRebalance";
+import { ALL_TOKENS, CBBTC, USDC } from "@/server/agent/rebalance/tokens";
 
 export const runtime = "nodejs";
 
@@ -54,14 +54,22 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as {
       messages?: UIMessage[];
       ownerPubkey?: string;
-      clientAction?: "snapshot" | "rebalance" | "convert_all";
+      clientAction?: "snapshot" | "rebalance" | "convert_all" | "individual_swap";
       confirmed?: boolean;
       executionEnabled?: boolean;
+      swapParams?: {
+        inputMint: string;
+        outputMint: string;
+        inputSymbol: string;
+        outputSymbol: string;
+        amount: string;
+        amountUsd: number;
+        uiAmount: string;
+      };
     };
 
     const messages = body.messages ?? [];
     const ownerPubkey = body.ownerPubkey;
-
     const model = openRouterModel();
 
     const connection = await getConnection();
@@ -97,20 +105,20 @@ export async function POST(req: NextRequest) {
       return "";
     })();
 
-    const proposalMatch = prevAssistantText.match(/@@ACTION_PROPOSAL:(rebalance|convert_all)/);
-    let inferredAction: "rebalance" | "convert_all" | null = null;
+    const proposalMatch = prevAssistantText.match(/@@ACTION_PROPOSAL:(rebalance|convert_all|individual_swap)/);
+    let inferredAction: "rebalance" | "convert_all" | "individual_swap" | null = null;
 
     if (proposalMatch && lastUserText && !body.clientAction) {
       // There was a pending action proposal. Classify the user's reply.
-      const proposedAction = proposalMatch[1] as "rebalance" | "convert_all";
+      const actionType = proposalMatch[1] as any;
       try {
         const { text: classResult } = await generateText({
           model,
           system: "You are a yes/no classifier. The AI proposed an action and is waiting for user confirmation. Analyze the user's reply and respond with EXACTLY one word: YES or NO. YES means the user is confirming/agreeing. NO means anything else (question, refusal, new topic).",
-          prompt: `Proposed action: ${proposedAction}\nUser reply: "${lastUserText}"\n\nIs the user confirming? Reply YES or NO:`,
+          prompt: `Proposed action: ${actionType}\nUser reply: "${lastUserText}"\n\nIs the user confirming? Reply YES or NO:`,
         });
         if (classResult.trim().toUpperCase().startsWith("YES")) {
-          inferredAction = proposedAction;
+          inferredAction = actionType;
         }
       } catch (err) {
         console.error("[chat] LLM confirmation classifier failed:", err);
@@ -126,13 +134,23 @@ export async function POST(req: NextRequest) {
 
     // Always provide a compact, fresh snapshot so the assistant can answer questions
     // like "how much USDC do I have?" without needing an explicit tool call.
-    const [walletSnap, vaultHoldingsSnap, vaultAccount] = owner && vaultPda
-      ? await Promise.all([
-        fetchPortfolioAssets(connection, owner, { includeSol: true }),
-        fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
-        fetchVaultAccount(connection, owner),
-      ])
-      : [null, null, null];
+    type PortfolioResult = Awaited<ReturnType<typeof fetchPortfolioAssets>>;
+    type VaultResult = Awaited<ReturnType<typeof fetchVaultAccount>>;
+    
+    let walletSnap: PortfolioResult | null = null;
+    let vaultHoldingsSnap: PortfolioResult | null = null;
+    let vaultAccount: VaultResult | null = null;
+
+    if (owner && vaultPda) {
+      try {
+        // Run sequentially with timeout/error safety to avoid 429 during initial boot
+        vaultAccount = await fetchVaultAccount(connection, owner).catch(() => null);
+        walletSnap = await fetchPortfolioAssets(connection, owner, { includeSol: true }).catch(() => null);
+        vaultHoldingsSnap = await fetchPortfolioAssets(connection, vaultPda, { includeSol: false }).catch(() => null);
+      } catch (err) {
+        console.error("[chat] Initial snapshot failed gracefully:", err);
+      }
+    }
 
     const currentStrategyName = vaultAccount ? parseStrategy(vaultAccount.strategy) : null;
 
@@ -358,6 +376,62 @@ export async function POST(req: NextRequest) {
           });
         }
       }
+    } else if (body.clientAction === "individual_swap") {
+      if (!body.confirmed || !executionEnabled || !body.swapParams) {
+        actionPreface = "Client attempted a swap without confirmation or parameters. Ask to confirm explicitly.";
+      } else {
+        try {
+          if (!ownerPubkey) throw new Error("Wallet not connected");
+          const { inputMint, outputMint, inputSymbol, outputSymbol, amount, amountUsd } = body.swapParams;
+          
+          const data = await runIndividualSwapJob({
+            ownerPubkey,
+            inputMint,
+            outputMint,
+            amount,
+            amountUsd,
+            slippageBps: 50, // 0.5% as requested
+          });
+
+          let summary: string;
+          if (data.status === "success") {
+            const sigLines = (data.signatures ?? []).map(sig => `  🔗 https://solscan.io/tx/${sig}`);
+            summary = replyLang === "ru"
+              ? `✅ Своп выполнен!\n\n${inputSymbol} → ${outputSymbol} ($${amountUsd.toFixed(2)})\n\nТранзакции:\n${sigLines.join("\n")}`
+              : `✅ Swap completed!\n\n${inputSymbol} → ${outputSymbol} ($${amountUsd.toFixed(2)})\n\nTransactions:\n${sigLines.join("\n")}`;
+          } else if (data.status === "needs_whitelist") {
+            const missing = (data.missingPrograms ?? []).join(", ");
+            summary = replyLang === "ru"
+              ? `⚠️ Нужно добавить программы в whitelist:\n${missing}\n\nНажмите кнопку выше.`
+              : `⚠️ Whitelist required for:\n${missing}\n\nClick the button above.`;
+          } else {
+            summary = replyLang === "ru"
+              ? `❌ Ошибка: ${data.error ?? "неизвестно"}`
+              : `❌ Error: ${data.error ?? "unknown"}`;
+          }
+
+          return createUIMessageStreamResponse({
+            status: 200,
+            stream: createUIMessageStream({
+              execute({ writer }) {
+                const id = "swap-result";
+                writer.write({ type: "text-start", id });
+                writer.write({ type: "text-delta", id, delta: summary });
+                writer.write({ type: "text-end", id });
+              },
+            }),
+          });
+        } catch (execErr: any) {
+          const errMsg = execErr instanceof Error ? execErr.message : String(execErr);
+          const summary = replyLang === "ru" ? `❌ Ошибка: ${errMsg}` : `❌ Error: ${errMsg}`;
+          return createUIMessageStreamResponse({ status: 200, stream: createUIMessageStream({ execute({ writer }) {
+            const id = "swap-error";
+            writer.write({ type: "text-start", id });
+            writer.write({ type: "text-delta", id, delta: summary });
+            writer.write({ type: "text-end", id });
+          }})});
+        }
+      }
     }
 
     const result = streamText({
@@ -415,10 +489,13 @@ export async function POST(req: NextRequest) {
         "- When the user asks to rebalance or convert to USDC, do NOT execute immediately.",
         "  Instead, explain what you are about to do (which swaps, target allocations, approximate amounts based on the portfolio snapshot).",
         "  At the VERY END of your message, append the marker @@ACTION_PROPOSAL:rebalance or @@ACTION_PROPOSAL:convert_all on a new line.",
-        "  The client will detect this marker and show the user a special action card with Confirm/Cancel buttons.",
-        "  Example: 'I will rebalance your vault...\\n@@ACTION_PROPOSAL:rebalance'",
-        "- You may also use the marker if the user agrees to an action you suggested.",
-        "- NEVER call rebalanceVault or convertAllToUsdc tools directly. They are triggered via the action proposal protocol.",
+        "- For individual swaps (buy/sell), ALWAYS use the proposeSwap tool first.",
+        "  The tool will return a 'marker' field containing a string starting with '@@ACTION_PROPOSAL:individual_swap:'.",
+        "  CRITICAL: You MUST copy this 'marker' string EXACTLY AS IS and put it on its own line at the VERY END of your response.",
+        "  DO NOT change, omit, or shorten any part of the marker.",
+        "  If the user confirms in text (e.g., 'do it', 'confirm', 'делай') instead of clicking a button from a previous message, you should explain that clicking the button is safer, but you MUST still output the marker again in your reply so they can click it now.",
+        "  IMPORTANT: Even if the vault only contains USDC, you can SELL USDC to buy any other token.",
+        "- NEVER call rebalanceVault, convertAllToUsdc or individual swap logic directly. They are triggered via the markers.",
         "Tool usage:",
         "- Use getPortfolioSnapshot to ground your analysis in current on-chain balances.",
         "When you return an execution recommendation, always explain what will happen on-chain and why.",
@@ -462,28 +539,37 @@ export async function POST(req: NextRequest) {
             const owner = new PublicKey(resolvedOwnerPubkey);
 
             const [vaultPda] = deriveVaultPda(owner);
-            const vault = await fetchVaultAccount(connection, owner);
+            
+            try {
+              const [vault, wallet, vaultHoldings] = await Promise.all([
+                fetchVaultAccount(connection, owner),
+                fetchPortfolioAssets(connection, owner, { includeSol: true }),
+                fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
+              ]);
 
-            const [wallet, vaultHoldings] = await Promise.all([
-              fetchPortfolioAssets(connection, owner, { includeSol: true }),
-              fetchPortfolioAssets(connection, vaultPda, { includeSol: false }),
-            ]);
-
-            return {
-              ownerPubkey: resolvedOwnerPubkey,
-              vault: vault
-                ? {
-                  vaultPda: vaultPda.toBase58(),
-                  strategy: parseStrategy(vault.strategy),
-                  lastRebalanceTs: vault.lastRebalanceTs?.toString?.() ?? null,
-                  allowedPrograms: (vault.allowedPrograms ?? []).map((p) =>
-                    p.toBase58()
-                  ),
-                }
-                : null,
-              wallet,
-              vaultHoldings,
-            };
+              return {
+                ownerPubkey: resolvedOwnerPubkey,
+                status: "success",
+                vault: vault
+                  ? {
+                    vaultPda: vaultPda.toBase58(),
+                    strategy: parseStrategy(vault.strategy),
+                    lastRebalanceTs: vault.lastRebalanceTs?.toString?.() ?? null,
+                    allowedPrograms: (vault.allowedPrograms ?? []).map((p) =>
+                      p.toBase58()
+                    ),
+                  }
+                  : null,
+                wallet,
+                vaultHoldings,
+              };
+            } catch (err: any) {
+              return {
+                ownerPubkey: resolvedOwnerPubkey,
+                status: "error",
+                error: `Failed to fetch snapshot from blockchain: ${err.message || String(err)}. Check RPC connectivity.`,
+              };
+            }
           },
         }),
 
@@ -617,7 +703,95 @@ export async function POST(req: NextRequest) {
             };
           },
         }),
+        proposeSwap: tool({
+          description: "Propose an individual swap (buy or sell) between two tokens in the vault.",
+          inputSchema: z.object({
+            inputSymbol: z.string().describe("Symbol of the token to sell (e.g. USDC, cbBTC)"),
+            outputSymbol: z.string().describe("Symbol of the token to buy (e.g. USDY, SOL)"),
+            amount: z.string().describe("Amount to swap. Can be a number ('2.5'), 'all', or a percentage ('50%')"),
+          }),
+          execute: async ({ inputSymbol, outputSymbol, amount }) => {
+            const findToken = (sym: string) => {
+              const s = sym.toUpperCase().trim();
+              // Add common alias mapping
+              const aliases: Record<string, string> = {
+                "ЗОЛОТО": "XAUt0",
+                "GOLD": "XAUt0",
+                "БИТКОИН": "cbBTC",
+                "БИТОК": "cbBTC",
+                "BTC": "cbBTC",
+                "BITCOIN": "cbBTC",
+                "СОЛАНА": "SOL",
+                "СОЛ": "SOL",
+              };
+              const targetSym = aliases[s] || s;
+              
+              return ALL_TOKENS.find(t => t.symbol.toUpperCase() === targetSym) || 
+                     (targetSym === "SOL" ? { symbol: "SOL", mint: "So11111111111111111111111111111111111111112", decimals: 9 } : null);
+            };
+
+            const fromToken = findToken(inputSymbol);
+            const toToken = findToken(outputSymbol);
+
+            if (!fromToken || !toToken) {
+              return { error: `One of the tokens (${inputSymbol} or ${outputSymbol}) is not supported.` };
+            }
+
+            // Calculate raw amount
+            const vaultAsset = safeVaultHoldingsSnap.assets.find(a => a.mint === fromToken.mint);
+            const balance = (fromToken.mint === USDC.mint) ? vaultUsdc : (vaultAsset?.balance ?? 0);
+            const price = (fromToken.mint === USDC.mint) ? 1 : (vaultAsset?.usdPrice ?? 0);
+
+            let uiAmountValue = 0;
+            const cleanAmount = amount.toLowerCase().trim();
+            
+            if (cleanAmount === "all" || cleanAmount === "всё" || cleanAmount === "все") {
+              uiAmountValue = balance;
+            } else if (cleanAmount === "половина" || cleanAmount === "полбаланса" || cleanAmount === "пол-баланса" || cleanAmount === "half") {
+              uiAmountValue = balance * 0.5;
+            } else if (cleanAmount === "четверть" || cleanAmount === "quarter") {
+              uiAmountValue = balance * 0.25;
+            } else if (cleanAmount.endsWith("%")) {
+              uiAmountValue = balance * (parseFloat(cleanAmount) / 100);
+            } else {
+              // Try to extract number. If "доллар" without digits, assume 1.
+              const match = cleanAmount.match(/[\d.]+/);
+              if (match) {
+                uiAmountValue = parseFloat(match[0]);
+              } else if (cleanAmount.includes("доллар") || cleanAmount.includes("бакс") || cleanAmount.includes("dollar")) {
+                uiAmountValue = 1;
+              } else {
+                return { error: `Не удалось распознать сумму: "${amount}". Пожалуйста, укажите число.` };
+              }
+            }
+
+            if (isNaN(uiAmountValue) || uiAmountValue <= 0) {
+              return { error: `Некорректная сумма: "${amount}". Пожалуйста, укажите положительное число.` };
+            }
+
+            if (uiAmountValue > balance + 0.000001) {
+              return { error: `Недостаточно средств. У вас в Vault всего ${balance.toFixed(6)} ${fromToken.symbol}.` };
+            }
+
+            const rawAmount = Math.floor(uiAmountValue * Math.pow(10, fromToken.decimals)).toString();
+            const amountUsd = uiAmountValue * price;
+
+            const marker = `@@ACTION_PROPOSAL:individual_swap:${fromToken.mint}:${toToken.mint}:${fromToken.symbol}:${toToken.symbol}:${rawAmount}:${uiAmountValue.toFixed(4)}:${amountUsd.toFixed(2)}`;
+
+            return {
+              inputMint: fromToken.mint,
+              outputMint: toToken.mint,
+              inputSymbol: fromToken.symbol,
+              outputSymbol: toToken.symbol,
+              rawAmount,
+              uiAmount: uiAmountValue.toFixed(4),
+              amountUsd,
+              marker,
+            };
+          },
+        }),
       },
+
     });
 
     return result.toUIMessageStreamResponse({

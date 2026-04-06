@@ -1,6 +1,6 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { takeSnapshot, type PortfolioSnapshot } from "./portfolio";
-import { USDC, type TokenDef } from "./tokens";
+import { USDC, ALL_TOKENS, type TokenDef } from "./tokens";
 import { buildVaultSwapTx, type BuiltVaultSwap } from "../swap/buildVaultSwapTx";
 import { signAndSendTx } from "../swap/send";
 import { deriveVaultPda } from "../swap/anchorIx";
@@ -221,4 +221,61 @@ export async function convertAll(args: {
     slippageBps,
   });
 }
+
+export async function individualSwap(args: {
+  connection: Connection;
+  authority: Keypair;
+  vaultProgramId: PublicKey;
+  vaultOwner: PublicKey;
+  apiKey: string;
+  rpcUrl: string;
+  inputMint: string;
+  outputMint: string;
+  amount: string;
+  amountUsd: number;
+  slippageBps?: number;
+}): Promise<RebalanceResult> {
+  const {
+    connection,
+    authority,
+    vaultProgramId,
+    vaultOwner,
+    apiKey,
+    rpcUrl,
+    inputMint,
+    outputMint,
+    amount,
+    amountUsd,
+    slippageBps = DEFAULT_SLIPPAGE_BPS,
+  } = args;
+
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const snapshot = await takeSnapshot({ connection, vaultPda, apiKey });
+
+  const findToken = (mint: string) => {
+    return ALL_TOKENS.find((t) => t.mint === mint) || { symbol: "???", mint, decimals: 0 };
+  };
+
+  const swaps: SwapAction[] = [
+    {
+      from: findToken(inputMint),
+      to: findToken(outputMint),
+      rawAmount: amount,
+      amountUsd,
+    },
+  ];
+
+  return executeSwaps({
+    swaps,
+    snapshot,
+    connection,
+    authority,
+    vaultProgramId,
+    vaultPda,
+    apiKey,
+    rpcUrl,
+    slippageBps,
+  });
+}
+
 

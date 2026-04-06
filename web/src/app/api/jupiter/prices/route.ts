@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "";
 const PRICE_CACHE_TTL_MS = 60 * 1000; // 1 minute
+const HELIUS_429_BACKOFF_MS = 800;
 
 type PriceCacheEntry = {
   value: unknown;
@@ -9,6 +10,7 @@ type PriceCacheEntry = {
 };
 
 const priceCache = new Map<string, PriceCacheEntry>();
+const inFlight = new Map<string, Promise<Record<string, unknown>>>();
 
 export async function GET(req: NextRequest) {
   const ids = req.nextUrl.searchParams.get("ids");
@@ -56,47 +58,58 @@ async function fetchPrices(ids: string | null | undefined) {
     try {
       if (!RPC_URL) throw new Error("Missing NEXT_PUBLIC_RPC_URL");
 
-      // Use Helius getAssetBatch to fetch multiple prices at once
-      const response = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: "get-prices",
-          method: "getAssetBatch",
-          params: {
-            ids: uncached,
-          },
-        }),
-      });
+      const key = uncached.slice().sort().join(",");
+      const p =
+        inFlight.get(key) ??
+        (async () => {
+          // Use Helius getAssetBatch to fetch multiple prices at once
+          const doFetch = async () =>
+            fetch(RPC_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: "get-prices",
+                method: "getAssetBatch",
+                params: { ids: uncached },
+              }),
+            });
 
-      if (response.ok) {
-        const json = await response.json();
-        const heliusAssets = json.result;
-        
-        if (Array.isArray(heliusAssets)) {
-          for (const asset of heliusAssets) {
-            if (!asset || !asset.id) continue;
-            
-            const priceInfo = asset.token_info?.price_info;
-            if (priceInfo && priceInfo.price_per_token != null) {
-              const priceData = {
-                id: asset.id,
-                usdPrice: priceInfo.price_per_token,
-                price: priceInfo.price_per_token, // Compatibility
-                decimals: asset.token_info.decimals || 0,
-              };
-              
-              result[asset.id] = priceData;
-              priceCache.set(asset.id, {
-                value: priceData,
-                expiresAt: now + PRICE_CACHE_TTL_MS,
-              });
+          let response = await doFetch();
+          if (response.status === 429) {
+            // Simple single retry with backoff to reduce burst collisions.
+            await new Promise((r) => setTimeout(r, HELIUS_429_BACKOFF_MS));
+            response = await doFetch();
+          }
+
+          if (!response.ok) return {};
+          const json = await response.json();
+          const heliusAssets = json.result;
+          const out: Record<string, unknown> = {};
+
+          if (Array.isArray(heliusAssets)) {
+            for (const asset of heliusAssets) {
+              if (!asset || !asset.id) continue;
+              const priceInfo = asset.token_info?.price_info;
+              if (priceInfo && priceInfo.price_per_token != null) {
+                out[asset.id] = {
+                  id: asset.id,
+                  usdPrice: priceInfo.price_per_token,
+                  price: priceInfo.price_per_token,
+                  decimals: asset.token_info.decimals || 0,
+                };
+              }
             }
           }
-        }
-      } else {
-        console.error("Helius API responded with error:", response.status);
+          return out;
+        })();
+
+      inFlight.set(key, p);
+      const fetched = await p.finally(() => inFlight.delete(key));
+
+      for (const [mint, priceData] of Object.entries(fetched)) {
+        result[mint] = priceData;
+        priceCache.set(mint, { value: priceData, expiresAt: now + PRICE_CACHE_TTL_MS });
       }
     } catch (err) {
       console.error("Helius Prices API failed:", err);

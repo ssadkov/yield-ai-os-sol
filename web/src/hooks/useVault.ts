@@ -62,6 +62,7 @@ export function useVault() {
     refresh();
   }, [refresh]);
 
+  // Refresh only after successful on-chain actions.
   useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   const createVault = useCallback(

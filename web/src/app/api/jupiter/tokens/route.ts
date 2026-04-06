@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || "";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const HELIUS_429_BACKOFF_MS = 800;
 
 type TokenCacheEntry = {
   value: unknown;
@@ -9,6 +10,7 @@ type TokenCacheEntry = {
 };
 
 const tokenCache = new Map<string, TokenCacheEntry>();
+const inFlight = new Map<string, Promise<Record<string, unknown>>>();
 
 export async function GET(req: NextRequest) {
   const ids = req.nextUrl.searchParams.get("ids");
@@ -56,47 +58,61 @@ async function fetchTokens(ids: string | null | undefined) {
     try {
       if (!RPC_URL) throw new Error("Missing NEXT_PUBLIC_RPC_URL");
 
-      // Use Helius getAssetBatch to fetch metadata for all tokens in one request
-      const response = await fetch(RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: "get-tokens",
-          method: "getAssetBatch",
-          params: {
-            ids: uncached,
-          },
-        }),
-      });
-
-      if (response.ok) {
-        const json = await response.json();
-        const heliusAssets = json.result;
-        
-        if (Array.isArray(heliusAssets)) {
-          for (const asset of heliusAssets) {
-            if (!asset || !asset.id) continue;
-            
-            const meta = {
-              id: asset.id,
-              address: asset.id,
-              symbol: asset.token_info?.symbol || asset.content?.metadata?.symbol || "UNKNOWN",
-              name: asset.content?.metadata?.name || "Unknown Token",
-              decimals: asset.token_info?.decimals || 0,
-              logoURI: asset.content?.links?.image || asset.content?.files?.[0]?.uri,
-              icon: asset.content?.links?.image || asset.content?.files?.[0]?.uri,
-            };
-            
-            result[asset.id] = meta;
-            tokenCache.set(asset.id, {
-              value: meta,
-              expiresAt: now + CACHE_TTL_MS,
+      const key = uncached.slice().sort().join(",");
+      const p =
+        inFlight.get(key) ??
+        (async () => {
+          const doFetch = async () =>
+            fetch(RPC_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: "get-tokens",
+                method: "getAssetBatch",
+                params: { ids: uncached },
+              }),
             });
+
+          let response = await doFetch();
+          if (response.status === 429) {
+            await new Promise((r) => setTimeout(r, HELIUS_429_BACKOFF_MS));
+            response = await doFetch();
           }
-        }
-      } else {
-         console.error("Helius Tokens API responded with error:", response.status);
+
+          if (!response.ok) return {};
+          const json = await response.json();
+          const heliusAssets = json.result;
+
+          const out: Record<string, unknown> = {};
+          if (Array.isArray(heliusAssets)) {
+            for (const asset of heliusAssets) {
+              if (!asset || !asset.id) continue;
+              out[asset.id] = {
+                id: asset.id,
+                address: asset.id,
+                symbol:
+                  asset.token_info?.symbol ||
+                  asset.content?.metadata?.symbol ||
+                  "UNKNOWN",
+                name: asset.content?.metadata?.name || "Unknown Token",
+                decimals: asset.token_info?.decimals || 0,
+                logoURI:
+                  asset.content?.links?.image || asset.content?.files?.[0]?.uri,
+                icon:
+                  asset.content?.links?.image || asset.content?.files?.[0]?.uri,
+              };
+            }
+          }
+          return out;
+        })();
+
+      inFlight.set(key, p);
+      const fetched = await p.finally(() => inFlight.delete(key));
+
+      for (const [mint, meta] of Object.entries(fetched)) {
+        result[mint] = meta;
+        tokenCache.set(mint, { value: meta, expiresAt: now + CACHE_TTL_MS });
       }
     } catch (err) {
       console.error("Helius Tokens API failed:", err);

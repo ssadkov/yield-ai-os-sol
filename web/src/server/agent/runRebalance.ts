@@ -1,6 +1,6 @@
 import bs58 from "bs58";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { convertAll, rebalance, type RebalanceResult } from "./rebalance/engine";
+import { convertAll, rebalance, individualSwap, type RebalanceResult } from "./rebalance/engine";
 
 export type RebalanceAction = "rebalance" | "convert_all";
 
@@ -61,4 +61,43 @@ export async function runRebalanceJob(args: {
     slippageBps,
   });
 }
+
+export async function runIndividualSwapJob(args: {
+  ownerPubkey: string;
+  inputMint: string;
+  outputMint: string;
+  amount: string;
+  amountUsd: number;
+  slippageBps?: number;
+}): Promise<RebalanceResult> {
+  const apiKey = requiredEnv("JUPITER_API_KEY");
+  const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
+
+  const vaultProgramIdStr =
+    optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
+  if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
+
+  const authority = loadAuthorityKeypairFromEnv();
+  const vaultProgramId = new PublicKey(vaultProgramIdStr);
+  const vaultOwner = new PublicKey(args.ownerPubkey);
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  const slippageBps = args.slippageBps ?? Number(optionalEnv("SLIPPAGE_BPS") ?? "100");
+
+  return individualSwap({
+    connection,
+    authority,
+    vaultProgramId,
+    vaultOwner,
+    apiKey,
+    rpcUrl,
+    inputMint: args.inputMint,
+    outputMint: args.outputMint,
+    amount: args.amount,
+    amountUsd: args.amountUsd,
+    slippageBps,
+  });
+}
+
 

@@ -40,6 +40,7 @@ export function useWalletAssets() {
     refresh();
   }, [refresh]);
 
+  // Refresh only after successful on-chain actions.
   useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   return { assets, totalUsd, loading, refresh };

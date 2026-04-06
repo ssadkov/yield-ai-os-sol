@@ -15,6 +15,24 @@ export interface VaultInfo {
   allowedPrograms: PublicKey[];
 }
 
+export async function withRetries<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+  delayMs = 500
+): Promise<T> {
+  let attempts = 0;
+  while (attempts < maxAttempts) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempts++;
+      if (attempts >= maxAttempts) throw err;
+      await new Promise((r) => setTimeout(r, delayMs * attempts));
+    }
+  }
+  throw new Error("withRetries failed");
+}
+
 export interface TokenBalance {
   token: TokenDef;
   rawAmount: bigint;
@@ -33,7 +51,7 @@ export async function readVaultAccount(
   connection: Connection,
   vaultPda: PublicKey,
 ): Promise<VaultInfo> {
-  const info = await connection.getAccountInfo(vaultPda, "confirmed");
+  const info = await withRetries(() => connection.getAccountInfo(vaultPda, "confirmed"));
   if (!info) throw new Error(`Vault PDA ${vaultPda.toBase58()} not found`);
 
   const data = info.data;
@@ -80,7 +98,7 @@ export async function getTokenBalances(
 
     let rawAmount = BigInt(0);
     try {
-      const resp = await connection.getTokenAccountBalance(ata, "confirmed");
+      const resp = await withRetries(() => connection.getTokenAccountBalance(ata, "confirmed"));
       rawAmount = BigInt(resp.value.amount);
     } catch {
       // ATA doesn't exist yet — balance is 0
@@ -102,9 +120,9 @@ type JupiterPriceResponse = Record<string, JupiterPriceEntry>;
 
 export async function fetchPrices(apiKey: string, mints: string[]): Promise<Map<string, number>> {
   const ids = mints.join(",");
-  const resp = await jupiterFetch<JupiterPriceResponse>(apiKey, `/price/v3?ids=${ids}`, {
+  const resp = await withRetries(() => jupiterFetch<JupiterPriceResponse>(apiKey, `/price/v3?ids=${ids}`, {
     method: "GET",
-  });
+  }));
 
   const prices = new Map<string, number>();
   for (const [mint, info] of Object.entries(resp)) {

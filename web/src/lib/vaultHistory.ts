@@ -65,7 +65,9 @@ export async function fetchVaultHistory(
   }
 
   const entries: VaultTxEntry[] = [];
-  const BATCH_SIZE = 30;
+  // Keep RPC concurrency conservative (Helius free tier is low RPS).
+  // This used to be 30 and easily triggers 429 bursts.
+  const BATCH_SIZE = 8;
 
   for (let i = 0; i < allSigs.length; i += BATCH_SIZE) {
     const batch = allSigs.slice(i, i + BATCH_SIZE);

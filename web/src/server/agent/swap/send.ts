@@ -23,7 +23,23 @@ export interface SendResult {
 export async function signAndSendTx(params: SignAndSendParams): Promise<SendResult> {
   const { connection, authority, ixs, alts } = params;
 
-  const latest = await connection.getLatestBlockhash("confirmed");
+  let latest: { blockhash: string; lastValidBlockHeight: number } | null = null;
+  let attempts = 0;
+  const maxAttempts = 3;
+
+  while (attempts < maxAttempts) {
+    try {
+      latest = await connection.getLatestBlockhash("confirmed");
+      break;
+    } catch (err) {
+      attempts++;
+      if (attempts >= maxAttempts) throw new Error(`failed to get recent blockhash after ${maxAttempts} attempts: ${err}`);
+      await new Promise(r => setTimeout(r, 1000 * attempts)); // Exponential backoff-ish
+    }
+  }
+
+  if (!latest) throw new Error("failed to get recent blockhash (unknown error)");
+
   const message = new TransactionMessage({
     payerKey: authority.publicKey,
     recentBlockhash: latest.blockhash,

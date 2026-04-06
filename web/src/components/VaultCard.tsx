@@ -151,6 +151,8 @@ export function VaultCard() {
           </div>
         </div>
 
+        <VaultAllocationChart assets={vaultAssets} totalUsd={vaultTotalUsd} />
+
         <div>
           <div className="text-sm font-medium mb-2">Holdings</div>
           {vaultAssets.length === 0 && !vaultAssetsLoading && (
@@ -229,8 +231,6 @@ export function VaultCard() {
             </div>
           )}
         </div>
-
-        <VaultAllocationChart assets={vaultAssets} totalUsd={vaultTotalUsd} />
 
         <div className="flex justify-between items-center mt-4 pt-4 border-t border-border">
           <span className="text-sm text-muted-foreground">Last Rebalance</span>

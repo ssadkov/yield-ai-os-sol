@@ -17,7 +17,7 @@ import {
 } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 
-/* ── helpers ────────────────────────────────────────────── */
+/* -- helpers ---------------------------------------------- */
 
 const ACTION_PROPOSAL_RE = /@@ACTION_PROPOSAL:(rebalance|convert_all)/;
 const ACTION_RESULT_RE = /^(✅|❌|⚠️)/;
@@ -47,7 +47,7 @@ function latestAssistantMessage(msgs: UIMessage[]): UIMessage | undefined {
   return undefined;
 }
 
-/* ── Action Card ────────────────────────────────────────── */
+/* -- Action Card ------------------------------------------ */
 
 function ActionProposalCard({
   text,
@@ -142,7 +142,7 @@ function ActionResultBubble({ text }: { text: string }) {
   );
 }
 
-/* ── Regular message bubble ─────────────────────────────── */
+/* -- Regular message bubble ------------------------------- */
 
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
@@ -175,11 +175,11 @@ function MessageBubble({ message }: { message: UIMessage }) {
   );
 }
 
-/* ── Chat transport ───────────────────────────────────── */
+/* -- Chat transport --------------------------------------- */
 
 const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
 
-/* ── Main component ───────────────────────────────────── */
+/* -- Main component --------------------------------------- */
 
 export function AIChat() {
   const { connection } = useConnection();
@@ -360,7 +360,7 @@ export function AIChat() {
     }
   };
 
-  /* ── Render message with type detection ─────────────── */
+  /* -- Render message with type detection ------------------- */
 
   const renderMessage = (msg: UIMessage) => {
     if (msg.role === "user") {
@@ -396,7 +396,7 @@ export function AIChat() {
     return <MessageBubble key={msg.id} message={msg} />;
   };
 
-  /* ── Layout ─────────────────────────────────────────── */
+  /* -- Layout ----------------------------------------------- */
 
   if (!publicKey) {
     return (

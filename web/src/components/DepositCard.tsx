@@ -318,7 +318,7 @@ export function DepositCard() {
         {busy
           ? "Processing..."
           : isDeposit
-            ? "Deposit USDC"
+            ? "Deposit USDC to AI agent wallet"
             : "Withdraw USDC"}
       </button>
 

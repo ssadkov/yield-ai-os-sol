@@ -15,19 +15,21 @@ export default function Home() {
         <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch min-h-0">
           {/* Left column — wallet */}
           <div className="space-y-6 min-h-0">
+            <DepositCard />
             <WalletAssetsCard />
           </div>
 
           {/* Center column — vault operations */}
           <div className="space-y-6 min-h-0">
             <CreateVaultCard />
-            <DepositCard />
             <VaultCard />
           </div>
 
           {/* Right column — chat */}
-          <div className="h-full min-h-0 lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-120px)]">
-            <AIChat />
+          <div className="flex flex-col gap-6 h-full min-h-0 lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-120px)]">
+            <div className="flex-1 min-h-0">
+              <AIChat />
+            </div>
           </div>
         </div>
       </main>

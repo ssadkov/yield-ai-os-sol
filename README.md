@@ -88,8 +88,8 @@ flowchart LR
   end
 
   VAULT -->|CPI invoke_signed| TOKEN
-  VAULT -->|CPI (whitelist)| JUPROUTER
-  VAULT -->|CPI (whitelist)| DEX
+  VAULT -->|CPI whitelist| JUPROUTER
+  VAULT -->|CPI whitelist| DEX
 ```
 
 ---

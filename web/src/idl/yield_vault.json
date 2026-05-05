@@ -157,6 +157,60 @@
       ]
     },
     {
+      "name": "execute_protocol_cpi",
+      "docs": [
+        "Generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:",
+        "`[program_id_account, ...accounts matching Instruction.accounts order for that program]`.",
+        "The vault PDA may sign as authority via seeds `[b\"vault\", owner.key(), bump]`."
+      ],
+      "discriminator": [
+        255,
+        29,
+        92,
+        60,
+        105,
+        188,
+        32,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.owner",
+                "account": "Vault"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
       "name": "execute_swap_cpi",
       "docs": [
         "CPI into a whitelisted program. Pass remaining accounts as:",
@@ -419,6 +473,10 @@
               }
             ]
           }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [

@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import type { AssetRow as AssetRowType } from "@/lib/portfolioAssets";
-import { USDC_MINT_STR } from "@/lib/constants";
-import { TrendingUp, X } from "lucide-react";
+import { SOL_MINT, USDC_MINT_STR } from "@/lib/constants";
+import { ArrowRightLeft, Loader2, TrendingUp, X } from "lucide-react";
 import { TokenChart } from "./TokenChart";
 
 function TokenIcon({ src, symbol }: { src?: string; symbol: string }) {
@@ -49,11 +49,17 @@ export function formatBalance(value: number, decimals: number): string {
 export function AssetRowItem({
   asset,
   highlighted,
+  onConvertToUsdc,
+  converting,
 }: {
   asset: AssetRowType;
   highlighted?: boolean;
+  onConvertToUsdc?: (asset: AssetRowType) => void | Promise<void>;
+  converting?: boolean;
 }) {
   const [showChart, setShowChart] = useState(false);
+  const canConvert =
+    asset.mint !== SOL_MINT && !isUsdcMint(asset.mint) && Boolean(onConvertToUsdc);
 
   return (
     <>
@@ -100,7 +106,23 @@ export function AssetRowItem({
             </span>
           )}
           
-          {/* Small chart button */}
+          {canConvert && (
+            <button
+              type="button"
+              onClick={() => onConvertToUsdc?.(asset)}
+              disabled={converting}
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md border border-border bg-background text-[10px] font-medium text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-1"
+              title="Convert this holding to USDC"
+            >
+              {converting ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <ArrowRightLeft className="w-3 h-3" />
+              )}
+              USDC
+            </button>
+          )}
+
           {!isUsdcMint(asset.mint) && (
             <button
               onClick={() => setShowChart(true)}

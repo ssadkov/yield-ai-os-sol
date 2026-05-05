@@ -31,6 +31,7 @@ export interface AssetRow {
   name: string;
   logoURI?: string;
   balance: number;
+  rawAmount: string;
   decimals: number;
   usdPrice: number | null;
   usdValue: number | null;
@@ -64,7 +65,7 @@ export async function fetchPortfolioAssets(
 
   interface RawToken {
     mint: string;
-    rawAmount: number;
+    rawAmount: string;
     decimals: number;
   }
   const rawTokens: RawToken[] = [];
@@ -75,8 +76,8 @@ export async function fetchPortfolioAssets(
     const parsed = (account as AccountInfo<ParsedAccountData>).data.parsed;
     const info = parsed?.info;
     if (!info) continue;
-    const rawAmount = Number(info.tokenAmount?.amount ?? "0");
-    if (rawAmount === 0) continue;
+    const rawAmount = String(info.tokenAmount?.amount ?? "0");
+    if (BigInt(rawAmount) === BigInt(0)) continue;
     const decimals: number = info.tokenAmount?.decimals ?? 0;
     const mint: string = info.mint;
     rawTokens.push({ mint, rawAmount, decimals });
@@ -101,6 +102,7 @@ export async function fetchPortfolioAssets(
       name: "Solana",
       logoURI: SOL_LOGO,
       balance: solBal,
+      rawAmount: String(solBalance),
       decimals: 9,
       usdPrice: solPrice,
       usdValue: solPrice !== null ? solBal * solPrice : null,
@@ -110,7 +112,7 @@ export async function fetchPortfolioAssets(
 
   for (const { mint, rawAmount, decimals } of rawTokens) {
     const meta = tokenMeta[mint];
-    const balance = rawAmount / 10 ** decimals;
+    const balance = Number(rawAmount) / 10 ** decimals;
     const priceData = prices[mint];
     const price = priceData?.usdPrice ?? fallbackUsdPrice(mint);
 
@@ -124,6 +126,7 @@ export async function fetchPortfolioAssets(
       name: meta?.name ?? fallbackName,
       logoURI: getTokenIcon(meta),
       balance,
+      rawAmount,
       decimals,
       usdPrice: price,
       usdValue: price !== null ? balance * price : null,

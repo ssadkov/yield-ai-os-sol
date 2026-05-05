@@ -9,8 +9,8 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { altsFromJupiter } from "./alts";
-import { encodeExecuteSwapCpiData } from "./anchorIx";
 import type { ApiInstruction, JupiterBuildResponse } from "./types";
+import { wrapProtocolCpiIx } from "../protocols/wrapCpi";
 
 const JUPITER_SWAP_V2_BASE = "/swap/v2";
 const COMPUTE_UNIT_LIMIT_MAX = 1_400_000;
@@ -65,29 +65,15 @@ function wrapAsExecuteSwapCpiIx(args: {
   vault: PublicKey;
   inner: ApiInstruction;
 }): TransactionInstruction {
-  const innerProgramId = new PublicKey(args.inner.programId);
-  const innerData = Buffer.from(args.inner.data, "base64");
-  const data = encodeExecuteSwapCpiData(innerData);
-
-  const innerKeys = args.inner.accounts.map((a) => {
-    const pubkey = new PublicKey(a.pubkey);
-    const isVaultPda = pubkey.equals(args.vault);
-    return {
-      pubkey,
-      isSigner: isVaultPda ? false : a.isSigner,
-      isWritable: a.isWritable,
-    };
-  });
-
-  return new TransactionInstruction({
-    programId: args.vaultProgramId,
-    keys: [
-      { pubkey: args.authority, isSigner: true, isWritable: true },
-      { pubkey: args.vault, isSigner: false, isWritable: true },
-      { pubkey: innerProgramId, isSigner: false, isWritable: false },
-      ...innerKeys,
-    ],
-    data,
+  return wrapProtocolCpiIx({
+    vaultProgramId: args.vaultProgramId,
+    authority: args.authority,
+    vault: args.vault,
+    inner: {
+      programId: args.inner.programId,
+      keys: args.inner.accounts,
+      data: args.inner.data,
+    },
   });
 }
 

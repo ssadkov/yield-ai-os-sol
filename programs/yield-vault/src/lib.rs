@@ -6,6 +6,8 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s");
 
+const MAX_ALLOWED_PROGRAMS: usize = 64;
+
 #[program]
 pub mod yield_vault {
     use super::*;
@@ -16,7 +18,10 @@ pub mod yield_vault {
         strategy: Strategy,
         allowed_programs: Vec<Pubkey>,
     ) -> Result<()> {
-        require!(allowed_programs.len() <= 16, ErrorCode::TooManyPrograms);
+        require!(
+            allowed_programs.len() <= MAX_ALLOWED_PROGRAMS,
+            ErrorCode::TooManyPrograms
+        );
         let vault = &mut ctx.accounts.vault;
         vault.bump = ctx.bumps.vault;
         vault.owner = ctx.accounts.owner.key();
@@ -31,7 +36,10 @@ pub mod yield_vault {
         ctx: Context<SetAllowedPrograms>,
         allowed_programs: Vec<Pubkey>,
     ) -> Result<()> {
-        require!(allowed_programs.len() <= 16, ErrorCode::TooManyPrograms);
+        require!(
+            allowed_programs.len() <= MAX_ALLOWED_PROGRAMS,
+            ErrorCode::TooManyPrograms
+        );
         let vault = &mut ctx.accounts.vault;
         vault.allowed_programs = allowed_programs;
         Ok(())
@@ -120,8 +128,51 @@ pub mod yield_vault {
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
             .map(|a| {
-                // Outer tx cannot include a PDA signature; Jupiter still expects the taker PDA as a
-                // signer on the inner ix. `invoke_signed` authorizes the vault PDA via seeds.
+                // Outer tx cannot include a PDA signature; the inner protocol ix may still
+                // expect the vault PDA as a signer. `invoke_signed` authorizes it via seeds.
+                let is_signer = a.key() == vault_key || a.is_signer;
+                if a.is_writable {
+                    AccountMeta::new(a.key(), is_signer)
+                } else {
+                    AccountMeta::new_readonly(a.key(), is_signer)
+                }
+            })
+            .collect();
+        let ix = Instruction {
+            program_id,
+            accounts: account_metas,
+            data,
+        };
+        let seeds: &[&[u8]] = &[b"vault", vault.owner.as_ref(), &[vault.bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+        invoke_signed(&ix, rem, signer)?;
+        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        Ok(())
+    }
+
+    /// Generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:
+    /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
+    /// The vault PDA may sign as authority via seeds `[b"vault", owner.key(), bump]`.
+    pub fn execute_protocol_cpi(ctx: Context<ExecuteProtocol>, data: Vec<u8>) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        require!(
+            ctx.accounts.authority.key() == vault.agent
+                || ctx.accounts.authority.key() == vault.owner,
+            ErrorCode::Unauthorized
+        );
+        let rem = ctx.remaining_accounts;
+        require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
+        let program_id = rem[0].key();
+        require!(
+            vault.allowed_programs.iter().any(|p| *p == program_id),
+            ErrorCode::ProgramNotWhitelisted
+        );
+        let vault_key = vault.key();
+        let account_metas: Vec<AccountMeta> = rem[1..]
+            .iter()
+            .map(|a| {
+                // Outer tx cannot include a PDA signature; the inner protocol ix may still
+                // expect the vault PDA as a signer. `invoke_signed` authorizes it via seeds.
                 let is_signer = a.key() == vault_key || a.is_signer;
                 if a.is_writable {
                     AccountMeta::new(a.key(), is_signer)
@@ -158,7 +209,7 @@ pub struct Vault {
     pub agent: Pubkey,
     pub strategy: Strategy,
     pub last_rebalance_ts: i64,
-    #[max_len(16)]
+    #[max_len(64)]
     pub allowed_programs: Vec<Pubkey>,
 }
 
@@ -196,8 +247,12 @@ pub struct SetAllowedPrograms<'info> {
         seeds = [b"vault", owner.key().as_ref()],
         bump = vault.bump,
         has_one = owner,
+        realloc = 8 + Vault::INIT_SPACE,
+        realloc::payer = owner,
+        realloc::zero = false,
     )]
     pub vault: Account<'info, Vault>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -283,6 +338,18 @@ pub struct WithdrawSpl<'info> {
 
 #[derive(Accounts)]
 pub struct ExecuteSwap<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", vault.owner.as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Account<'info, Vault>,
+}
+
+#[derive(Accounts)]
+pub struct ExecuteProtocol<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     #[account(

@@ -36,8 +36,8 @@ function parseAllowedPrograms(): PublicKey[] {
   const raw = process.env.ALLOWED_PROGRAMS?.trim();
   if (!raw) return [];
   const parts = raw.split(/[\s,]+/).filter(Boolean);
-  if (parts.length > 16) {
-    throw new Error("ALLOWED_PROGRAMS: at most 16 program ids (on-chain limit).");
+  if (parts.length > 64) {
+    throw new Error("ALLOWED_PROGRAMS: at most 64 program ids (on-chain limit).");
   }
   return parts.map((s) => new PublicKey(s));
 }
@@ -140,6 +140,7 @@ async function main() {
         .accounts({
           owner: owner.publicKey,
           vault: vaultPda,
+          systemProgram: SystemProgram.programId,
         })
         .rpc();
       console.log("set_allowed_programs:", sig);

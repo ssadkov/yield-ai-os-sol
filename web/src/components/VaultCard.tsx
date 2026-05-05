@@ -8,7 +8,7 @@ import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
 import { VaultAllocationChart } from "@/components/VaultAllocationChart";
-import { deriveVaultPda, type StrategyName } from "@/lib/vault";
+import { deriveVaultPda, getMissingDefaultAllowedPrograms, type StrategyName } from "@/lib/vault";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 
 const COLLAPSED_COUNT = 7;
@@ -30,8 +30,17 @@ const strategyHelp: Record<StrategyName, string> = {
 
 export function VaultCard() {
   const { publicKey } = useWallet();
-  const { vault, strategyName, txPending, error, lastTxSig, refresh, loading } = useVault();
-  const { rebalance, approveWhitelist, rebalancing, result: rebalanceResult, error: rebalanceError, needsWhitelist } = useRebalance();
+  const { vault, strategyName, txPending, error, lastTxSig, refresh, loading, updateAllowlist } = useVault();
+  const {
+    rebalance,
+    convertAssetToUsdc,
+    approveWhitelist,
+    rebalancing,
+    convertingMint,
+    result: rebalanceResult,
+    error: rebalanceError,
+    needsWhitelist,
+  } = useRebalance();
   const [holdingsExpanded, setHoldingsExpanded] = useState(false);
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
@@ -74,6 +83,8 @@ export function VaultCard() {
   const lastRebalance = vault.lastRebalanceTs
     ? vault.lastRebalanceTs.toNumber()
     : 0;
+  const missingDefaultPrograms = getMissingDefaultAllowedPrograms(vault);
+  const allowlistNeedsUpdate = missingDefaultPrograms.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -167,6 +178,8 @@ export function VaultCard() {
                 key={asset.mint}
                 asset={asset}
                 highlighted={isUsdcMint(asset.mint)}
+                onConvertToUsdc={convertAssetToUsdc}
+                converting={convertingMint === asset.mint}
               />
             ))}
           </div>
@@ -238,6 +251,28 @@ export function VaultCard() {
         </div>
       </div>
 
+      {allowlistNeedsUpdate && (
+        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">Protocol access update</div>
+              <div className="text-xs text-muted-foreground">
+                Your vault is missing {missingDefaultPrograms.length} program
+                {missingDefaultPrograms.length === 1 ? "" : "s"} required for current swap and lending actions.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={updateAllowlist}
+              disabled={txPending}
+              className="cursor-pointer shrink-0 text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {txPending ? "Updating..." : "Update"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="text-sm text-destructive mt-3 p-2 bg-destructive/10 rounded">
           {error}
@@ -262,16 +297,16 @@ export function VaultCard() {
         <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
           <div className="text-sm font-medium">One-time setup required</div>
           <div className="text-xs text-muted-foreground">
-            Your vault needs to whitelist Jupiter swap programs before the agent
-            can rebalance. This is a one-time on-chain transaction that you sign
-            as the vault owner. After this, all rebalances are fully automatic.
+            Your vault needs to whitelist programs required by this route before
+            the agent can execute it. This is a one-time on-chain transaction
+            that you sign as the vault owner.
           </div>
           <button
             onClick={approveWhitelist}
             disabled={rebalancing}
             className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {rebalancing ? "Approving..." : "Approve & Rebalance"}
+            {rebalancing ? "Approving..." : "Approve & Retry"}
           </button>
         </div>
       )}

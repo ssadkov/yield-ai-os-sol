@@ -72,11 +72,11 @@ export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
 }
 
 /**
- * Known program IDs that Jupiter routes through.
- * Pre-populated in the vault whitelist so agent can execute swaps immediately.
- * Max 16 entries on-chain; these cover Jupiter v6 + common AMM programs.
+ * Known program IDs the vault may CPI into.
+ * Max 64 entries on-chain; keep this list merged with existing vault entries
+ * when updating, because set_allowed_programs rewrites the whole list.
  */
-const JUPITER_WHITELIST: PublicKey[] = [
+export const DEFAULT_ALLOWED_PROGRAMS: PublicKey[] = [
   "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  // Jupiter Aggregator v6
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",   // SPL Token
   "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",   // Token-2022
@@ -89,7 +89,26 @@ const JUPITER_WHITELIST: PublicKey[] = [
   "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY",   // Phoenix
   "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX",    // Serum/OpenBook
   "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb",   // OpenBook v2
+  "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9",   // Jupiter Earn
+  "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi",   // Jupiter Borrow
+  "11111111111111111111111111111111",              // System Program
 ].map((s) => new PublicKey(s));
+
+export function mergeAllowedPrograms(
+  existing: PublicKey[],
+  required: PublicKey[] = DEFAULT_ALLOWED_PROGRAMS,
+): PublicKey[] {
+  const merged = new Map<string, PublicKey>();
+  for (const p of existing) merged.set(p.toBase58(), p);
+  for (const p of required) merged.set(p.toBase58(), p);
+  return [...merged.values()];
+}
+
+export function getMissingDefaultAllowedPrograms(vault: VaultAccount | null): PublicKey[] {
+  if (!vault) return [];
+  const existing = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
+  return DEFAULT_ALLOWED_PROGRAMS.filter((p) => !existing.has(p.toBase58()));
+}
 
 export async function initializeVault(
   provider: AnchorProvider,
@@ -99,7 +118,7 @@ export async function initializeVault(
   const owner = provider.wallet.publicKey;
 
   const sig = await program.methods
-    .initialize(AGENT_PUBKEY, strategyArg(strategy), JUPITER_WHITELIST)
+    .initialize(AGENT_PUBKEY, strategyArg(strategy), DEFAULT_ALLOWED_PROGRAMS)
     .accounts({
       owner,
       usdcMint: USDC_MINT,
@@ -166,12 +185,16 @@ export async function setAllowedPrograms(
   provider: AnchorProvider,
   programs: PublicKey[],
 ) {
+  if (programs.length > 64) {
+    throw new Error("Allowed program list cannot exceed 64 entries");
+  }
+
   const program = getProgram(provider);
   const owner = provider.wallet.publicKey;
 
   const sig = await program.methods
     .setAllowedPrograms(programs)
-    .accounts({ owner })
+    .accounts({ owner, systemProgram: SystemProgram.programId })
     .rpc();
 
   return sig;

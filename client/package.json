@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "list-vaults": "tsx src/listVaults.ts",
     "smoke": "tsx src/smoke.ts"
   },
   "engines": {

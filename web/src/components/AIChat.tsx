@@ -505,7 +505,7 @@ const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
 
 /* -- Main component --------------------------------------- */
 
-export function AIChat() {
+export function AIChat({ compact = false }: { compact?: boolean }) {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { publicKey, signTransaction, signAllTransactions } = wallet;
@@ -777,7 +777,11 @@ export function AIChat() {
   /* -- Layout ----------------------------------------------- */
 
   return (
-    <div className="rounded-lg border border-border bg-card flex flex-col h-full min-h-[420px] lg:min-h-0">
+    <div
+      className={`rounded-lg border border-border bg-card flex flex-col ${
+        compact ? "h-[420px] lg:h-[460px]" : "h-full min-h-[420px] lg:min-h-0"
+      }`}
+    >
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">AI Chat</h3>
       </div>
@@ -815,23 +819,23 @@ export function AIChat() {
         className="flex-1 min-h-0 overflow-auto p-4 space-y-3 scrollbar-pretty"
       >
         {messages.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center p-6 text-center">
-            <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+          <div className="h-full flex flex-col items-center justify-center p-4 text-center">
+            <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center mb-3">
               <span className="text-2xl">🤖</span>
             </div>
-            <h4 className="text-lg font-semibold mb-2">How can I help you?</h4>
-            <p className="text-sm text-muted-foreground mb-8 max-w-[280px]">
+            <h4 className="text-base font-semibold mb-1.5">How can I help you?</h4>
+            <p className="text-xs text-muted-foreground mb-4 max-w-[280px]">
               Ask me about your strategy, portfolio, or request a rebalance.
             </p>
             
-            <div className="flex flex-col gap-3 w-full max-w-[320px]">
+            <div className="flex flex-col gap-2 w-full max-w-[320px]">
               {hints.map((hint, i) => (
                 <button
                   key={i}
                   type="button"
                   onClick={() => handleHintClick(hint.prompt)}
                   disabled={isLoading}
-                  className="w-full cursor-pointer text-sm font-medium px-4 py-3 rounded-xl border border-primary/20 bg-background text-foreground hover:bg-primary/10 hover:border-primary/40 transition-all shadow-sm disabled:opacity-50"
+                  className="w-full cursor-pointer text-xs font-medium px-3 py-2 rounded-lg border border-primary/20 bg-background text-foreground hover:bg-primary/10 hover:border-primary/40 transition-all shadow-sm disabled:opacity-50"
                 >
                   {hint.label}
                 </button>

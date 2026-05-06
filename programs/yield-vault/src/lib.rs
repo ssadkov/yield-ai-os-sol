@@ -3,6 +3,10 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_interface::{
+    self, Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
+    TransferChecked,
+};
 
 declare_id!("3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s");
 
@@ -60,6 +64,30 @@ pub mod yield_vault {
         Ok(())
     }
 
+    /// Owner deposits any SPL Token or Token-2022 mint into a vault-owned ATA.
+    /// This is the generic asset ingress path for assets such as cbBTC and xStocks.
+    pub fn deposit_spl<'info>(
+        ctx: Context<'_, '_, '_, 'info, DepositSpl<'info>>,
+        amount: u64,
+    ) -> Result<()> {
+        require!(amount > 0, ErrorCode::ZeroAmount);
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.owner_token_ata.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.vault_token_ata.to_account_info(),
+                    authority: ctx.accounts.owner.to_account_info(),
+                },
+            )
+            .with_remaining_accounts(ctx.remaining_accounts.to_vec()),
+            amount,
+            ctx.accounts.mint.decimals,
+        )?;
+        Ok(())
+    }
+
     /// Owner pulls USDC from the vault ATA. Authority on the vault token account is the vault PDA (`invoke_signed`).
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
@@ -86,23 +114,29 @@ pub mod yield_vault {
     /// The vault must already hold a token account for `mint` (e.g. created by a prior swap or `createAssociatedTokenAccount`).
     /// For the mint used at `initialize`, `withdraw` is equivalent but uses ATA constraints; this instruction accepts any
     /// vault token account whose authority is the vault PDA.
-    pub fn withdraw_spl(ctx: Context<WithdrawSpl>, amount: u64) -> Result<()> {
+    pub fn withdraw_spl<'info>(
+        ctx: Context<'_, '_, '_, 'info, WithdrawSpl<'info>>,
+        amount: u64,
+    ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
         let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
         let signer: &[&[&[u8]]] = &[seeds];
-        token::transfer(
+        token_interface::transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
-                Transfer {
+                TransferChecked {
                     from: ctx.accounts.vault_token_ata.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
                     to: ctx.accounts.owner_token_ata.to_account_info(),
                     authority: ctx.accounts.vault.to_account_info(),
                 },
                 signer,
-            ),
+            )
+            .with_remaining_accounts(ctx.remaining_accounts.to_vec()),
             amount,
+            ctx.accounts.mint.decimals,
         )?;
         Ok(())
     }
@@ -281,6 +315,38 @@ pub struct Deposit<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct DepositSpl<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+    pub mint: InterfaceAccount<'info, InterfaceMint>,
+    #[account(
+        mut,
+        associated_token::mint = mint,
+        associated_token::authority = owner,
+        associated_token::token_program = token_program,
+    )]
+    pub owner_token_ata: InterfaceAccount<'info, InterfaceTokenAccount>,
+    #[account(
+        init_if_needed,
+        payer = owner,
+        associated_token::mint = mint,
+        associated_token::authority = vault,
+        associated_token::token_program = token_program,
+    )]
+    pub vault_token_ata: InterfaceAccount<'info, InterfaceTokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
@@ -320,20 +386,25 @@ pub struct WithdrawSpl<'info> {
         has_one = owner,
     )]
     pub vault: Account<'info, Vault>,
-    pub mint: Account<'info, Mint>,
+    pub mint: InterfaceAccount<'info, InterfaceMint>,
+    #[account(
+        init_if_needed,
+        payer = owner,
+        associated_token::mint = mint,
+        associated_token::authority = owner,
+        associated_token::token_program = token_program,
+    )]
+    pub owner_token_ata: InterfaceAccount<'info, InterfaceTokenAccount>,
     #[account(
         mut,
-        token::mint = mint,
-        token::authority = owner,
+        associated_token::mint = mint,
+        associated_token::authority = vault,
+        associated_token::token_program = token_program,
     )]
-    pub owner_token_ata: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = mint,
-        token::authority = vault,
-    )]
-    pub vault_token_ata: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub vault_token_ata: InterfaceAccount<'info, InterfaceTokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

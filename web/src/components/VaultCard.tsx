@@ -4,12 +4,15 @@ import { useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
+import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";
 import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
 import { VaultAllocationChart } from "@/components/VaultAllocationChart";
 import { deriveVaultPda, getMissingDefaultAllowedPrograms, type StrategyName } from "@/lib/vault";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
+import { USDC_DECIMALS, USDC_MINT_STR } from "@/lib/constants";
+import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 
 const COLLAPSED_COUNT = 7;
 
@@ -20,6 +23,41 @@ function orbExplorerUrl(vaultAddress: string): string {
 function formatTimestamp(ts: number): string {
   if (ts === 0) return "Never";
   return new Date(ts * 1000).toLocaleString();
+}
+
+function formatTokenAmount(value: number | null): string {
+  if (value === null) return "—";
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 6,
+  });
+}
+
+function formatApy(value: string | null): string | null {
+  if (!value) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `${(n * 100).toFixed(2)}% APY`;
+}
+
+function decodeDisplayName(value: unknown): string {
+  if (typeof value === "string") return value.replace(/\0+$/, "");
+  if (Array.isArray(value) && value.every((item) => typeof item === "number")) {
+    return String.fromCharCode(...value).replace(/\0+$/, "");
+  }
+  return "Kamino kVault";
+}
+
+function usdcToRawAmount(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) return "0";
+  const [whole, fractional = ""] = normalized.split(".");
+  const paddedFractional = fractional.padEnd(USDC_DECIMALS, "0").slice(0, USDC_DECIMALS);
+  return `${whole || "0"}${paddedFractional}`.replace(/^0+(?=\d)/, "") || "0";
+}
+
+function formatAmount(value: number): string {
+  return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 const strategyHelp: Record<StrategyName, string> = {
@@ -34,6 +72,7 @@ export function VaultCard() {
   const {
     rebalance,
     convertAssetToUsdc,
+    swapVaultAsset,
     approveWhitelist,
     rebalancing,
     convertingMint,
@@ -42,6 +81,10 @@ export function VaultCard() {
     needsWhitelist,
   } = useRebalance();
   const [holdingsExpanded, setHoldingsExpanded] = useState(false);
+  const [kaminoWithdrawVault, setKaminoWithdrawVault] = useState<string | null>(null);
+  const [kaminoWithdrawError, setKaminoWithdrawError] = useState<string | null>(null);
+  const [buyTargetMint, setBuyTargetMint] = useState(VAULT_DEPOSIT_ASSETS.find((asset) => asset.symbol === "SPYx")?.mint ?? "");
+  const [buyAmount, setBuyAmount] = useState("");
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -57,16 +100,79 @@ export function VaultCard() {
     loading: pnlLoading,
     refresh: refreshPnl,
   } = useVaultPnl(vaultAssetsLoading ? null : vaultTotalUsd);
+  const {
+    positions: kaminoPositions,
+    loading: kaminoPositionsLoading,
+    error: kaminoPositionsError,
+    refresh: refreshKaminoPositions,
+  } = useKaminoKvaultPositions(publicKey);
 
   const handleRefreshAll = async () => {
-    await Promise.all([refresh(), refreshVaultAssets(), refreshPnl()]);
+    await Promise.all([refresh(), refreshVaultAssets(), refreshPnl(), refreshKaminoPositions()]);
+  };
+
+  const handleKaminoWithdraw = async (position: (typeof kaminoPositions)[number]) => {
+    if (!publicKey) return;
+    setKaminoWithdrawVault(position.vaultAddress);
+    setKaminoWithdrawError(null);
+    try {
+      const res = await fetch("/api/kamino/kvault/withdraw", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: publicKey.toBase58(),
+          kvault: position.vaultAddress,
+          amount: position.totalShares,
+        }),
+      });
+      const data = (await res.json()) as { status?: string; error?: string; missingPrograms?: string[] };
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.error ?? `Kamino withdraw failed (${res.status})`);
+      }
+      if (data.status === "needs_whitelist") {
+        throw new Error("Vault allowlist needs an update before Kamino withdraw can run.");
+      }
+      await handleRefreshAll();
+    } catch (err: unknown) {
+      setKaminoWithdrawError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setKaminoWithdrawVault(null);
+    }
   };
 
   const holdingsVisible = holdingsExpanded
-    ? vaultAssets
-    : vaultAssets.slice(0, COLLAPSED_COUNT);
-  const holdingsHiddenCount = vaultAssets.length - COLLAPSED_COUNT;
-  const holdingsHasMore = vaultAssets.length > COLLAPSED_COUNT;
+    ? vaultAssets.filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint))
+    : vaultAssets
+        .filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint))
+        .slice(0, COLLAPSED_COUNT);
+  const visibleVaultAssets = vaultAssets.filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint));
+  const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
+  const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
+  const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
+  const vaultUsdc = vaultUsdcAsset?.balance ?? 0;
+  const buyTargets = VAULT_DEPOSIT_ASSETS.filter((asset) => asset.mint !== USDC_MINT_STR);
+  const selectedBuyTarget = buyTargets.find((asset) => asset.mint === buyTargetMint) ?? buyTargets[0];
+  const buyAmountNumber = Number(buyAmount);
+  const buyAmountInvalid =
+    !buyAmount ||
+    !Number.isFinite(buyAmountNumber) ||
+    buyAmountNumber <= 0 ||
+    buyAmountNumber > vaultUsdc;
+  const setBuyPercent = (pct: number) => {
+    if (vaultUsdc <= 0) return;
+    setBuyAmount(formatAmount(vaultUsdc * pct));
+  };
+  const handleBuyAsset = async () => {
+    if (!selectedBuyTarget || buyAmountInvalid) return;
+    await swapVaultAsset({
+      inputMint: USDC_MINT_STR,
+      outputMint: selectedBuyTarget.mint,
+      amount: usdcToRawAmount(buyAmount),
+      amountUsd: buyAmountNumber,
+    });
+    setBuyAmount("");
+    await handleRefreshAll();
+  };
 
   if (!publicKey) return null;
 
@@ -164,6 +270,72 @@ export function VaultCard() {
 
         <VaultAllocationChart assets={vaultAssets} totalUsd={vaultTotalUsd} />
 
+        <div className="rounded-md border border-border bg-accent/25 p-3">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <div className="text-sm font-medium">Trade</div>
+              <div className="text-[11px] text-muted-foreground">
+                Buy approved assets with vault USDC
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[11px] text-muted-foreground">Vault USDC</div>
+              <div className="text-xs font-mono">{formatAmount(vaultUsdc)}</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
+            <select
+              value={selectedBuyTarget?.mint ?? ""}
+              onChange={(e) => setBuyTargetMint(e.target.value)}
+              className="rounded-md border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            >
+              {buyTargets.map((asset) => (
+                <option key={asset.mint} value={asset.mint}>
+                  {asset.symbol} - {asset.name}
+                </option>
+              ))}
+            </select>
+            <div className="relative">
+              <input
+                type="text"
+                inputMode="decimal"
+                min="0"
+                value={buyAmount}
+                onChange={(e) => {
+                  const next = e.target.value.replace(",", ".");
+                  if (/^\d*\.?\d*$/.test(next)) setBuyAmount(next);
+                }}
+                placeholder="USDC amount"
+                className="w-full rounded-md border border-border bg-card px-3 py-2 pr-14 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                USDC
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleBuyAsset()}
+              disabled={rebalancing || buyAmountInvalid}
+              className="cursor-pointer rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {rebalancing ? "Trading..." : "Buy"}
+            </button>
+          </div>
+          <div className="mt-2 flex gap-1">
+            {[0.25, 0.5, 1].map((pct) => (
+              <button
+                key={pct}
+                type="button"
+                onClick={() => setBuyPercent(pct)}
+                disabled={rebalancing || vaultUsdc <= 0}
+                className="cursor-pointer text-[11px] px-2 py-0.5 rounded border border-border bg-card text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pct === 1 ? "MAX" : `${Math.round(pct * 100)}%`}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div>
           <div className="text-sm font-medium mb-2">Holdings</div>
           {vaultAssets.length === 0 && !vaultAssetsLoading && (
@@ -193,6 +365,55 @@ export function VaultCard() {
                 ? "Show less"
                 : `Show ${holdingsHiddenCount} more tokens`}
             </button>
+          )}
+          {(kaminoPositions.length > 0 || kaminoPositionsLoading || kaminoPositionsError) && (
+            <div className="mt-3 rounded-md border border-border bg-accent/25 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="text-sm font-medium">Kamino Earn</div>
+                {kaminoPositionsLoading && (
+                  <span className="text-[11px] text-muted-foreground">Loading...</span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {kaminoPositions.map((position) => (
+                  <div
+                    key={position.vaultAddress}
+                    className="flex items-start justify-between gap-3 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{decodeDisplayName(position.vaultName)}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {formatApy(position.apy) ?? "Kamino kVault"} · {position.totalShares} shares
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono">
+                        {formatTokenAmount(position.underlyingAmount)} USDC
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {formatUsd(position.underlyingUsd)}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleKaminoWithdraw(position)}
+                        disabled={kaminoWithdrawVault !== null}
+                        className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {kaminoWithdrawVault === position.vaultAddress
+                          ? "Withdrawing..."
+                          : "Withdraw to vault"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {kaminoWithdrawError && (
+                <div className="mt-2 text-xs text-destructive">{kaminoWithdrawError}</div>
+              )}
+              {kaminoPositionsError && (
+                <div className="mt-2 text-xs text-destructive">{kaminoPositionsError}</div>
+              )}
+            </div>
           )}
           {!vaultAssetsLoading && (
             <div className="mt-3 pt-3 border-t border-border space-y-2">

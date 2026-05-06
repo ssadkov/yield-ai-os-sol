@@ -158,6 +158,42 @@ export function useRebalance() {
     [publicKey, callIndividualSwapApi, handleResult],
   );
 
+  const swapVaultAsset = useCallback(
+    async (args: {
+      inputMint: string;
+      outputMint: string;
+      amount: string;
+      amountUsd: number;
+    }) => {
+      if (!publicKey || BigInt(args.amount) === BigInt(0)) return;
+
+      setRebalancing(true);
+      setError(null);
+      setResult(null);
+      setNeedsWhitelist(false);
+
+      const action: Extract<PendingAction, { kind: "individual_swap" }> = {
+        kind: "individual_swap",
+        inputMint: args.inputMint,
+        outputMint: args.outputMint,
+        amount: args.amount,
+        amountUsd: args.amountUsd,
+      };
+
+      try {
+        setPendingAction(action);
+        const data = await callIndividualSwapApi(action);
+        handleResult(data);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+      } finally {
+        setRebalancing(false);
+      }
+    },
+    [publicKey, callIndividualSwapApi, handleResult],
+  );
+
   const approveWhitelist = useCallback(async () => {
     if (!pendingPrograms.length) return;
     setRebalancing(true);
@@ -197,6 +233,7 @@ export function useRebalance() {
   return {
     rebalance,
     convertAssetToUsdc,
+    swapVaultAsset,
     approveWhitelist,
     rebalancing,
     convertingMint,

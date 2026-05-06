@@ -1,12 +1,15 @@
 import { Program, AnchorProvider, type Idl, BN } from "@coral-xyz/anchor";
 import {
+  type AccountMeta,
   PublicKey,
   Connection,
   SystemProgram,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  createTransferCheckedWithTransferHookInstruction,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
 import { PROGRAM_ID, USDC_MINT, AGENT_PUBKEY } from "./constants";
@@ -91,6 +94,9 @@ export const DEFAULT_ALLOWED_PROGRAMS: PublicKey[] = [
   "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb",   // OpenBook v2
   "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9",   // Jupiter Earn
   "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi",   // Jupiter Borrow
+  "KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd",   // Kamino kVault
+  "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",   // Kamino Lend
+  "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr",  // Kamino Farms
   "11111111111111111111111111111111",              // System Program
 ].map((s) => new PublicKey(s));
 
@@ -179,6 +185,141 @@ export async function withdrawUsdc(
     .rpc();
 
   return sig;
+}
+
+export async function depositSpl(
+  provider: AnchorProvider,
+  mint: PublicKey,
+  amount: number | string | BN,
+  tokenProgram?: PublicKey,
+  remainingAccounts?: AccountMeta[],
+) {
+  const program = getProgram(provider);
+  const owner = provider.wallet.publicKey;
+  const [vaultPda] = deriveVaultPda(owner);
+  const resolvedTokenProgram =
+    tokenProgram ?? (await resolveMintTokenProgram(provider.connection, mint));
+
+  const ownerAta = await getAssociatedTokenAddress(mint, owner, false, resolvedTokenProgram);
+  const vaultAta = await getAssociatedTokenAddress(mint, vaultPda, true, resolvedTokenProgram);
+  const extraAccounts =
+    remainingAccounts ??
+    (await resolveTransferHookAccounts({
+      connection: provider.connection,
+      source: ownerAta,
+      mint,
+      destination: vaultAta,
+      owner,
+      amount,
+      tokenProgram: resolvedTokenProgram,
+    }));
+
+  const sig = await program.methods
+    .depositSpl(new BN(amount))
+    .accounts({
+      owner,
+      mint,
+      ownerTokenAta: ownerAta,
+      vaultTokenAta: vaultAta,
+      tokenProgram: resolvedTokenProgram,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(extraAccounts)
+    .rpc();
+
+  return sig;
+}
+
+export async function withdrawSpl(
+  provider: AnchorProvider,
+  mint: PublicKey,
+  amount: number | string | BN,
+  tokenProgram?: PublicKey,
+  remainingAccounts?: AccountMeta[],
+) {
+  const program = getProgram(provider);
+  const owner = provider.wallet.publicKey;
+  const [vaultPda] = deriveVaultPda(owner);
+  const resolvedTokenProgram =
+    tokenProgram ?? (await resolveMintTokenProgram(provider.connection, mint));
+
+  const ownerAta = await getAssociatedTokenAddress(mint, owner, false, resolvedTokenProgram);
+  const vaultAta = await getAssociatedTokenAddress(mint, vaultPda, true, resolvedTokenProgram);
+  const extraAccounts =
+    remainingAccounts ??
+    (await resolveTransferHookAccounts({
+      connection: provider.connection,
+      source: vaultAta,
+      mint,
+      destination: ownerAta,
+      owner: vaultPda,
+      amount,
+      tokenProgram: resolvedTokenProgram,
+    }));
+
+  const sig = await program.methods
+    .withdrawSpl(new BN(amount))
+    .accounts({
+      owner,
+      mint,
+      ownerTokenAta: ownerAta,
+      vaultTokenAta: vaultAta,
+      tokenProgram: resolvedTokenProgram,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .remainingAccounts(extraAccounts)
+    .rpc();
+
+  return sig;
+}
+
+export function tokenProgramForAsset(isToken2022?: boolean): PublicKey {
+  return isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+}
+
+export async function resolveMintTokenProgram(
+  connection: Connection,
+  mint: PublicKey,
+): Promise<PublicKey> {
+  const account = await connection.getAccountInfo(mint);
+  if (!account) throw new Error(`Mint account not found: ${mint.toBase58()}`);
+  if (account.owner.equals(TOKEN_PROGRAM_ID)) return TOKEN_PROGRAM_ID;
+  if (account.owner.equals(TOKEN_2022_PROGRAM_ID)) return TOKEN_2022_PROGRAM_ID;
+  throw new Error(`Unsupported token program for mint ${mint.toBase58()}: ${account.owner.toBase58()}`);
+}
+
+function amountToBigInt(amount: number | string | BN): bigint {
+  if (BN.isBN(amount)) return BigInt(amount.toString());
+  return BigInt(amount);
+}
+
+async function resolveTransferHookAccounts(args: {
+  connection: Connection;
+  source: PublicKey;
+  mint: PublicKey;
+  destination: PublicKey;
+  owner: PublicKey;
+  amount: number | string | BN;
+  tokenProgram: PublicKey;
+}): Promise<AccountMeta[]> {
+  const ix = await createTransferCheckedWithTransferHookInstruction(
+    args.connection,
+    args.source,
+    args.mint,
+    args.destination,
+    args.owner,
+    amountToBigInt(args.amount),
+    0,
+    [],
+    "confirmed",
+    args.tokenProgram,
+  );
+  const baseKeys = new Set(
+    [args.source, args.mint, args.destination, args.owner].map((p) => p.toBase58()),
+  );
+  return ix.keys.filter((meta) => !baseKeys.has(meta.pubkey.toBase58()));
 }
 
 export async function setAllowedPrograms(

@@ -6,6 +6,7 @@ import { CreateVaultCard } from "@/components/CreateVaultCard";
 import { DepositCard } from "@/components/DepositCard";
 import { VaultCard } from "@/components/VaultCard";
 import { AIChat } from "@/components/AIChat";
+import { EarnIdeasCards } from "@/components/EarnIdeasCards";
 
 export default function Home() {
   return (
@@ -26,10 +27,9 @@ export default function Home() {
           </div>
 
           {/* Right column — chat */}
-          <div className="flex flex-col gap-6 h-full min-h-0 lg:sticky lg:top-6 lg:self-start lg:h-[calc(100vh-120px)]">
-            <div className="flex-1 min-h-0">
-              <AIChat />
-            </div>
+          <div className="space-y-4 min-h-0 lg:sticky lg:top-6 lg:self-start">
+            <EarnIdeasCards />
+            <AIChat compact />
           </div>
         </div>
       </main>

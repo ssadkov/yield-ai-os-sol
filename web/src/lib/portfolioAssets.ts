@@ -44,6 +44,7 @@ export interface AssetRow {
 
 export interface FetchOptions {
   includeSol?: boolean;
+  includeZero?: boolean;
 }
 
 export async function fetchPortfolioAssets(
@@ -51,7 +52,7 @@ export async function fetchPortfolioAssets(
   owner: PublicKey,
   opts: FetchOptions = {}
 ): Promise<{ assets: AssetRow[]; totalUsd: number }> {
-  const { includeSol = true } = opts;
+  const { includeSol = true, includeZero = false } = opts;
 
   const [solBalance, splAccounts, token2022Accounts] = await Promise.all([
     includeSol ? connection.getBalance(owner) : Promise.resolve(0),
@@ -77,7 +78,7 @@ export async function fetchPortfolioAssets(
     const info = parsed?.info;
     if (!info) continue;
     const rawAmount = String(info.tokenAmount?.amount ?? "0");
-    if (BigInt(rawAmount) === BigInt(0)) continue;
+    if (!includeZero && BigInt(rawAmount) === BigInt(0)) continue;
     const decimals: number = info.tokenAmount?.decimals ?? 0;
     const mint: string = info.mint;
     rawTokens.push({ mint, rawAmount, decimals });

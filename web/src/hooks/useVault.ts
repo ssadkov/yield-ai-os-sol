@@ -8,7 +8,9 @@ import {
   getVaultUsdcBalance,
   initializeVault,
   depositUsdc,
+  depositSpl,
   withdrawUsdc,
+  withdrawSpl,
   parseStrategy,
   setAllowedPrograms,
   mergeAllowedPrograms,
@@ -17,6 +19,17 @@ import {
 } from "@/lib/vault";
 import { USDC_DECIMALS } from "@/lib/constants";
 import { onBalanceRefresh, triggerBalanceRefresh } from "@/lib/refreshEvent";
+import { formatWalletError } from "@/lib/walletError";
+import { PublicKey } from "@solana/web3.js";
+
+function uiAmountToRawString(uiAmount: number | string, decimals: number): string {
+  const normalized =
+    typeof uiAmount === "number" ? uiAmount.toFixed(decimals) : uiAmount.trim();
+  const [whole, fractional = ""] = normalized.split(".");
+  const paddedFractional = fractional.padEnd(decimals, "0").slice(0, decimals);
+  const raw = `${whole || "0"}${paddedFractional}`.replace(/^0+(?=\d)/, "");
+  return raw || "0";
+}
 
 export function useVault() {
   const { connection } = useConnection();
@@ -79,7 +92,7 @@ export function useVault() {
         triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = formatWalletError(err);
         setError(msg);
         throw err;
       } finally {
@@ -102,7 +115,30 @@ export function useVault() {
         triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = formatWalletError(err);
+        setError(msg);
+        throw err;
+      } finally {
+        setTxPending(false);
+      }
+    },
+    [getProvider]
+  );
+
+  const depositAsset = useCallback(
+    async (args: { mint: string; decimals: number; uiAmount: number | string }) => {
+      const provider = getProvider();
+      if (!provider) throw new Error("Wallet not connected");
+      setTxPending(true);
+      setError(null);
+      try {
+        const rawAmount = uiAmountToRawString(args.uiAmount, args.decimals);
+        const sig = await depositSpl(provider, new PublicKey(args.mint), rawAmount);
+        setLastTxSig(sig);
+        triggerBalanceRefresh();
+        return sig;
+      } catch (err: unknown) {
+        const msg = formatWalletError(err);
         setError(msg);
         throw err;
       } finally {
@@ -125,7 +161,30 @@ export function useVault() {
         triggerBalanceRefresh();
         return sig;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = formatWalletError(err);
+        setError(msg);
+        throw err;
+      } finally {
+        setTxPending(false);
+      }
+    },
+    [getProvider]
+  );
+
+  const withdrawAsset = useCallback(
+    async (args: { mint: string; decimals: number; uiAmount: number | string }) => {
+      const provider = getProvider();
+      if (!provider) throw new Error("Wallet not connected");
+      setTxPending(true);
+      setError(null);
+      try {
+        const rawAmount = uiAmountToRawString(args.uiAmount, args.decimals);
+        const sig = await withdrawSpl(provider, new PublicKey(args.mint), rawAmount);
+        setLastTxSig(sig);
+        triggerBalanceRefresh();
+        return sig;
+      } catch (err: unknown) {
+        const msg = formatWalletError(err);
         setError(msg);
         throw err;
       } finally {
@@ -148,8 +207,8 @@ export function useVault() {
       setLastTxSig(sig);
       triggerBalanceRefresh();
       return sig;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      } catch (err: unknown) {
+      const msg = formatWalletError(err);
       setError(msg);
       throw err;
     } finally {
@@ -171,7 +230,9 @@ export function useVault() {
     lastTxSig,
     createVault,
     deposit,
+    depositAsset,
     withdraw,
+    withdrawAsset,
     updateAllowlist,
     refresh,
   };

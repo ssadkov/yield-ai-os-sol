@@ -225,6 +225,36 @@ export async function GET() {
         continue;
       }
 
+      if (group.id === "xstocks-usdc-loop") {
+        const bestByMint = new Map<string, typeof best>();
+        for (const candidate of candidates) {
+          const prev = bestByMint.get(candidate.collateral.token);
+          if (!prev || candidate.spread > prev.spread) {
+            bestByMint.set(candidate.collateral.token, candidate);
+          }
+        }
+
+        for (const candidate of Array.from(bestByMint.values())) {
+          const symbol =
+            EARN_IDEA_SYMBOLS[candidate.collateral.token] ??
+            candidate.collateral.originalPool?.liquidityToken ??
+            candidate.collateral.asset.split(" ")[0];
+          ideas.push({
+            id: `${group.id}-${String(symbol).toLowerCase()}`,
+            title: `${symbol} collateral loop`,
+            protocol: candidate.collateral.provider,
+            focus: group.focus,
+            description: `Use ${symbol} collateral in ${candidate.marketName}, borrow USDC, then route USDC to ${bestUsdcEarn?.asset ?? "best USDC earn"}.`,
+            apyLabel: `${formatPct(bestUsdcApy)} earn`,
+            borrowLabel: `${formatPct(candidate.borrowApy)} USDC borrow`,
+            spreadLabel: `${candidate.spread >= 0 ? "+" : ""}${formatPct(candidate.spread)} gross spread`,
+            requiredMints: [candidate.collateral.token],
+            note: group.note,
+          });
+        }
+        continue;
+      }
+
       const collateralSymbols = [...new Set(
         candidates
           .filter((candidate) => candidate.market === best.market)

@@ -16,6 +16,8 @@ import {
   unpackAccount,
 } from "@solana/spl-token";
 import { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket } from "@/lib/jupiterBorrowMarkets";
+import { fetchPrices, type JupiterPriceEntry } from "@/lib/jupiter";
+import { fetchJupiterLendMarkets } from "@/server/agent/protocols/jupiterLendMarkets";
 import { wrapProtocolCpiIx } from "./wrapCpi";
 
 export const JUPITER_LEND_PROGRAM_ID = new PublicKey("jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi");
@@ -94,6 +96,18 @@ function normalizeIx(ix: TransactionInstruction): TransactionInstruction {
     programId: new PublicKey(ix.programId.toBase58()),
     keys: ix.keys.map((key) => ({
       pubkey: new PublicKey(key.pubkey.toBase58()),
+      isSigner: key.isSigner,
+      isWritable: key.isWritable,
+    })),
+    data: Buffer.from(ix.data),
+  });
+}
+
+function replaceVaultSignerWithAuthority(ix: TransactionInstruction, vault: PublicKey, authority: PublicKey): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programId.toBase58()),
+    keys: ix.keys.map((key) => ({
+      pubkey: key.isSigner && key.pubkey.equals(vault) ? authority : new PublicKey(key.pubkey.toBase58()),
       isSigner: key.isSigner,
       isWritable: key.isWritable,
     })),
@@ -208,6 +222,12 @@ export type VaultJupiterBorrowPosition = {
   borrowMint: string;
   debtRaw: string;
   debtAmount: number;
+  collateralUsd: number | null;
+  debtUsd: number | null;
+  netUsd: number | null;
+  depositApy: number | null;
+  borrowAPY: number | null;
+  netApy: number | null;
   tokenAccount: string;
 };
 
@@ -217,6 +237,25 @@ export async function readVaultJupiterBorrowPositions(args: {
 }): Promise<VaultJupiterBorrowPosition[]> {
   const [{ getCurrentPosition }, runtimeWeb3] = await Promise.all([loadJupiterBorrow(), loadRuntimeWeb3()]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
+  const [rates, prices] = await Promise.all([
+    fetchJupiterLendMarkets({
+      vaultIds: JUPITER_XSTOCKS_USDC_MARKETS.map((market) => market.vaultId),
+    }).catch(() => ({ data: [] })),
+    fetchPrices([
+      ...JUPITER_XSTOCKS_USDC_MARKETS.map((market) => market.mint),
+      ...JUPITER_XSTOCKS_USDC_MARKETS.map((market) => market.borrowMint),
+    ]).catch((): Record<string, JupiterPriceEntry> => ({})),
+  ]);
+  const ratesByVaultId = new Map<number, { depositApy: number; borrowAPY: number }>();
+  for (const pool of rates.data ?? []) {
+    const vaultId = Number(pool.originalPool?.vaultId ?? 0);
+    if (vaultId > 0) {
+      ratesByVaultId.set(vaultId, {
+        depositApy: Number(pool.depositApy ?? 0),
+        borrowAPY: Number(pool.borrowAPY ?? 0),
+      });
+    }
+  }
 
   const positions = await Promise.all(
     JUPITER_XSTOCKS_USDC_MARKETS.map(async (market) => {
@@ -235,8 +274,29 @@ export async function readVaultJupiterBorrowPositions(args: {
       const collateralRaw = current.colRaw.toString();
       const debtRaw = current.debtRaw.toString();
       if (BigInt(collateralRaw) === BigInt(0) && BigInt(debtRaw) === BigInt(0)) return null;
+      const collateralAmount = rawToUiAmount(collateralRaw, jupiterAccountingDecimals(market.decimals));
+      const debtAmount = rawToUiAmount(debtRaw, jupiterAccountingDecimals(6));
+      const collateralUsd = prices[market.mint]?.usdPrice != null
+        ? collateralAmount * prices[market.mint].usdPrice
+        : null;
+      const debtUsd = prices[market.borrowMint]?.usdPrice != null
+        ? debtAmount * prices[market.borrowMint].usdPrice
+        : debtAmount;
+      const netUsd =
+        collateralUsd !== null && debtUsd !== null
+          ? collateralUsd - debtUsd
+          : null;
+      const rate = ratesByVaultId.get(market.vaultId);
+      const annualYieldUsd =
+        collateralUsd !== null && debtUsd !== null && rate
+          ? (collateralUsd * rate.depositApy - debtUsd * rate.borrowAPY) / 100
+          : null;
+      const netApy =
+        annualYieldUsd !== null && netUsd !== null && netUsd > 0
+          ? (annualYieldUsd / netUsd) * 100
+          : null;
 
-      return {
+      const result: VaultJupiterBorrowPosition = {
         protocol: "Jupiter" as const,
         vaultId: market.vaultId,
         positionId: existing.positionId,
@@ -244,13 +304,20 @@ export async function readVaultJupiterBorrowPositions(args: {
         collateralSymbol: market.symbol,
         collateralMint: market.mint,
         collateralRaw,
-        collateralAmount: rawToUiAmount(collateralRaw, jupiterAccountingDecimals(market.decimals)),
+        collateralAmount,
         borrowSymbol: market.borrowSymbol,
         borrowMint: market.borrowMint,
         debtRaw,
-        debtAmount: rawToUiAmount(debtRaw, jupiterAccountingDecimals(6)),
+        debtAmount,
+        collateralUsd,
+        debtUsd,
+        netUsd,
+        depositApy: rate?.depositApy ?? null,
+        borrowAPY: rate?.borrowAPY ?? null,
+        netApy,
         tokenAccount: existing.tokenAccount,
       };
+      return result;
     }),
   );
 
@@ -431,6 +498,173 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
       collateralDecimals,
       requestedAmountRaw: "MAX_WITHDRAW_AMOUNT",
       operateAmount: MAX_WITHDRAW_AMOUNT.toString(),
+      sourceBalanceRaw: null,
+      programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
+    },
+  };
+}
+
+export async function buildJupiterBorrowUsdcBorrowTx(args: {
+  connection: Connection;
+  vaultProgramId: PublicKey;
+  authority: PublicKey;
+  vault: PublicKey;
+  vaultId: number;
+  positionId: number;
+  amountRaw: string;
+}): Promise<BuiltJupiterBorrowDeposit> {
+  const amount = new BN(args.amountRaw);
+  if (amount.lte(new BN(0))) throw new Error("amountRaw must be greater than zero");
+
+  const market = getCollateralMarket(args.vaultId);
+  const collateralDecimals = market?.decimals ?? 9;
+
+  const [{ getOperateIx }, runtimeWeb3] = await Promise.all([loadJupiterBorrow(), loadRuntimeWeb3()]);
+  const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
+  const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
+  const built = await getOperateIx({
+    vaultId: args.vaultId,
+    positionId: args.positionId,
+    colAmount: new BN(0),
+    debtAmount: amount,
+    signer: sdkSigner as unknown as PublicKey,
+    positionOwner: sdkSigner as unknown as PublicKey,
+    connection: sdkConnection as unknown as Connection,
+  });
+
+  const cpiIxs = built.ixs.map((ix) =>
+    wrapProtocolCpiIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      inner: {
+        programId: ix.programId.toBase58(),
+        keys: ix.keys.map((key) => ({
+          pubkey: key.pubkey.toBase58(),
+          isSigner: key.isSigner,
+          isWritable: key.isWritable,
+        })),
+        data: ix.data,
+      },
+    }),
+  );
+
+  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
+    label: `jupiter_borrow_usdc_${index + 1}`,
+    ixs: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+      ix,
+    ],
+  }));
+
+  return {
+    requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
+    txs,
+    alts: (built.addressLookupTableAccounts ?? []).map((alt) =>
+      cloneAlt(alt as unknown as AddressLookupTableAccount),
+    ),
+    summary: {
+      vaultId: args.vaultId,
+      nftId: args.positionId,
+      directCount: 0,
+      cpiCount: cpiIxs.length,
+      sdkIxCount: built.ixs.length,
+      topUpLamports: 0,
+      currentVaultLamports: currentLamports,
+      collateralDecimals,
+      requestedAmountRaw: amount.toString(),
+      operateAmount: amount.toString(),
+      sourceBalanceRaw: null,
+      programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
+    },
+  };
+}
+
+export async function buildJupiterBorrowUsdcRepayTx(args: {
+  connection: Connection;
+  vaultProgramId: PublicKey;
+  authority: PublicKey;
+  vault: PublicKey;
+  vaultId: number;
+  positionId: number;
+  amountRaw: string;
+}): Promise<BuiltJupiterBorrowDeposit> {
+  const amount = new BN(args.amountRaw);
+  if (amount.lte(new BN(0))) throw new Error("amountRaw must be greater than zero");
+
+  const market = getCollateralMarket(args.vaultId);
+  const collateralDecimals = market?.decimals ?? 9;
+
+  const [{ getOperateIx }, runtimeWeb3] = await Promise.all([loadJupiterBorrow(), loadRuntimeWeb3()]);
+  const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
+  const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
+  const built = await getOperateIx({
+    vaultId: args.vaultId,
+    positionId: args.positionId,
+    colAmount: new BN(0),
+    debtAmount: amount.neg(),
+    signer: sdkSigner as unknown as PublicKey,
+    positionOwner: sdkSigner as unknown as PublicKey,
+    connection: sdkConnection as unknown as Connection,
+  });
+
+  const directIxs = built.ixs
+    .slice(0, -1)
+    .map((ix) => replaceVaultSignerWithAuthority(normalizeIx(ix), args.vault, args.authority));
+  const operateIx = built.ixs[built.ixs.length - 1];
+  const cpiIxs = operateIx ? [
+    wrapProtocolCpiIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      inner: {
+        programId: operateIx.programId.toBase58(),
+        keys: operateIx.keys.map((key) => ({
+          pubkey: key.pubkey.toBase58(),
+          isSigner: key.isSigner,
+          isWritable: key.isWritable,
+        })),
+        data: operateIx.data,
+      },
+    }),
+  ] : [];
+
+  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const txs: BuiltJupiterBorrowDeposit["txs"] = [
+    ...directIxs.map((ix, index) => ({
+      label: `jupiter_repay_setup_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ix,
+      ],
+    })),
+    ...cpiIxs.map((ix, index) => ({
+      label: `jupiter_repay_usdc_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ix,
+      ],
+    })),
+  ];
+
+  return {
+    requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
+    txs,
+    alts: (built.addressLookupTableAccounts ?? []).map((alt) =>
+      cloneAlt(alt as unknown as AddressLookupTableAccount),
+    ),
+    summary: {
+      vaultId: args.vaultId,
+      nftId: args.positionId,
+      directCount: directIxs.length,
+      cpiCount: cpiIxs.length,
+      sdkIxCount: built.ixs.length,
+      topUpLamports: 0,
+      currentVaultLamports: currentLamports,
+      collateralDecimals,
+      requestedAmountRaw: amount.toString(),
+      operateAmount: amount.neg().toString(),
       sourceBalanceRaw: null,
       programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     },

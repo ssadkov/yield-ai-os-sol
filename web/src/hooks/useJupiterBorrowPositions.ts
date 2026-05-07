@@ -17,6 +17,12 @@ export interface JupiterBorrowPosition {
   borrowMint: string;
   debtRaw: string;
   debtAmount: number;
+  collateralUsd: number | null;
+  debtUsd: number | null;
+  netUsd: number | null;
+  depositApy: number | null;
+  borrowAPY: number | null;
+  netApy: number | null;
   tokenAccount: string;
 }
 

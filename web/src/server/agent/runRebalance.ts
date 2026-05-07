@@ -5,6 +5,8 @@ import { buildKaminoKvaultDepositTx, buildKaminoKvaultWithdrawTx } from "./proto
 import {
   buildJupiterBorrowCollateralDepositTx,
   buildJupiterBorrowCollateralWithdrawTx,
+  buildJupiterBorrowUsdcBorrowTx,
+  buildJupiterBorrowUsdcRepayTx,
   buildJupiterBorrowInitPositionSetupTx,
   findExistingVaultJupiterBorrowPosition,
 } from "./protocols/jupiterBorrow";
@@ -306,6 +308,164 @@ export async function runJupiterBorrowCollateralWithdrawJob(args: {
         signatures,
         swaps: [],
         error: `Jupiter Lend collateral withdraw (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+      };
+    }
+    if (result.signature) signatures.push(result.signature);
+  }
+
+  return { status: "success", signatures, swaps: [] };
+}
+
+export async function runJupiterBorrowUsdcBorrowJob(args: {
+  ownerPubkey: string;
+  vaultId: number;
+  amountRaw: string;
+  positionId?: number;
+}): Promise<RebalanceResult> {
+  const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
+
+  const vaultProgramIdStr =
+    optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
+  if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
+
+  const authority = loadAuthorityKeypairFromEnv();
+  const vaultProgramId = new PublicKey(vaultProgramIdStr);
+  const vaultOwner = new PublicKey(args.ownerPubkey);
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  const vault = await readVaultAccount(connection, vaultPda);
+  const whitelistedSet = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
+  const jupiterProgram = "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi";
+  const missing = whitelistedSet.has(jupiterProgram) ? [] : [jupiterProgram];
+  if (missing.length > 0) {
+    return { status: "needs_whitelist", missingPrograms: missing, swaps: [] };
+  }
+
+  let positionId = args.positionId;
+  if (!positionId) {
+    const existingPosition = await findExistingVaultJupiterBorrowPosition({
+      connection,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+    });
+    positionId = existingPosition?.positionId;
+  }
+  if (!positionId) {
+    return {
+      status: "error",
+      signatures: [],
+      swaps: [],
+      error: `No Jupiter Lend position found for vaultId ${args.vaultId}`,
+    };
+  }
+
+  const built = await buildJupiterBorrowUsdcBorrowTx({
+    connection,
+    vaultProgramId,
+    authority: authority.publicKey,
+    vault: vaultPda,
+    vaultId: args.vaultId,
+    positionId,
+    amountRaw: args.amountRaw,
+  });
+
+  const signatures: string[] = [];
+  for (let i = 0; i < built.txs.length; i++) {
+    const tx = built.txs[i];
+    const result = await signAndSendTx({
+      connection,
+      authority,
+      ixs: tx.ixs,
+      alts: built.alts,
+    });
+
+    if (result.err) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend USDC borrow (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+      };
+    }
+    if (result.signature) signatures.push(result.signature);
+  }
+
+  return { status: "success", signatures, swaps: [] };
+}
+
+export async function runJupiterBorrowUsdcRepayJob(args: {
+  ownerPubkey: string;
+  vaultId: number;
+  amountRaw: string;
+  positionId?: number;
+}): Promise<RebalanceResult> {
+  const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
+
+  const vaultProgramIdStr =
+    optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
+  if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
+
+  const authority = loadAuthorityKeypairFromEnv();
+  const vaultProgramId = new PublicKey(vaultProgramIdStr);
+  const vaultOwner = new PublicKey(args.ownerPubkey);
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  const vault = await readVaultAccount(connection, vaultPda);
+  const whitelistedSet = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
+  const jupiterProgram = "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi";
+  const missing = whitelistedSet.has(jupiterProgram) ? [] : [jupiterProgram];
+  if (missing.length > 0) {
+    return { status: "needs_whitelist", missingPrograms: missing, swaps: [] };
+  }
+
+  let positionId = args.positionId;
+  if (!positionId) {
+    const existingPosition = await findExistingVaultJupiterBorrowPosition({
+      connection,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+    });
+    positionId = existingPosition?.positionId;
+  }
+  if (!positionId) {
+    return {
+      status: "error",
+      signatures: [],
+      swaps: [],
+      error: `No Jupiter Lend position found for vaultId ${args.vaultId}`,
+    };
+  }
+
+  const built = await buildJupiterBorrowUsdcRepayTx({
+    connection,
+    vaultProgramId,
+    authority: authority.publicKey,
+    vault: vaultPda,
+    vaultId: args.vaultId,
+    positionId,
+    amountRaw: args.amountRaw,
+  });
+
+  const signatures: string[] = [];
+  for (let i = 0; i < built.txs.length; i++) {
+    const tx = built.txs[i];
+    const result = await signAndSendTx({
+      connection,
+      authority,
+      ixs: tx.ixs,
+      alts: built.alts,
+    });
+
+    if (result.err) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend USDC repay (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
       };
     }
     if (result.signature) signatures.push(result.signature);

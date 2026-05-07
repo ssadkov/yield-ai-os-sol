@@ -36,26 +36,26 @@ export const EARN_IDEAS: EarnIdea[] = [
       tokenDecimals: 6,
     },
   },
-  {
-    id: "xstocks-usdc-loop",
-    title: "xStocks collateral loop",
-    protocol: "Kamino",
-    focus: "xStocks",
-    description: "Use xStocks collateral, borrow USDC, then route USDC to the best earn vault.",
+  ...[
+    ["SPYx", "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", "Jupiter", "SPYx / USDC", "0.41% USDC borrow", "+7.98% gross spread"],
+    ["QQQx", "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ", "Jupiter", "QQQx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
+    ["NVDAx", "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", "Jupiter", "NVDAx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
+    ["TSLAx", "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", "Jupiter", "TSLAx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
+    ["AAPLx", "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
+    ["GOOGLx", "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
+    ["MSTRx", "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
+  ].map(([symbol, mint, protocol, market, borrowLabel, spreadLabel]) => ({
+    id: `xstocks-usdc-loop-${symbol.toLowerCase()}`,
+    title: `${symbol} collateral loop`,
+    protocol,
+    focus: "xStocks" as const,
+    description: `Use ${symbol} collateral in ${market}, borrow USDC, then route USDC to the best earn vault.`,
     apyLabel: "8.39% earn",
-    borrowLabel: "4.76% USDC borrow",
-    spreadLabel: "+3.64% gross spread",
-    requiredMints: [
-      "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", // SPYx
-      "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ", // QQQx
-      "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", // NVDAx
-      "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", // TSLAx
-      "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp", // AAPLx
-      "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN", // GOOGLx
-      "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ", // MSTRx
-    ],
+    borrowLabel,
+    spreadLabel,
+    requiredMints: [mint],
     note: "Direct Token-2022 deposit/withdraw still needs token-interface support.",
-  },
+  })),
   {
     id: "btc-usdc-loop",
     title: "BTC collateral loop",

@@ -28,7 +28,7 @@ function formatTimestamp(ts: number): string {
 }
 
 function formatTokenAmount(value: number | null): string {
-  if (value === null) return "—";
+  if (value === null) return "-";
   return value.toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 6,
@@ -40,6 +40,25 @@ function formatApy(value: string | null): string | null {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return `${(n * 100).toFixed(2)}% APY`;
+}
+
+function formatPercent(value: number | null | undefined, label = "APY"): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return `${value.toFixed(2)}% ${label}`;
+}
+
+function formatSignedUsd(value: number): string {
+  const abs = Math.abs(value);
+  const formatted = formatUsd(abs);
+  if (value < 0) return `-${formatted}`;
+  if (value > 0) return `+${formatted}`;
+  return formatted;
+}
+
+function apyDecimalToPercent(value: string | null): number | null {
+  if (!value) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n * 100 : null;
 }
 
 function decodeDisplayName(value: unknown): string {
@@ -92,6 +111,8 @@ export function VaultCard() {
     swapVaultAsset,
     depositJupiterBorrowCollateral,
     withdrawJupiterBorrowCollateral,
+    borrowJupiterUsdc,
+    repayJupiterUsdc,
     approveWhitelist,
     rebalancing,
     convertingMint,
@@ -107,6 +128,8 @@ export function VaultCard() {
   const [buyAmount, setBuyAmount] = useState("");
   const [lendTargetMint, setLendTargetMint] = useState(JUPITER_XSTOCKS_USDC_MARKETS[0]?.mint ?? "");
   const [lendAmount, setLendAmount] = useState("");
+  const [borrowAmounts, setBorrowAmounts] = useState<Record<string, string>>({});
+  const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -117,11 +140,6 @@ export function VaultCard() {
     refresh: refreshVaultAssets,
   } = useVaultAssets(vaultPda);
 
-  const {
-    data: pnlData,
-    loading: pnlLoading,
-    refresh: refreshPnl,
-  } = useVaultPnl(vaultAssetsLoading ? null : vaultTotalUsd);
   const {
     positions: kaminoPositions,
     loading: kaminoPositionsLoading,
@@ -176,6 +194,8 @@ export function VaultCard() {
 
   const isHiddenPositionToken = (asset: (typeof vaultAssets)[number]) =>
     kaminoPositions.some((position) => position.sharesMint === asset.mint) ||
+    asset.symbol.toLowerCase().startsWith("ki") ||
+    asset.name.toLowerCase().startsWith("kamino ") ||
     asset.name.toLowerCase().startsWith("jupiter vault") ||
     /^jv\d+$/i.test(asset.symbol);
 
@@ -185,6 +205,34 @@ export function VaultCard() {
         .filter((asset) => !isHiddenPositionToken(asset))
         .slice(0, COLLAPSED_COUNT);
   const visibleVaultAssets = vaultAssets.filter((asset) => !isHiddenPositionToken(asset));
+  const visibleHoldingsUsd = visibleVaultAssets.reduce((sum, asset) => sum + (asset.usdValue ?? 0), 0);
+  const directAnnualYieldUsd = visibleVaultAssets.reduce(
+    (sum, asset) => sum + ((asset.usdValue ?? 0) * (asset.apr?.value ?? 0)) / 100,
+    0,
+  );
+  const kaminoPositionsUsd = kaminoPositions.reduce((sum, position) => sum + (position.underlyingUsd ?? 0), 0);
+  const kaminoAnnualYieldUsd = kaminoPositions.reduce((sum, position) => {
+    const apyPercent = apyDecimalToPercent(position.apy);
+    return sum + ((position.underlyingUsd ?? 0) * (apyPercent ?? 0)) / 100;
+  }, 0);
+  const jupiterCollateralUsd = jupiterBorrowPositions.reduce((sum, position) => sum + (position.collateralUsd ?? 0), 0);
+  const jupiterDebtUsd = jupiterBorrowPositions.reduce((sum, position) => sum + (position.debtUsd ?? 0), 0);
+  const jupiterNetUsd = jupiterBorrowPositions.reduce((sum, position) => sum + (position.netUsd ?? 0), 0);
+  const jupiterAnnualYieldUsd = jupiterBorrowPositions.reduce((sum, position) => {
+    const collateralYield = ((position.collateralUsd ?? 0) * (position.depositApy ?? 0)) / 100;
+    const debtCost = ((position.debtUsd ?? 0) * (position.borrowAPY ?? 0)) / 100;
+    return sum + collateralYield - debtCost;
+  }, 0);
+  const vaultNetUsd = visibleHoldingsUsd + kaminoPositionsUsd + jupiterNetUsd;
+  const estimatedAnnualYieldUsd = directAnnualYieldUsd + kaminoAnnualYieldUsd + jupiterAnnualYieldUsd;
+  const estimatedVaultApy = vaultNetUsd > 0 ? (estimatedAnnualYieldUsd / vaultNetUsd) * 100 : null;
+  const pnlCurrentValueUsd =
+    vaultAssetsLoading || kaminoPositionsLoading || jupiterBorrowPositionsLoading ? null : vaultNetUsd;
+  const {
+    data: pnlData,
+    loading: pnlLoading,
+    refresh: refreshPnl,
+  } = useVaultPnl(pnlCurrentValueUsd);
   const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
   const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
@@ -254,6 +302,30 @@ export function VaultCard() {
       vaultId: position.vaultId,
       positionId: position.positionId,
     });
+    await handleRefreshAll();
+  };
+  const handleJupiterUsdcBorrow = async (position: (typeof jupiterBorrowPositions)[number]) => {
+    const key = `${position.vaultId}:${position.positionId}`;
+    const raw = usdcToRawAmount(borrowAmounts[key] ?? "");
+    if (BigInt(raw) === BigInt(0)) return;
+    await borrowJupiterUsdc({
+      vaultId: position.vaultId,
+      positionId: position.positionId,
+      amountRaw: raw,
+    });
+    setBorrowAmounts((prev) => ({ ...prev, [key]: "" }));
+    await handleRefreshAll();
+  };
+  const handleJupiterUsdcRepay = async (position: (typeof jupiterBorrowPositions)[number]) => {
+    const key = `${position.vaultId}:${position.positionId}`;
+    const raw = usdcToRawAmount(repayAmounts[key] ?? "");
+    if (BigInt(raw) === BigInt(0)) return;
+    await repayJupiterUsdc({
+      vaultId: position.vaultId,
+      positionId: position.positionId,
+      amountRaw: raw,
+    });
+    setRepayAmounts((prev) => ({ ...prev, [key]: "" }));
     await handleRefreshAll();
   };
 
@@ -541,7 +613,7 @@ export function VaultCard() {
                     <div className="min-w-0">
                       <div className="font-medium truncate">{decodeDisplayName(position.vaultName)}</div>
                       <div className="text-[11px] text-muted-foreground">
-                        {formatApy(position.apy) ?? "Kamino kVault"} · {position.totalShares} shares
+                        {formatApy(position.apy) ?? "Kamino position"} · {position.totalShares} shares
                       </div>
                     </div>
                     <div className="text-right shrink-0">
@@ -583,35 +655,130 @@ export function VaultCard() {
               </div>
               <div className="space-y-2">
                 {jupiterBorrowPositions.map((position) => (
-                  <div
-                    key={`${position.vaultId}:${position.positionId}`}
-                    className="flex items-start justify-between gap-3 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{position.market}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        Position #{position.positionId}
+                  <div key={`${position.vaultId}:${position.positionId}`} className="space-y-2">
+                    <div className="flex items-start justify-between gap-3 text-sm">
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{position.market}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Position #{position.positionId}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {formatPercent(position.depositApy) ?? "Supply APY n/a"} /{" "}
+                          {formatPercent(position.borrowAPY, "borrow") ?? "Borrow APR n/a"}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="font-mono">
+                          {formatTokenAmount(position.collateralAmount)} {position.collateralSymbol}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {formatUsd(position.collateralUsd)}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          Debt {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
+                          {position.debtUsd !== null ? ` (${formatUsd(position.debtUsd)})` : ""}
+                        </div>
+                        {position.netApy !== null && (
+                          <div className={position.netApy >= 0 ? "text-[11px] text-success" : "text-[11px] text-destructive"}>
+                            Net {formatPercent(position.netApy)}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleJupiterLendWithdraw(position)}
+                          disabled={rebalancing || BigInt(position.debtRaw) !== BigInt(0)}
+                          title={
+                            BigInt(position.debtRaw) !== BigInt(0)
+                              ? "Repay debt before withdrawing collateral"
+                              : "Withdraw collateral back to vault"
+                          }
+                          className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {rebalancing ? "Withdrawing..." : "Withdraw to vault"}
+                        </button>
                       </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono">
-                        {formatTokenAmount(position.collateralAmount)} {position.collateralSymbol}
-                      </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        Debt {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={borrowAmounts[`${position.vaultId}:${position.positionId}`] ?? ""}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(",", ".");
+                            if (/^\d*\.?\d*$/.test(next)) {
+                              setBorrowAmounts((prev) => ({
+                                ...prev,
+                                [`${position.vaultId}:${position.positionId}`]: next,
+                              }));
+                            }
+                          }}
+                          placeholder="Borrow USDC"
+                          className="w-full rounded-md border border-border bg-card px-3 py-2 pr-12 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        />
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                          USDC
+                        </span>
                       </div>
                       <button
                         type="button"
-                        onClick={() => void handleJupiterLendWithdraw(position)}
-                        disabled={rebalancing || BigInt(position.debtRaw) !== BigInt(0)}
-                        title={
-                          BigInt(position.debtRaw) !== BigInt(0)
-                            ? "Repay debt before withdrawing collateral"
-                            : "Withdraw collateral back to vault"
+                        onClick={() => void handleJupiterUsdcBorrow(position)}
+                        disabled={
+                          rebalancing ||
+                          BigInt(usdcToRawAmount(borrowAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0)
                         }
-                        className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="cursor-pointer rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {rebalancing ? "Withdrawing..." : "Withdraw to vault"}
+                        {rebalancing ? "Borrowing..." : "Borrow"}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={repayAmounts[`${position.vaultId}:${position.positionId}`] ?? ""}
+                          onChange={(e) => {
+                            const next = e.target.value.replace(",", ".");
+                            if (/^\d*\.?\d*$/.test(next)) {
+                              setRepayAmounts((prev) => ({
+                                ...prev,
+                                [`${position.vaultId}:${position.positionId}`]: next,
+                              }));
+                            }
+                          }}
+                          placeholder="Repay USDC"
+                          className="w-full rounded-md border border-border bg-card px-3 py-2 pr-20 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const repayMax = Math.min(vaultUsdc, position.debtAmount);
+                            setRepayAmounts((prev) => ({
+                              ...prev,
+                              [`${position.vaultId}:${position.positionId}`]: formatAmount(repayMax),
+                            }));
+                          }}
+                          disabled={vaultUsdc <= 0 || position.debtAmount <= 0}
+                          className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          MAX
+                        </button>
+                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                          USDC
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleJupiterUsdcRepay(position)}
+                        disabled={
+                          rebalancing ||
+                          BigInt(position.debtRaw) === BigInt(0) ||
+                          BigInt(usdcToRawAmount(repayAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0)
+                        }
+                        className="cursor-pointer rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {rebalancing ? "Repaying..." : "Repay"}
                       </button>
                     </div>
                   </div>
@@ -628,8 +795,54 @@ export function VaultCard() {
                 <span className="text-sm font-medium text-muted-foreground">
                   Total Value
                 </span>
-                <span className="text-lg font-bold">{formatUsd(vaultTotalUsd)}</span>
+                <span className="text-lg font-bold">{formatUsd(vaultNetUsd)}</span>
               </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-muted-foreground">Est. Vault APY</span>
+                <span
+                  className={`text-sm font-semibold ${
+                    estimatedVaultApy !== null && estimatedVaultApy < 0
+                      ? "text-destructive"
+                      : "text-success"
+                  }`}
+                >
+                  {formatPercent(estimatedVaultApy) ?? "вЂ”"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-muted-foreground">Est. Annual Yield</span>
+                <span
+                  className={`text-xs font-mono ${
+                    estimatedAnnualYieldUsd < 0 ? "text-destructive" : "text-muted-foreground"
+                  }`}
+                >
+                  {formatSignedUsd(estimatedAnnualYieldUsd)}
+                </span>
+              </div>
+              {jupiterCollateralUsd > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-muted-foreground">Jupiter Collateral</span>
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {formatUsd(jupiterCollateralUsd)}
+                  </span>
+                </div>
+              )}
+              {jupiterDebtUsd > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-muted-foreground">Borrow Debt</span>
+                  <span className="text-xs font-mono text-destructive">
+                    -{formatUsd(jupiterDebtUsd)}
+                  </span>
+                </div>
+              )}
+              {kaminoPositionsUsd > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-muted-foreground">Kamino Earn</span>
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {formatUsd(kaminoPositionsUsd)}
+                  </span>
+                </div>
+              )}
 
               {pnlData && (
                 <div className="space-y-1.5">
@@ -765,7 +978,7 @@ export function VaultCard() {
 
       {rebalanceResult && rebalanceResult.status === "no_rebalance_needed" && (
         <div className="mt-3 p-2 bg-muted rounded text-sm text-muted-foreground">
-          Portfolio already balanced — no swaps needed.
+          Portfolio already balanced вЂ” no swaps needed.
         </div>
       )}
     </div>

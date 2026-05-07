@@ -40,14 +40,36 @@ export async function signAndSendTx(params: SignAndSendParams): Promise<SendResu
 
   if (!latest) throw new Error("failed to get recent blockhash (unknown error)");
 
-  const message = new TransactionMessage({
-    payerKey: authority.publicKey,
-    recentBlockhash: latest.blockhash,
-    instructions: ixs,
-  }).compileToV0Message(alts);
+  const usableAlts = (alts ?? []).filter(
+    (alt): alt is AddressLookupTableAccount =>
+      Boolean(alt && alt.key && alt.state && Array.isArray(alt.state.addresses)),
+  );
 
-  const tx = new VersionedTransaction(message);
-  tx.sign([authority]);
+  let tx: VersionedTransaction;
+  try {
+    const message = new TransactionMessage({
+      payerKey: authority.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions: ixs,
+    }).compileToV0Message(usableAlts);
+
+    tx = new VersionedTransaction(message);
+    tx.sign([authority]);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      signature: "",
+      err: {
+        message: msg,
+        phase: "compile_or_sign",
+        instructionCount: ixs.length,
+        altCount: usableAlts.length,
+        signerKeys: ixs
+          .flatMap((ix) => ix.keys.filter((key) => key.isSigner).map((key) => key.pubkey.toBase58()))
+          .filter((value, index, arr) => arr.indexOf(value) === index),
+      },
+    };
+  }
 
   let signature = "";
   try {

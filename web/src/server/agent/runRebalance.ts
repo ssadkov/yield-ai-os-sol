@@ -2,6 +2,12 @@ import bs58 from "bs58";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { convertAll, rebalance, individualSwap, type RebalanceResult } from "./rebalance/engine";
 import { buildKaminoKvaultDepositTx, buildKaminoKvaultWithdrawTx } from "./protocols/kaminoKvault";
+import {
+  buildJupiterBorrowCollateralDepositTx,
+  buildJupiterBorrowCollateralWithdrawTx,
+  buildJupiterBorrowInitPositionSetupTx,
+  findExistingVaultJupiterBorrowPosition,
+} from "./protocols/jupiterBorrow";
 import { readVaultAccount } from "./rebalance/portfolio";
 import { signAndSendTx } from "./swap/send";
 import { deriveVaultPda } from "./swap/anchorIx";
@@ -118,6 +124,194 @@ export async function runKaminoKvaultWithdrawJob(args: {
   amount: string;
 }): Promise<RebalanceResult> {
   return runKaminoKvaultActionJob({ ...args, action: "withdraw" });
+}
+
+export async function runJupiterBorrowCollateralDepositJob(args: {
+  ownerPubkey: string;
+  vaultId: number;
+  amountRaw: string;
+  positionId?: number;
+}): Promise<RebalanceResult> {
+  const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
+
+  const vaultProgramIdStr =
+    optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
+  if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
+
+  const authority = loadAuthorityKeypairFromEnv();
+  const vaultProgramId = new PublicKey(vaultProgramIdStr);
+  const vaultOwner = new PublicKey(args.ownerPubkey);
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  const vault = await readVaultAccount(connection, vaultPda);
+
+  const whitelistedSet = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
+  const jupiterProgram = "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi";
+  const missing = whitelistedSet.has(jupiterProgram) ? [] : [jupiterProgram];
+  if (missing.length > 0) {
+    return { status: "needs_whitelist", missingPrograms: missing, swaps: [] };
+  }
+
+  const signatures: string[] = [];
+
+  let positionId = args.positionId;
+  if (!positionId) {
+    const existingPosition = await findExistingVaultJupiterBorrowPosition({
+      connection,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+    });
+    if (existingPosition) {
+      positionId = existingPosition.positionId;
+    }
+  }
+
+  if (!positionId) {
+    const authorityLamports = await connection.getBalance(authority.publicKey, "confirmed");
+    const minimumSetupLamports = 25_000_000;
+    if (authorityLamports < minimumSetupLamports) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend position setup needs executor SOL for rent/metadata. Executor balance: ${authorityLamports} lamports, recommended minimum: ${minimumSetupLamports} lamports.`,
+      };
+    }
+
+    const setup = await buildJupiterBorrowInitPositionSetupTx({
+      connection,
+      authority: authority.publicKey,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+    });
+    const setupResult = await signAndSendTx({
+      connection,
+      authority,
+      ixs: setup.tx.ixs,
+      alts: [],
+    });
+    if (setupResult.err) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend position setup (${setup.tx.label}) failed: ${JSON.stringify(setupResult.err)}. Position id: ${setup.nftId}`,
+      };
+    }
+    if (setupResult.signature) signatures.push(setupResult.signature);
+    positionId = setup.nftId;
+  }
+
+  const built = await buildJupiterBorrowCollateralDepositTx({
+    connection,
+    vaultProgramId,
+    authority: authority.publicKey,
+    vault: vaultPda,
+    vaultId: args.vaultId,
+    amountRaw: args.amountRaw,
+    positionId,
+  });
+
+  for (let i = 0; i < built.txs.length; i++) {
+    const tx = built.txs[i];
+    const result = await signAndSendTx({
+      connection,
+      authority,
+      ixs: tx.ixs,
+      alts: built.alts,
+    });
+
+    if (result.err) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend collateral deposit (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+      };
+    }
+    if (result.signature) signatures.push(result.signature);
+  }
+
+  return { status: "success", signatures, swaps: [] };
+}
+
+export async function runJupiterBorrowCollateralWithdrawJob(args: {
+  ownerPubkey: string;
+  vaultId: number;
+  positionId?: number;
+}): Promise<RebalanceResult> {
+  const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
+
+  const vaultProgramIdStr =
+    optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
+  if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
+
+  const authority = loadAuthorityKeypairFromEnv();
+  const vaultProgramId = new PublicKey(vaultProgramIdStr);
+  const vaultOwner = new PublicKey(args.ownerPubkey);
+  const vaultPda = deriveVaultPda(vaultProgramId, vaultOwner);
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  const vault = await readVaultAccount(connection, vaultPda);
+  const whitelistedSet = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
+  const jupiterProgram = "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi";
+  const missing = whitelistedSet.has(jupiterProgram) ? [] : [jupiterProgram];
+  if (missing.length > 0) {
+    return { status: "needs_whitelist", missingPrograms: missing, swaps: [] };
+  }
+
+  let positionId = args.positionId;
+  if (!positionId) {
+    const existingPosition = await findExistingVaultJupiterBorrowPosition({
+      connection,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+    });
+    positionId = existingPosition?.positionId;
+  }
+  if (!positionId) {
+    return {
+      status: "error",
+      signatures: [],
+      swaps: [],
+      error: `No Jupiter Lend position found for vaultId ${args.vaultId}`,
+    };
+  }
+
+  const built = await buildJupiterBorrowCollateralWithdrawTx({
+    connection,
+    vaultProgramId,
+    authority: authority.publicKey,
+    vault: vaultPda,
+    vaultId: args.vaultId,
+    positionId,
+  });
+
+  const signatures: string[] = [];
+  for (let i = 0; i < built.txs.length; i++) {
+    const tx = built.txs[i];
+    const result = await signAndSendTx({
+      connection,
+      authority,
+      ixs: tx.ixs,
+      alts: built.alts,
+    });
+
+    if (result.err) {
+      return {
+        status: "error",
+        signatures,
+        swaps: [],
+        error: `Jupiter Lend collateral withdraw (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+      };
+    }
+    if (result.signature) signatures.push(result.signature);
+  }
+
+  return { status: "success", signatures, swaps: [] };
 }
 
 async function runKaminoKvaultActionJob(args: {

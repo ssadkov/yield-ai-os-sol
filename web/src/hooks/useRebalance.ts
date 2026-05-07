@@ -32,6 +32,16 @@ type PendingAction =
       outputMint: string;
       amount: string;
       amountUsd: number;
+    }
+  | {
+      kind: "jupiter_borrow_deposit";
+      vaultId: number;
+      amountRaw: string;
+    }
+  | {
+      kind: "jupiter_borrow_withdraw";
+      vaultId: number;
+      positionId: number;
     };
 
 export function useRebalance() {
@@ -45,6 +55,7 @@ export function useRebalance() {
   const [needsWhitelist, setNeedsWhitelist] = useState(false);
   const [pendingPrograms, setPendingPrograms] = useState<string[]>([]);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [lastActionLabel, setLastActionLabel] = useState<string>("Action");
   const [convertingMint, setConvertingMint] = useState<string | null>(null);
 
   const getProvider = useCallback(() => {
@@ -84,6 +95,38 @@ export function useRebalance() {
     [publicKey],
   );
 
+  const callJupiterBorrowDepositApi = useCallback(
+    async (deposit: Extract<PendingAction, { kind: "jupiter_borrow_deposit" }>): Promise<RebalanceResult> => {
+      const res = await fetch("/api/jupiter/borrow/deposit-collateral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: publicKey!.toBase58(),
+          vaultId: deposit.vaultId,
+          amountRaw: deposit.amountRaw,
+        }),
+      });
+      return res.json();
+    },
+    [publicKey],
+  );
+
+  const callJupiterBorrowWithdrawApi = useCallback(
+    async (withdraw: Extract<PendingAction, { kind: "jupiter_borrow_withdraw" }>): Promise<RebalanceResult> => {
+      const res = await fetch("/api/jupiter/borrow/withdraw-collateral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: publicKey!.toBase58(),
+          vaultId: withdraw.vaultId,
+          positionId: withdraw.positionId,
+        }),
+      });
+      return res.json();
+    },
+    [publicKey],
+  );
+
   const handleResult = useCallback((data: RebalanceResult) => {
     setResult(data);
     if (data.status === "needs_whitelist" && data.missingPrograms?.length) {
@@ -108,6 +151,7 @@ export function useRebalance() {
 
     try {
       setPendingAction({ kind: "rebalance" });
+      setLastActionLabel("Rebalance");
       const data = await callRebalanceApi();
       handleResult(data);
     } catch (err: unknown) {
@@ -145,6 +189,7 @@ export function useRebalance() {
 
       try {
         setPendingAction(action);
+        setLastActionLabel("Swap");
         const data = await callIndividualSwapApi(action);
         handleResult(data);
       } catch (err: unknown) {
@@ -182,6 +227,7 @@ export function useRebalance() {
 
       try {
         setPendingAction(action);
+        setLastActionLabel("Trade");
         const data = await callIndividualSwapApi(action);
         handleResult(data);
       } catch (err: unknown) {
@@ -192,6 +238,72 @@ export function useRebalance() {
       }
     },
     [publicKey, callIndividualSwapApi, handleResult],
+  );
+
+  const depositJupiterBorrowCollateral = useCallback(
+    async (args: {
+      vaultId: number;
+      amountRaw: string;
+    }) => {
+      if (!publicKey || BigInt(args.amountRaw) === BigInt(0)) return;
+
+      setRebalancing(true);
+      setError(null);
+      setResult(null);
+      setNeedsWhitelist(false);
+
+      const action: Extract<PendingAction, { kind: "jupiter_borrow_deposit" }> = {
+        kind: "jupiter_borrow_deposit",
+        vaultId: args.vaultId,
+        amountRaw: args.amountRaw,
+      };
+
+      try {
+        setPendingAction(action);
+        setLastActionLabel("Jupiter Lend deposit");
+        const data = await callJupiterBorrowDepositApi(action);
+        handleResult(data);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+      } finally {
+        setRebalancing(false);
+      }
+    },
+    [publicKey, callJupiterBorrowDepositApi, handleResult],
+  );
+
+  const withdrawJupiterBorrowCollateral = useCallback(
+    async (args: {
+      vaultId: number;
+      positionId: number;
+    }) => {
+      if (!publicKey) return;
+
+      setRebalancing(true);
+      setError(null);
+      setResult(null);
+      setNeedsWhitelist(false);
+
+      const action: Extract<PendingAction, { kind: "jupiter_borrow_withdraw" }> = {
+        kind: "jupiter_borrow_withdraw",
+        vaultId: args.vaultId,
+        positionId: args.positionId,
+      };
+
+      try {
+        setPendingAction(action);
+        setLastActionLabel("Jupiter Lend withdraw");
+        const data = await callJupiterBorrowWithdrawApi(action);
+        handleResult(data);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+      } finally {
+        setRebalancing(false);
+      }
+    },
+    [publicKey, callJupiterBorrowWithdrawApi, handleResult],
   );
 
   const approveWhitelist = useCallback(async () => {
@@ -220,7 +332,11 @@ export function useRebalance() {
       const data =
         pendingAction?.kind === "individual_swap"
           ? await callIndividualSwapApi(pendingAction)
-          : await callRebalanceApi();
+          : pendingAction?.kind === "jupiter_borrow_deposit"
+            ? await callJupiterBorrowDepositApi(pendingAction)
+            : pendingAction?.kind === "jupiter_borrow_withdraw"
+              ? await callJupiterBorrowWithdrawApi(pendingAction)
+            : await callRebalanceApi();
       handleResult(data);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -228,17 +344,20 @@ export function useRebalance() {
     } finally {
       setRebalancing(false);
     }
-  }, [pendingPrograms, pendingAction, connection, publicKey, getProvider, callRebalanceApi, callIndividualSwapApi, handleResult]);
+  }, [pendingPrograms, pendingAction, connection, publicKey, getProvider, callRebalanceApi, callIndividualSwapApi, callJupiterBorrowDepositApi, callJupiterBorrowWithdrawApi, handleResult]);
 
   return {
     rebalance,
     convertAssetToUsdc,
     swapVaultAsset,
+    depositJupiterBorrowCollateral,
+    withdrawJupiterBorrowCollateral,
     approveWhitelist,
     rebalancing,
     convertingMint,
     result,
     error,
     needsWhitelist,
+    lastActionLabel,
   };
 }

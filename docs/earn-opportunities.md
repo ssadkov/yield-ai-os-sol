@@ -78,3 +78,35 @@ Required allowlist entries:
 - `KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd` - Kamino kVault.
 - `FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr` - Kamino Farms.
 - `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` - Kamino Lend, included for upcoming direct borrow/lend actions.
+
+## Jupiter Lend collateral execution
+
+Status: launched in the UI for xStocks / USDC collateral positions.
+
+What is live:
+- Deposit xStocks collateral from the vault into Jupiter Lend borrow positions.
+- Reuse an existing Jupiter position NFT held by the vault PDA.
+- Create a position NFT only when none exists, then transfer it into the vault PDA.
+- Withdraw all Jupiter collateral back to the vault when debt is zero.
+- Show Jupiter Lend positions inside the Vault card with collateral, debt, market, and position id.
+
+Current enabled collateral markets:
+- `TSLAx / USDC` - Jupiter borrow vault `77`.
+- `SPYx / USDC` - Jupiter borrow vault `78`.
+- `QQQx / USDC` - Jupiter borrow vault `79`.
+- `NVDAx / USDC` - Jupiter borrow vault `80`.
+
+Execution model:
+- The executor signs the outer transaction with `AUTHORITY_SECRET_KEY`.
+- The vault program wraps Jupiter Borrow `Operate` through `execute_protocol_cpi`.
+- The vault PDA signs the inner Jupiter instructions with `invoke_signed`.
+- Initial position NFT creation is paid by the executor because a program-owned vault PDA cannot pay System Program rent directly.
+
+Known behavior:
+- Jupiter Borrow position accounting uses 9-decimal internal precision even when the collateral token has 8 decimals.
+- The UI displays user-friendly token units from this accounting value.
+- MAX collateral deposits leave one raw token unit in the vault to avoid Token-2022 transfer rounding failures.
+- Withdraw is currently all-collateral only and disabled while the position has debt.
+
+Next planned action:
+- Add USDC borrow from the existing Jupiter Lend position, then route borrowed USDC into an earn destination manually before packaging it as a strategy.

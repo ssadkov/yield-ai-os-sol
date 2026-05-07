@@ -5,6 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";
+import { useJupiterBorrowPositions } from "@/hooks/useJupiterBorrowPositions";
 import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
@@ -13,6 +14,7 @@ import { deriveVaultPda, getMissingDefaultAllowedPrograms, type StrategyName } f
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { USDC_DECIMALS, USDC_MINT_STR } from "@/lib/constants";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
+import { JUPITER_XSTOCKS_USDC_MARKETS } from "@/lib/jupiterBorrowMarkets";
 
 const COLLAPSED_COUNT = 7;
 
@@ -56,6 +58,21 @@ function usdcToRawAmount(value: string): string {
   return `${whole || "0"}${paddedFractional}`.replace(/^0+(?=\d)/, "") || "0";
 }
 
+function decimalToRawAmount(value: string, decimals: number): string {
+  const normalized = value.trim();
+  if (!normalized) return "0";
+  const [whole, fractional = ""] = normalized.split(".");
+  const paddedFractional = fractional.padEnd(decimals, "0").slice(0, decimals);
+  return `${whole || "0"}${paddedFractional}`.replace(/^0+(?=\d)/, "") || "0";
+}
+
+function rawToDecimalAmount(raw: string, decimals: number): string {
+  const digits = raw.padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = decimals === 0 ? "" : digits.slice(-decimals).replace(/0+$/, "");
+  return `${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
 function formatAmount(value: number): string {
   return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
@@ -73,18 +90,23 @@ export function VaultCard() {
     rebalance,
     convertAssetToUsdc,
     swapVaultAsset,
+    depositJupiterBorrowCollateral,
+    withdrawJupiterBorrowCollateral,
     approveWhitelist,
     rebalancing,
     convertingMint,
     result: rebalanceResult,
     error: rebalanceError,
     needsWhitelist,
+    lastActionLabel,
   } = useRebalance();
   const [holdingsExpanded, setHoldingsExpanded] = useState(false);
   const [kaminoWithdrawVault, setKaminoWithdrawVault] = useState<string | null>(null);
   const [kaminoWithdrawError, setKaminoWithdrawError] = useState<string | null>(null);
   const [buyTargetMint, setBuyTargetMint] = useState(VAULT_DEPOSIT_ASSETS.find((asset) => asset.symbol === "SPYx")?.mint ?? "");
   const [buyAmount, setBuyAmount] = useState("");
+  const [lendTargetMint, setLendTargetMint] = useState(JUPITER_XSTOCKS_USDC_MARKETS[0]?.mint ?? "");
+  const [lendAmount, setLendAmount] = useState("");
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -106,9 +128,21 @@ export function VaultCard() {
     error: kaminoPositionsError,
     refresh: refreshKaminoPositions,
   } = useKaminoKvaultPositions(publicKey);
+  const {
+    positions: jupiterBorrowPositions,
+    loading: jupiterBorrowPositionsLoading,
+    error: jupiterBorrowPositionsError,
+    refresh: refreshJupiterBorrowPositions,
+  } = useJupiterBorrowPositions(publicKey);
 
   const handleRefreshAll = async () => {
-    await Promise.all([refresh(), refreshVaultAssets(), refreshPnl(), refreshKaminoPositions()]);
+    await Promise.all([
+      refresh(),
+      refreshVaultAssets(),
+      refreshPnl(),
+      refreshKaminoPositions(),
+      refreshJupiterBorrowPositions(),
+    ]);
   };
 
   const handleKaminoWithdraw = async (position: (typeof kaminoPositions)[number]) => {
@@ -140,12 +174,17 @@ export function VaultCard() {
     }
   };
 
+  const isHiddenPositionToken = (asset: (typeof vaultAssets)[number]) =>
+    kaminoPositions.some((position) => position.sharesMint === asset.mint) ||
+    asset.name.toLowerCase().startsWith("jupiter vault") ||
+    /^jv\d+$/i.test(asset.symbol);
+
   const holdingsVisible = holdingsExpanded
-    ? vaultAssets.filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint))
+    ? vaultAssets.filter((asset) => !isHiddenPositionToken(asset))
     : vaultAssets
-        .filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint))
+        .filter((asset) => !isHiddenPositionToken(asset))
         .slice(0, COLLAPSED_COUNT);
-  const visibleVaultAssets = vaultAssets.filter((asset) => !kaminoPositions.some((position) => position.sharesMint === asset.mint));
+  const visibleVaultAssets = vaultAssets.filter((asset) => !isHiddenPositionToken(asset));
   const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
   const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
@@ -171,6 +210,50 @@ export function VaultCard() {
       amountUsd: buyAmountNumber,
     });
     setBuyAmount("");
+    await handleRefreshAll();
+  };
+  const availableJupiterLendMarkets = JUPITER_XSTOCKS_USDC_MARKETS.map((market) => ({
+    market,
+    asset: vaultAssets.find((asset) => asset.mint === market.mint),
+  })).filter((item): item is { market: (typeof JUPITER_XSTOCKS_USDC_MARKETS)[number]; asset: NonNullable<typeof item.asset> } =>
+    Boolean(item.asset && Number(item.asset.balance) > 0),
+  );
+  const selectedLendItem =
+    availableJupiterLendMarkets.find((item) => item.market.mint === lendTargetMint) ??
+    availableJupiterLendMarkets[0];
+  const lendAmountNumber = Number(lendAmount);
+  const lendAmountRaw =
+    selectedLendItem && lendAmount && Number.isFinite(lendAmountNumber) && lendAmountNumber > 0
+      ? decimalToRawAmount(lendAmount, selectedLendItem.market.decimals)
+      : "0";
+  const lendAmountInvalid =
+    !selectedLendItem ||
+    !lendAmount ||
+    !Number.isFinite(lendAmountNumber) ||
+    lendAmountNumber <= 0 ||
+    BigInt(lendAmountRaw) > BigInt(selectedLendItem.asset.rawAmount);
+  const setLendPercent = (pct: number) => {
+    if (!selectedLendItem || BigInt(selectedLendItem.asset.rawAmount) === BigInt(0)) return;
+    const raw = BigInt(selectedLendItem.asset.rawAmount);
+    const maxRaw = raw > BigInt(1) ? raw - BigInt(1) : raw;
+    const nextRaw = pct === 1 ? maxRaw : (raw * BigInt(Math.round(pct * 100))) / BigInt(100);
+    setLendAmount(rawToDecimalAmount(nextRaw.toString(), selectedLendItem.market.decimals));
+  };
+  const handleJupiterLendDeposit = async () => {
+    if (!selectedLendItem || lendAmountInvalid) return;
+    await depositJupiterBorrowCollateral({
+      vaultId: selectedLendItem.market.vaultId,
+      amountRaw: lendAmountRaw,
+    });
+    setLendAmount("");
+    await handleRefreshAll();
+  };
+  const handleJupiterLendWithdraw = async (position: (typeof jupiterBorrowPositions)[number]) => {
+    if (BigInt(position.debtRaw) !== BigInt(0)) return;
+    await withdrawJupiterBorrowCollateral({
+      vaultId: position.vaultId,
+      positionId: position.positionId,
+    });
     await handleRefreshAll();
   };
 
@@ -336,6 +419,81 @@ export function VaultCard() {
           </div>
         </div>
 
+        {availableJupiterLendMarkets.length > 0 && (
+          <div className="rounded-md border border-border bg-accent/25 p-3">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <div className="text-sm font-medium">Jupiter Lend collateral</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Deposit xStocks from vault for later USDC borrow
+                </div>
+              </div>
+              {selectedLendItem && (
+                <div className="text-right">
+                  <div className="text-[11px] text-muted-foreground">Available</div>
+                  <div className="text-xs font-mono">
+                    {formatAmount(selectedLendItem.asset.balance)} {selectedLendItem.market.symbol}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
+              <select
+                value={selectedLendItem?.market.mint ?? ""}
+                onChange={(e) => {
+                  setLendTargetMint(e.target.value);
+                  setLendAmount("");
+                }}
+                className="rounded-md border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                {availableJupiterLendMarkets.map(({ market, asset }) => (
+                  <option key={market.mint} value={market.mint}>
+                    {market.symbol} / USDC - {formatAmount(asset.balance)}
+                  </option>
+                ))}
+              </select>
+              <div className="relative">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  min="0"
+                  value={lendAmount}
+                  onChange={(e) => {
+                    const next = e.target.value.replace(",", ".");
+                    if (/^\d*\.?\d*$/.test(next)) setLendAmount(next);
+                  }}
+                  placeholder="Amount"
+                  className="w-full rounded-md border border-border bg-card px-3 py-2 pr-16 text-sm font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-muted-foreground">
+                  {selectedLendItem?.market.symbol ?? ""}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleJupiterLendDeposit()}
+                disabled={rebalancing || lendAmountInvalid}
+                className="cursor-pointer rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {rebalancing ? "Depositing..." : "Deposit"}
+              </button>
+            </div>
+            <div className="mt-2 flex gap-1">
+              {[0.25, 0.5, 1].map((pct) => (
+                <button
+                  key={pct}
+                  type="button"
+                  onClick={() => setLendPercent(pct)}
+                  disabled={rebalancing || !selectedLendItem}
+                  className="cursor-pointer text-[11px] px-2 py-0.5 rounded border border-border bg-card text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {pct === 1 ? "MAX" : `${Math.round(pct * 100)}%`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div>
           <div className="text-sm font-medium mb-2">Holdings</div>
           {vaultAssets.length === 0 && !vaultAssetsLoading && (
@@ -412,6 +570,55 @@ export function VaultCard() {
               )}
               {kaminoPositionsError && (
                 <div className="mt-2 text-xs text-destructive">{kaminoPositionsError}</div>
+              )}
+            </div>
+          )}
+          {(jupiterBorrowPositions.length > 0 || jupiterBorrowPositionsLoading || jupiterBorrowPositionsError) && (
+            <div className="mt-3 rounded-md border border-border bg-accent/25 p-3">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="text-sm font-medium">Jupiter Lend</div>
+                {jupiterBorrowPositionsLoading && (
+                  <span className="text-[11px] text-muted-foreground">Loading...</span>
+                )}
+              </div>
+              <div className="space-y-2">
+                {jupiterBorrowPositions.map((position) => (
+                  <div
+                    key={`${position.vaultId}:${position.positionId}`}
+                    className="flex items-start justify-between gap-3 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{position.market}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        Position #{position.positionId}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono">
+                        {formatTokenAmount(position.collateralAmount)} {position.collateralSymbol}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        Debt {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleJupiterLendWithdraw(position)}
+                        disabled={rebalancing || BigInt(position.debtRaw) !== BigInt(0)}
+                        title={
+                          BigInt(position.debtRaw) !== BigInt(0)
+                            ? "Repay debt before withdrawing collateral"
+                            : "Withdraw collateral back to vault"
+                        }
+                        className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {rebalancing ? "Withdrawing..." : "Withdraw to vault"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {jupiterBorrowPositionsError && (
+                <div className="mt-2 text-xs text-destructive">{jupiterBorrowPositionsError}</div>
               )}
             </div>
           )}
@@ -534,13 +741,13 @@ export function VaultCard() {
 
       {rebalanceError && (
         <div className="text-sm text-destructive mt-3 p-2 bg-destructive/10 rounded">
-          Rebalance: {rebalanceError}
+          {lastActionLabel}: {rebalanceError}
         </div>
       )}
 
       {rebalanceResult && rebalanceResult.status === "success" && (
         <div className="mt-3 p-2 bg-success/10 rounded space-y-1">
-          <div className="text-sm text-success font-medium">Rebalance complete</div>
+          <div className="text-sm text-success font-medium">{lastActionLabel} complete</div>
           {rebalanceResult.signatures?.map((sig) => (
             <div key={sig} className="text-xs text-muted-foreground">
               <a

@@ -132,9 +132,6 @@ export function EarnIdeasCards() {
       <div className="flex items-start justify-between gap-3 mb-3">
         <div>
           <h2 className="text-sm font-semibold">Earn ideas</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Snapshot-based candidates for USDC, SOL, BTC, xStocks, and OnRe.
-          </p>
         </div>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
           {sourceState === "loading" ? "loading" : sourceState === "live" ? "live" : "fallback"}

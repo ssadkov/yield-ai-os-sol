@@ -17,9 +17,70 @@ import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import { JUPITER_XSTOCKS_USDC_MARKETS } from "@/lib/jupiterBorrowMarkets";
 
 const COLLAPSED_COUNT = 7;
+const USDC_LOGO_URL =
+  "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png";
+const KAMINO_LOGO_URL = "https://cdn.kamino.finance/kamino.svg";
+const JUPITER_LOGO_URL = "https://static.jup.ag/jup/icon.png";
+
+function xStockLogoUrl(symbol: string): string {
+  return `https://xstocks-metadata.backed.fi/logos/tokens/${symbol}.png`;
+}
 
 function orbExplorerUrl(vaultAddress: string): string {
   return `https://orbmarkets.io/address/${vaultAddress}/history?hideSpam=true`;
+}
+
+function ProtocolBadge({ src, alt }: { src: string; alt: string }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="w-4 h-4 rounded-full bg-muted border border-border"
+      onError={(e) => {
+        (e.currentTarget as HTMLImageElement).style.display = "none";
+      }}
+    />
+  );
+}
+
+function DualIcon({
+  primarySrc,
+  primaryAlt,
+  badgeSrc,
+  badgeAlt,
+}: {
+  primarySrc: string;
+  primaryAlt: string;
+  badgeSrc: string;
+  badgeAlt: string;
+}) {
+  return (
+    <div className="relative w-7 h-7 shrink-0">
+      <img
+        src={primarySrc}
+        alt={primaryAlt}
+        className="w-7 h-7 rounded-full bg-muted"
+        onError={(e) => {
+          const t = e.currentTarget as HTMLImageElement;
+          t.replaceWith(
+            Object.assign(document.createElement("div"), {
+              className:
+                "w-7 h-7 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground",
+              textContent: primaryAlt.charAt(0),
+            }),
+          );
+        }}
+      />
+      <img
+        src={badgeSrc}
+        alt={badgeAlt}
+        className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-card ring-1 ring-border"
+        onError={(e) => {
+          (e.currentTarget as HTMLImageElement).style.display = "none";
+        }}
+      />
+    </div>
+  );
 }
 
 function formatTimestamp(ts: number): string {
@@ -235,6 +296,27 @@ export function VaultCard() {
   } = useVaultPnl(pnlCurrentValueUsd);
   const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
   const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
+
+  const chartAssets = [
+    ...visibleVaultAssets,
+    ...kaminoPositions
+      .filter((p) => (p.underlyingUsd ?? 0) > 0.05)
+      .map((p) => ({
+        mint: `kamino:${p.vaultAddress}`,
+        symbol: "Kamino USDC",
+        name: p.vaultName,
+        logoURI: USDC_LOGO_URL,
+        balance: p.underlyingAmount ?? 0,
+        rawAmount: "0",
+        decimals: 6,
+        usdPrice: 1,
+        usdValue: p.underlyingUsd ?? 0,
+        apr: apyDecimalToPercent(p.apy)
+          ? { value: apyDecimalToPercent(p.apy) as number, source: "kamino" }
+          : undefined,
+      })),
+  ];
+  const chartTotalUsd = chartAssets.reduce((sum, a) => sum + (a.usdValue ?? 0), 0);
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
   const vaultUsdc = vaultUsdcAsset?.balance ?? 0;
   const buyTargets = VAULT_DEPOSIT_ASSETS.filter((asset) => asset.mint !== USDC_MINT_STR);
@@ -423,7 +505,7 @@ export function VaultCard() {
           </div>
         </div>
 
-        <VaultAllocationChart assets={vaultAssets} totalUsd={vaultTotalUsd} />
+        <VaultAllocationChart assets={chartAssets} totalUsd={chartTotalUsd} />
 
         <div className="rounded-md border border-border bg-accent/25 p-3">
           <div className="flex items-center justify-between gap-3 mb-3">
@@ -599,43 +681,66 @@ export function VaultCard() {
           {(kaminoPositions.length > 0 || kaminoPositionsLoading || kaminoPositionsError) && (
             <div className="mt-3 rounded-md border border-border bg-accent/25 p-3">
               <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="text-sm font-medium">Kamino Earn</div>
+                <div className="text-sm font-medium flex items-center gap-2">
+                  <ProtocolBadge src={KAMINO_LOGO_URL} alt="Kamino" />
+                  Kamino Earn
+                </div>
                 {kaminoPositionsLoading && (
                   <span className="text-[11px] text-muted-foreground">Loading...</span>
                 )}
               </div>
-              <div className="space-y-2">
-                {kaminoPositions.map((position) => (
-                  <div
-                    key={position.vaultAddress}
-                    className="flex items-start justify-between gap-3 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{decodeDisplayName(position.vaultName)}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {formatApy(position.apy) ?? "Kamino position"} · {position.totalShares} shares
+              <div className="divide-y divide-border">
+                {kaminoPositions.map((position) => {
+                  const apyPercent = apyDecimalToPercent(position.apy);
+                  const isWithdrawing = kaminoWithdrawVault === position.vaultAddress;
+                  return (
+                    <div
+                      key={position.vaultAddress}
+                      className="flex items-center justify-between py-2.5 px-1 gap-3"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <DualIcon
+                          primarySrc={USDC_LOGO_URL}
+                          primaryAlt="USDC"
+                          badgeSrc={KAMINO_LOGO_URL}
+                          badgeAlt="Kamino"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium flex items-center gap-2">
+                            <span>USDC</span>
+                            {apyPercent !== null && (
+                              <span
+                                className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"
+                                title="Source: Kamino"
+                              >
+                                {apyPercent.toFixed(2)}% APY
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground truncate max-w-[180px]">
+                            {decodeDisplayName(position.vaultName)}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-mono">
+                          {formatTokenAmount(position.underlyingAmount)}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {formatUsd(position.underlyingUsd)}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleKaminoWithdraw(position)}
+                          disabled={kaminoWithdrawVault !== null}
+                          className="mt-1 cursor-pointer text-[10px] px-2 py-0.5 rounded border border-border bg-card text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {isWithdrawing ? "Withdrawing..." : "Withdraw"}
+                        </button>
                       </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono">
-                        {formatTokenAmount(position.underlyingAmount)} USDC
-                      </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {formatUsd(position.underlyingUsd)}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleKaminoWithdraw(position)}
-                        disabled={kaminoWithdrawVault !== null}
-                        className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {kaminoWithdrawVault === position.vaultAddress
-                          ? "Withdrawing..."
-                          : "Withdraw to vault"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               {kaminoWithdrawError && (
                 <div className="mt-2 text-xs text-destructive">{kaminoWithdrawError}</div>
@@ -648,27 +753,50 @@ export function VaultCard() {
           {(jupiterBorrowPositions.length > 0 || jupiterBorrowPositionsLoading || jupiterBorrowPositionsError) && (
             <div className="mt-3 rounded-md border border-border bg-accent/25 p-3">
               <div className="flex items-center justify-between gap-3 mb-2">
-                <div className="text-sm font-medium">Jupiter Lend</div>
+                <div className="text-sm font-medium flex items-center gap-2">
+                  <ProtocolBadge src={JUPITER_LOGO_URL} alt="Jupiter" />
+                  Jupiter Lend
+                </div>
                 {jupiterBorrowPositionsLoading && (
                   <span className="text-[11px] text-muted-foreground">Loading...</span>
                 )}
               </div>
-              <div className="space-y-2">
+              <div className="divide-y divide-border">
                 {jupiterBorrowPositions.map((position) => (
-                  <div key={`${position.vaultId}:${position.positionId}`} className="space-y-2">
-                    <div className="flex items-start justify-between gap-3 text-sm">
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{position.market}</div>
-                        <div className="text-[11px] text-muted-foreground">
-                          Position #{position.positionId}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {formatPercent(position.depositApy) ?? "Supply APY n/a"} /{" "}
-                          {formatPercent(position.borrowAPY, "borrow") ?? "Borrow APR n/a"}
+                  <div key={`${position.vaultId}:${position.positionId}`} className="py-2.5 px-1 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <DualIcon
+                          primarySrc={xStockLogoUrl(position.collateralSymbol)}
+                          primaryAlt={position.collateralSymbol}
+                          badgeSrc={JUPITER_LOGO_URL}
+                          badgeAlt="Jupiter"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+                            <span>{position.market}</span>
+                            {position.netApy !== null && (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                                  position.netApy >= 0
+                                    ? "bg-success/15 text-success"
+                                    : "bg-destructive/15 text-destructive"
+                                }`}
+                                title="Net APY = collateral yield − debt cost"
+                              >
+                                Net {position.netApy.toFixed(2)}%
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground truncate">
+                            Position #{position.positionId} ·{" "}
+                            {formatPercent(position.depositApy) ?? "—"} supply /{" "}
+                            {formatPercent(position.borrowAPY, "borrow") ?? "—"}
+                          </div>
                         </div>
                       </div>
                       <div className="text-right shrink-0">
-                        <div className="font-mono">
+                        <div className="text-sm font-mono">
                           {formatTokenAmount(position.collateralAmount)} {position.collateralSymbol}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
@@ -678,11 +806,6 @@ export function VaultCard() {
                           Debt {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
                           {position.debtUsd !== null ? ` (${formatUsd(position.debtUsd)})` : ""}
                         </div>
-                        {position.netApy !== null && (
-                          <div className={position.netApy >= 0 ? "text-[11px] text-success" : "text-[11px] text-destructive"}>
-                            Net {formatPercent(position.netApy)}
-                          </div>
-                        )}
                         <button
                           type="button"
                           onClick={() => void handleJupiterLendWithdraw(position)}
@@ -692,9 +815,9 @@ export function VaultCard() {
                               ? "Repay debt before withdrawing collateral"
                               : "Withdraw collateral back to vault"
                           }
-                          className="mt-1 cursor-pointer text-[11px] px-2 py-1 rounded border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="mt-1 cursor-pointer text-[10px] px-2 py-0.5 rounded border border-border bg-card text-muted-foreground hover:text-foreground hover:border-muted-foreground/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          {rebalancing ? "Withdrawing..." : "Withdraw to vault"}
+                          {rebalancing ? "Withdrawing..." : "Withdraw"}
                         </button>
                       </div>
                     </div>

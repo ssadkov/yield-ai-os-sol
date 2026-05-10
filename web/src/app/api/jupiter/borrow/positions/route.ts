@@ -13,9 +13,9 @@ function optionalEnv(name: string): string | undefined {
 }
 
 export async function GET(req: NextRequest) {
+  const owner = req.nextUrl.searchParams.get("owner");
+  const vault = req.nextUrl.searchParams.get("vault");
   try {
-    const owner = req.nextUrl.searchParams.get("owner");
-    const vault = req.nextUrl.searchParams.get("vault");
     if (!owner && !vault) {
       return NextResponse.json(
         { success: false, error: "owner or vault query param is required" },
@@ -45,6 +45,13 @@ export async function GET(req: NextRequest) {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    console.error(
+      `[api/jupiter/borrow/positions] failed owner=${owner ?? "null"} vault=${vault ?? "null"}:`,
+      err,
+    );
+    return NextResponse.json(
+      { success: false, error: message, owner: owner ?? null, vault: vault ?? null },
+      { status: 500 },
+    );
   }
 }

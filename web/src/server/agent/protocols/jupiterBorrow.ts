@@ -13,7 +13,6 @@ import {
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
-  unpackAccount,
 } from "@solana/spl-token";
 import { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket } from "@/lib/jupiterBorrowMarkets";
 import { fetchPrices, type JupiterPriceEntry } from "@/lib/jupiter";
@@ -119,12 +118,41 @@ function getCollateralMarket(vaultId: number): JupiterBorrowCollateralMarket | u
   return JUPITER_XSTOCKS_USDC_MARKETS.find((market) => market.vaultId === vaultId);
 }
 
-export async function findExistingVaultJupiterBorrowPosition(args: {
+/** Fetches all NFT (decimals=0, amount=1) token accounts owned by the vault in a single RPC call. */
+export async function fetchVaultNftAtaSet(args: {
+  connection: Connection;
+  vault: PublicKey;
+}): Promise<Set<string>> {
+  const res = await args.connection.getParsedTokenAccountsByOwner(
+    args.vault,
+    { programId: TOKEN_PROGRAM_ID },
+    "confirmed",
+  );
+  const set = new Set<string>();
+  for (const { pubkey, account } of res.value) {
+    const parsed = (account.data as { parsed?: { info?: { tokenAmount?: { amount?: string; decimals?: number } } } }).parsed;
+    const info = parsed?.info;
+    if (!info?.tokenAmount) continue;
+    if (info.tokenAmount.decimals === 0 && info.tokenAmount.amount === "1") {
+      set.add(pubkey.toBase58());
+    }
+  }
+  return set;
+}
+
+const DEFAULT_POSITION_SCAN_DEPTH = 5000;
+
+/** Returns all positionIds the vault holds for a given Jupiter Borrow market.
+ *  Local scan against a pre-fetched set of vault-owned NFT ATAs — no extra RPC per candidate.
+ *  Mutates `vaultNftAtas` (deletes matched entries) so callers can stop early across markets. */
+export async function findAllVaultJupiterBorrowPositionIds(args: {
   connection: Connection;
   vault: PublicKey;
   vaultId: number;
-  scanLimit?: number;
-}): Promise<ExistingJupiterBorrowPosition | null> {
+  vaultNftAtas: Set<string>;
+  maxScan?: number;
+}): Promise<number[]> {
+  if (args.vaultNftAtas.size === 0) return [];
   const [{ getInitPositionContext, getInitPositionIx }, runtimeWeb3] = await Promise.all([
     loadJupiterBorrow(),
     loadRuntimeWeb3(),
@@ -137,41 +165,52 @@ export async function findExistingVaultJupiterBorrowPosition(args: {
     signer: sdkVault as unknown as PublicKey,
   });
 
-  const scannedFrom = Math.max(1, next.nftId - 1);
-  const scannedTo = Math.max(1, next.nftId - (args.scanLimit ?? 100));
-  const candidates: { positionId: number; tokenAccount: PublicKey }[] = [];
-  for (let positionId = scannedFrom; positionId >= scannedTo; positionId--) {
+  const upperBound = Math.max(1, next.nftId - 1);
+  const depth = args.maxScan ?? DEFAULT_POSITION_SCAN_DEPTH;
+  const lowerBound = Math.max(1, upperBound - depth + 1);
+  const found: number[] = [];
+  for (let positionId = upperBound; positionId >= lowerBound; positionId--) {
+    if (args.vaultNftAtas.size === 0) break;
     const context = getInitPositionContext(args.vaultId, positionId, sdkVault as unknown as PublicKey);
-    candidates.push({
-      positionId,
-      tokenAccount: new PublicKey(context.positionTokenAccount.toBase58()),
-    });
-  }
-
-  const accounts = await args.connection.getMultipleAccountsInfo(
-    candidates.map((candidate) => candidate.tokenAccount),
-    "confirmed",
-  );
-  for (let index = 0; index < candidates.length; index++) {
-    const info = accounts[index];
-    if (!info) continue;
-
-    try {
-      const account = unpackAccount(candidates[index].tokenAccount, info, TOKEN_PROGRAM_ID);
-      if (account.owner.equals(args.vault) && account.amount === BigInt(1)) {
-        return {
-          positionId: candidates[index].positionId,
-          tokenAccount: candidates[index].tokenAccount.toBase58(),
-          scannedFrom,
-          scannedTo,
-        };
-      }
-    } catch {
-      continue;
+    const ata = context.positionTokenAccount.toBase58();
+    if (args.vaultNftAtas.has(ata)) {
+      found.push(positionId);
+      args.vaultNftAtas.delete(ata);
     }
   }
+  return found;
+}
 
-  return null;
+export async function findExistingVaultJupiterBorrowPosition(args: {
+  connection: Connection;
+  vault: PublicKey;
+  vaultId: number;
+  scanLimit?: number;
+}): Promise<ExistingJupiterBorrowPosition | null> {
+  const vaultNftAtas = await fetchVaultNftAtaSet({
+    connection: args.connection,
+    vault: args.vault,
+  });
+  const ids = await findAllVaultJupiterBorrowPositionIds({
+    connection: args.connection,
+    vault: args.vault,
+    vaultId: args.vaultId,
+    vaultNftAtas,
+  });
+  if (ids.length === 0) return null;
+  const positionId = ids[0];
+  const [{ getInitPositionContext }, runtimeWeb3] = await Promise.all([
+    loadJupiterBorrow(),
+    loadRuntimeWeb3(),
+  ]);
+  const sdkVault = new runtimeWeb3.PublicKey(args.vault.toBase58());
+  const context = getInitPositionContext(args.vaultId, positionId, sdkVault as unknown as PublicKey);
+  return {
+    positionId,
+    tokenAccount: context.positionTokenAccount.toBase58(),
+    scannedFrom: positionId,
+    scannedTo: 1,
+  };
 }
 
 function rawToUiAmount(raw: string, decimals: number): number {
@@ -257,23 +296,77 @@ export async function readVaultJupiterBorrowPositions(args: {
     }
   }
 
-  const positions = await Promise.all(
-    JUPITER_XSTOCKS_USDC_MARKETS.map(async (market) => {
-      const existing = await findExistingVaultJupiterBorrowPosition({
+  let vaultNftAtas: Set<string>;
+  try {
+    vaultNftAtas = await fetchVaultNftAtaSet({
+      connection: args.connection,
+      vault: args.vault,
+    });
+  } catch (err) {
+    console.error(
+      `[jupiterBorrow] fetchVaultNftAtaSet failed for vault=${args.vault.toBase58()}:`,
+      err,
+    );
+    return [];
+  }
+  console.log(
+    `[jupiterBorrow] vault=${args.vault.toBase58()} holds ${vaultNftAtas.size} NFT token accounts`,
+  );
+
+  const { getInitPositionContext } = await loadJupiterBorrow();
+  const sdkVault = new runtimeWeb3.PublicKey(args.vault.toBase58());
+
+  const flattened: Array<{ market: typeof JUPITER_XSTOCKS_USDC_MARKETS[number]; positionId: number }> = [];
+  for (const market of JUPITER_XSTOCKS_USDC_MARKETS) {
+    let positionIds: number[] = [];
+    try {
+      positionIds = await findAllVaultJupiterBorrowPositionIds({
         connection: args.connection,
         vault: args.vault,
         vaultId: market.vaultId,
+        vaultNftAtas,
       });
-      if (!existing) return null;
+    } catch (err) {
+      console.error(
+        `[jupiterBorrow] findAllVaultJupiterBorrowPositionIds failed for vault=${args.vault.toBase58()} market=${market.symbol} vaultId=${market.vaultId}:`,
+        err,
+      );
+      continue;
+    }
+    console.log(
+      `[jupiterBorrow] vault=${args.vault.toBase58()} market=${market.symbol} found positions: [${positionIds.join(",")}]`,
+    );
+    for (const positionId of positionIds) {
+      flattened.push({ market, positionId });
+    }
+  }
 
-      const current = await getCurrentPosition({
-        vaultId: market.vaultId,
-        positionId: existing.positionId,
-        connection: sdkConnection as unknown as Connection,
-      });
+  const positions = await Promise.all(
+    flattened.map(async ({ market, positionId }) => {
+      let current: Awaited<ReturnType<typeof getCurrentPosition>>;
+      try {
+        current = await getCurrentPosition({
+          vaultId: market.vaultId,
+          positionId,
+          connection: sdkConnection as unknown as Connection,
+        });
+      } catch (err) {
+        console.error(
+          `[jupiterBorrow] getCurrentPosition failed for vault=${args.vault.toBase58()} market=${market.symbol} vaultId=${market.vaultId} positionId=${positionId}:`,
+          err,
+        );
+        return null;
+      }
       const collateralRaw = current.colRaw.toString();
       const debtRaw = current.debtRaw.toString();
       if (BigInt(collateralRaw) === BigInt(0) && BigInt(debtRaw) === BigInt(0)) return null;
+      let positionTokenAccount = "";
+      try {
+        const ctx = getInitPositionContext(market.vaultId, positionId, sdkVault as unknown as PublicKey);
+        positionTokenAccount = ctx.positionTokenAccount.toBase58();
+      } catch {
+        // best-effort
+      }
       const collateralAmount = rawToUiAmount(collateralRaw, jupiterAccountingDecimals(market.decimals));
       const debtAmount = rawToUiAmount(debtRaw, jupiterAccountingDecimals(6));
       const collateralUsd = prices[market.mint]?.usdPrice != null
@@ -299,7 +392,7 @@ export async function readVaultJupiterBorrowPositions(args: {
       const result: VaultJupiterBorrowPosition = {
         protocol: "Jupiter" as const,
         vaultId: market.vaultId,
-        positionId: existing.positionId,
+        positionId,
         market: `${market.symbol} / ${market.borrowSymbol}`,
         collateralSymbol: market.symbol,
         collateralMint: market.mint,
@@ -315,7 +408,7 @@ export async function readVaultJupiterBorrowPositions(args: {
         depositApy: rate?.depositApy ?? null,
         borrowAPY: rate?.borrowAPY ?? null,
         netApy,
-        tokenAccount: existing.tokenAccount,
+        tokenAccount: positionTokenAccount,
       };
       return result;
     }),

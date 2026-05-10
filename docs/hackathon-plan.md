@@ -3,6 +3,8 @@
 15 working hours, solo, video self-recorded.
 Code freeze 6h before submission. Submit minimum 2h before deadline.
 
+**Order of sessions:** 1 → 2 → 3 → 4 → 4.5 → 5. Stretch (D&D) only if buffer holds.
+
 ---
 
 ## Session 1 — 3h · Stocks-Earn flagship polish
@@ -82,25 +84,53 @@ Editing:
 
 ---
 
+## Session 4.5 — 1h · GitHub README polish
+
+Judges read the README before/after the video. Make it punchy.
+
+- Hero block at the top (3–5 lines): one-line tagline, "Live on Solana mainnet" badge, link to demo video, link to deployed app.
+- Replace generic "What it does today" with the **Stocks-Earn loop** as the flagship section first.
+- Add Solscan-linked block: vault program ID, sample vault PDA, whitelisted program IDs (Jupiter Router, Jupiter Lend, Kamino Lend) — with human names.
+- Trust model section, 3 bullets max: PDA custody · owner-only withdraw · CPI allowlist.
+- Architecture mermaid diagram already exists — keep, but trim words around it.
+- Demo tx hashes (3–4 mainnet links) under "Proof of life".
+- Roadmap line: mobile (Solana Seeker), open agent layer.
+- Strip dev-setup details into a collapsible `<details>` at the bottom — judges don't need build instructions in their face.
+
+**Checkpoint:** README scannable in 30 seconds, video link visible above the fold.
+
+---
+
 ## Session 5 — 2h · Submission + polish
 
 - Fill Colosseum form + two side-tracks (KZ + S1lkPay). **Different positioning text per track** (below).
-- Update README:
-  - "What's new in this submission" paragraph
-  - Video link
-  - Solscan links to vault + programs
-  - Demo tx hashes
+- README final pass: video link inserted, all Solscan links resolve.
 - Smoke test on clean incognito: nothing crashes, wallet connects, demo flow works.
 
 **Checkpoint:** submitted ≥ 2h before deadline.
 
 ---
 
+## Stretch goal — Drag & Drop deposit (1–1.5h)
+
+Run **after Stocks-Earn flagship polish is fully done**, not before. Killer demo moment: drag a token from Wallet Assets straight into the vault to deposit/activate.
+
+- Native HTML5 drag&drop, no library.
+- Drag source: vault-supported rows in `WalletAssetsCard` (others stay non-draggable).
+- Drop zone: vault card / Stocks-Earn activation area, with primary-tinted highlight on `dragover`.
+- On drop: open the existing deposit/activate flow with the dragged mint pre-selected and `MAX` pre-filled.
+- Skip touch backend — desktop demo only is fine.
+
+If short on time, cut entirely. Current asset selector (icons + USD) is already demo-grade.
+
+---
+
 ## Buffer
 
-Plan above is 15h flat. If something slips, cut in this order:
-1. Earn-idle (if Stocks-Earn looks strong enough alone)
-2. Security panel (compress to 5 bullets on main page)
+Plan above is 15h flat (16h with README session). If something slips, cut in this order:
+1. Drag & Drop stretch goal
+2. Earn-idle (if Stocks-Earn looks strong enough alone)
+3. Security panel (compress to 5 bullets on main page)
 
 ---
 

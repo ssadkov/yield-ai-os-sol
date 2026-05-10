@@ -12,6 +12,7 @@ import { deriveVaultPda, setAllowedPrograms } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import type { AssetRow } from "@/hooks/useVaultAssets";
+import { AssetSelect, type AssetSelectItem } from "@/components/AssetSelect";
 
 type Tab = "deposit" | "withdraw";
 type WithdrawStep =
@@ -60,6 +61,8 @@ interface UiAsset {
   name: string;
   decimals: number;
   balance: number;
+  logoURI?: string;
+  usdValue?: number | null;
 }
 
 function formatAmount(n: number, decimals = 6): string {
@@ -74,11 +77,9 @@ function fromVaultAsset(row: AssetRow): UiAsset {
     name: known?.name ?? row.name,
     decimals: known?.decimals ?? row.decimals,
     balance: row.balance,
+    logoURI: row.logoURI,
+    usdValue: row.usdValue,
   };
-}
-
-function optionLabel(asset: UiAsset): string {
-  return `${asset.symbol} - ${formatAmount(asset.balance, asset.decimals)}`;
 }
 
 export function DepositCard() {
@@ -102,7 +103,12 @@ export function DepositCard() {
   const depositAssets = useMemo(() => {
     return VAULT_DEPOSIT_ASSETS.map((asset) => {
       const row = walletAssets.find((walletAsset) => walletAsset.mint === asset.mint);
-      return { ...asset, balance: row?.balance ?? 0 };
+      return {
+        ...asset,
+        balance: row?.balance ?? 0,
+        logoURI: row?.logoURI,
+        usdValue: row?.usdValue ?? null,
+      };
     }).filter((asset) => asset.balance > 0);
   }, [walletAssets]);
 
@@ -381,31 +387,20 @@ export function DepositCard() {
         </button>
       </div>
 
-      {/* Balance hint */}
       {isDeposit && (
         <div className="mb-3">
           <label className="block text-xs text-muted-foreground mb-1.5">
             Asset
           </label>
-          <select
-            value={selectedDepositMint}
-            onChange={(e) => {
-              setSelectedDepositMint(e.target.value);
+          <AssetSelect
+            items={depositAssets as AssetSelectItem[]}
+            selectedMint={selectedDepositMint}
+            onChange={(mint) => {
+              setSelectedDepositMint(mint);
               setAmount("");
             }}
-            disabled={depositAssets.length === 0}
-            className="w-full rounded-lg border border-border bg-accent px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            {depositAssets.length > 0 ? (
-              depositAssets.map((asset) => (
-                <option key={asset.mint} value={asset.mint}>
-                  {optionLabel(asset)}
-                </option>
-              ))
-            ) : (
-              <option value={USDC_MINT_STR}>No wallet assets</option>
-            )}
-          </select>
+            emptyLabel="No wallet assets"
+          />
         </div>
       )}
       {!isDeposit && (
@@ -413,26 +408,16 @@ export function DepositCard() {
           <label className="block text-xs text-muted-foreground mb-1.5">
             Asset
           </label>
-          <select
-            value={selectedWithdrawAsset.mint}
-            onChange={(e) => {
-              setSelectedWithdrawMint(e.target.value);
+          <AssetSelect
+            items={withdrawAssets as AssetSelectItem[]}
+            selectedMint={selectedWithdrawAsset.mint}
+            onChange={(mint) => {
+              setSelectedWithdrawMint(mint);
               setAmount("");
               resetWithdrawState();
             }}
-            disabled={withdrawAssets.length === 0}
-            className="w-full rounded-lg border border-border bg-accent px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
-          >
-            {withdrawAssets.length > 0 ? (
-              withdrawAssets.map((asset) => (
-                <option key={asset.mint} value={asset.mint}>
-                  {optionLabel(asset)}
-                </option>
-              ))
-            ) : (
-              <option value={USDC_MINT_STR}>No vault assets</option>
-            )}
-          </select>
+            emptyLabel="No vault assets"
+          />
         </div>
       )}
 

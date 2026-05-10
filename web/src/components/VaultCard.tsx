@@ -315,6 +315,23 @@ export function VaultCard() {
           ? { value: apyDecimalToPercent(p.apy) as number, source: "kamino" }
           : undefined,
       })),
+    ...jupiterBorrowPositions
+      .filter((p) => (p.collateralUsd ?? 0) > 0.05)
+      .map((p) => ({
+        mint: `jupiter:${p.vaultId}:${p.positionId}`,
+        symbol: `${p.collateralSymbol} (Jupiter)`,
+        name: p.market,
+        logoURI: xStockLogoUrl(p.collateralSymbol),
+        balance: p.collateralAmount,
+        rawAmount: "0",
+        decimals: 0,
+        usdPrice: null,
+        usdValue: p.collateralUsd ?? 0,
+        apr:
+          p.depositApy != null
+            ? { value: p.depositApy, source: "jupiter" }
+            : undefined,
+      })),
   ];
   const chartTotalUsd = chartAssets.reduce((sum, a) => sum + (a.usdValue ?? 0), 0);
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
@@ -762,8 +779,11 @@ export function VaultCard() {
                 )}
               </div>
               <div className="divide-y divide-border">
-                {jupiterBorrowPositions.map((position) => (
+                {jupiterBorrowPositions.map((position) => {
+                  const hasDebt = BigInt(position.debtRaw) !== BigInt(0);
+                  return (
                   <div key={`${position.vaultId}:${position.positionId}`} className="py-2.5 px-1 space-y-2">
+                    {/* Collateral row */}
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
                         <DualIcon
@@ -774,7 +794,15 @@ export function VaultCard() {
                         />
                         <div className="min-w-0">
                           <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
-                            <span>{position.market}</span>
+                            <span>{position.collateralSymbol}</span>
+                            {position.depositApy != null && (
+                              <span
+                                className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"
+                                title="Supply APY paid by Jupiter on this collateral"
+                              >
+                                {position.depositApy.toFixed(2)}% supply
+                              </span>
+                            )}
                             {position.netApy !== null && (
                               <span
                                 className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
@@ -789,9 +817,7 @@ export function VaultCard() {
                             )}
                           </div>
                           <div className="text-[11px] text-muted-foreground truncate">
-                            Position #{position.positionId} ·{" "}
-                            {formatPercent(position.depositApy) ?? "—"} supply /{" "}
-                            {formatPercent(position.borrowAPY, "borrow") ?? "—"}
+                            Collateral · Position #{position.positionId}
                           </div>
                         </div>
                       </div>
@@ -802,16 +828,12 @@ export function VaultCard() {
                         <div className="text-[11px] text-muted-foreground">
                           {formatUsd(position.collateralUsd)}
                         </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          Debt {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
-                          {position.debtUsd !== null ? ` (${formatUsd(position.debtUsd)})` : ""}
-                        </div>
                         <button
                           type="button"
                           onClick={() => void handleJupiterLendWithdraw(position)}
-                          disabled={rebalancing || BigInt(position.debtRaw) !== BigInt(0)}
+                          disabled={rebalancing || hasDebt}
                           title={
-                            BigInt(position.debtRaw) !== BigInt(0)
+                            hasDebt
                               ? "Repay debt before withdrawing collateral"
                               : "Withdraw collateral back to vault"
                           }
@@ -821,6 +843,46 @@ export function VaultCard() {
                         </button>
                       </div>
                     </div>
+
+                    {/* Borrow row */}
+                    {hasDebt && (
+                      <div className="flex items-center justify-between gap-3 rounded-md bg-destructive/5 border border-destructive/20 px-2 py-1.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <DualIcon
+                            primarySrc={USDC_LOGO_URL}
+                            primaryAlt="USDC"
+                            badgeSrc={JUPITER_LOGO_URL}
+                            badgeAlt="Jupiter"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+                              <span>USDC</span>
+                              {position.borrowAPY != null && (
+                                <span
+                                  className="text-[10px] bg-destructive/15 text-destructive px-1.5 py-0.5 rounded font-mono"
+                                  title="Borrow APR charged on this debt"
+                                >
+                                  {position.borrowAPY.toFixed(2)}% borrow
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              Borrowed against {position.collateralSymbol}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-mono">
+                            {formatTokenAmount(position.debtAmount)} {position.borrowSymbol}
+                          </div>
+                          {position.debtUsd !== null && (
+                            <div className="text-[11px] text-muted-foreground">
+                              {formatUsd(position.debtUsd)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                       <div className="relative">
                         <input
@@ -905,7 +967,8 @@ export function VaultCard() {
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
               {jupiterBorrowPositionsError && (
                 <div className="mt-2 text-xs text-destructive">{jupiterBorrowPositionsError}</div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ShieldCheck, RefreshCw, TrendingUp, X, Check, Loader2, Heart } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { TokenChart } from "@/components/TokenChart";
@@ -18,6 +18,7 @@ import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { USDC_DECIMALS, USDC_MINT_STR } from "@/lib/constants";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import { JUPITER_XSTOCKS_USDC_MARKETS } from "@/lib/jupiterBorrowMarkets";
+import { isProtocolPositionOrShareToken } from "@/lib/vaultPositionTokens";
 
 const COLLAPSED_COUNT = 7;
 const USDC_LOGO_URL =
@@ -453,12 +454,18 @@ export function VaultCard() {
     }
   };
 
+  const kaminoShareMints = useMemo(
+    () =>
+      new Set(
+        kaminoPositions
+          .map((p) => p.sharesMint)
+          .filter((m): m is string => Boolean(m)),
+      ),
+    [kaminoPositions],
+  );
+
   const isHiddenPositionToken = (asset: (typeof vaultAssets)[number]) =>
-    kaminoPositions.some((position) => position.sharesMint === asset.mint) ||
-    asset.symbol.toLowerCase().startsWith("ki") ||
-    asset.name.toLowerCase().startsWith("kamino ") ||
-    asset.name.toLowerCase().startsWith("jupiter vault") ||
-    /^jv\d+$/i.test(asset.symbol);
+    isProtocolPositionOrShareToken(asset, { kaminoShareMints });
 
   const holdingsVisible = holdingsExpanded
     ? vaultAssets.filter((asset) => !isHiddenPositionToken(asset))

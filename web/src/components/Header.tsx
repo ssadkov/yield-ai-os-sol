@@ -13,8 +13,15 @@ const WalletMultiButton = dynamic(
 export function Header() {
   return (
     <header className="grid grid-cols-[1fr_auto_1fr] items-center px-6 py-4 border-b border-border gap-4">
-      <div className="flex items-center gap-2">
-        <span className="text-xl font-bold tracking-tight">Yield AI agent SOL</span>
+      <div className="flex items-center gap-3 min-w-0">
+        <img
+          src="/yield-ai-logo.png"
+          alt=""
+          width={36}
+          height={36}
+          className="h-9 w-9 shrink-0 rounded-md object-contain"
+        />
+        <span className="text-xl font-bold tracking-tight truncate">Yield AI agent SOL</span>
       </div>
       <div className="hidden md:flex items-center justify-center text-sm text-muted-foreground">
         <span>

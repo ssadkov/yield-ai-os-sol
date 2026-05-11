@@ -7,6 +7,7 @@ import { DepositCard } from "@/components/DepositCard";
 import { VaultCard } from "@/components/VaultCard";
 import { AIChat } from "@/components/AIChat";
 import { EarnIdeasCards } from "@/components/EarnIdeasCards";
+import { SHOW_AI_CHAT } from "@/config/features";
 
 export default function Home() {
   return (
@@ -29,7 +30,7 @@ export default function Home() {
           {/* Right column — chat */}
           <div className="space-y-4 min-h-0 lg:sticky lg:top-6 lg:self-start">
             <EarnIdeasCards />
-            <AIChat compact />
+            {SHOW_AI_CHAT ? <AIChat compact /> : null}
           </div>
         </div>
       </main>

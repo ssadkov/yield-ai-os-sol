@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ShieldCheck, RefreshCw, TrendingUp, X, Check, Loader2, Heart } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { TokenChart } from "@/components/TokenChart";
@@ -18,6 +18,7 @@ import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { USDC_DECIMALS, USDC_MINT_STR } from "@/lib/constants";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import { JUPITER_XSTOCKS_USDC_MARKETS } from "@/lib/jupiterBorrowMarkets";
+import { isProtocolPositionOrShareToken } from "@/lib/vaultPositionTokens";
 
 const COLLAPSED_COUNT = 7;
 const USDC_LOGO_URL =
@@ -34,6 +35,8 @@ interface DeactStep {
   status: LoopStepStatus;
   signature?: string;
   error?: string;
+  /** Non-fatal note from the backend (e.g. "dust repay skipped"). */
+  note?: string;
 }
 
 function xStockLogoUrl(symbol: string): string {
@@ -393,13 +396,19 @@ export function VaultCard() {
           max: true,
         }),
       });
-      const repayData = (await repayRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      const repayData = (await repayRes.json()) as {
+        status?: string;
+        error?: string;
+        signatures?: string[];
+        note?: string;
+      };
       if (!repayRes.ok || repayData.status === "error") {
         throw new Error(`Repay: ${repayData.error ?? `HTTP ${repayRes.status}`}`);
       }
       update(1, {
         status: "done",
         signature: repayData.signatures?.[repayData.signatures.length - 1],
+        note: repayData.note,
       });
       triggerBalanceRefresh();
       await sleepLoop(LOOP_STEP_PAUSE_MS);
@@ -416,13 +425,19 @@ export function VaultCard() {
           positionId: jupiterLeg.positionId,
         }),
       });
-      const wData = (await wRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      const wData = (await wRes.json()) as {
+        status?: string;
+        error?: string;
+        signatures?: string[];
+        note?: string;
+      };
       if (!wRes.ok || wData.status === "error") {
         throw new Error(`Withdraw collateral: ${wData.error ?? `HTTP ${wRes.status}`}`);
       }
       update(2, {
         status: "done",
         signature: wData.signatures?.[wData.signatures.length - 1],
+        note: wData.note,
       });
       triggerBalanceRefresh();
       for (const delay of [3000, 8000, 15000]) {
@@ -439,12 +454,18 @@ export function VaultCard() {
     }
   };
 
+  const kaminoShareMints = useMemo(
+    () =>
+      new Set(
+        kaminoPositions
+          .map((p) => p.sharesMint)
+          .filter((m): m is string => Boolean(m)),
+      ),
+    [kaminoPositions],
+  );
+
   const isHiddenPositionToken = (asset: (typeof vaultAssets)[number]) =>
-    kaminoPositions.some((position) => position.sharesMint === asset.mint) ||
-    asset.symbol.toLowerCase().startsWith("ki") ||
-    asset.name.toLowerCase().startsWith("kamino ") ||
-    asset.name.toLowerCase().startsWith("jupiter vault") ||
-    /^jv\d+$/i.test(asset.symbol);
+    isProtocolPositionOrShareToken(asset, { kaminoShareMints });
 
   const holdingsVisible = holdingsExpanded
     ? vaultAssets.filter((asset) => !isHiddenPositionToken(asset))
@@ -1049,6 +1070,9 @@ export function VaultCard() {
                         )}
                         {step.error && (
                           <div className="text-[10px] text-destructive break-all">{step.error}</div>
+                        )}
+                        {step.note && !step.error && (
+                          <div className="text-[10px] text-muted-foreground break-words">{step.note}</div>
                         )}
                       </div>
                     </div>

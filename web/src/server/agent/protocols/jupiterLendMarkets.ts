@@ -97,6 +97,8 @@ export const JUPITER_EARN_IDEA_VAULT_IDS = [
 ];
 
 async function loadJupiterLendRead(): Promise<typeof import("@jup-ag/lend-read")> {
+  // Opaque import keeps Turbopack from bundling lend-read against app Anchor 0.32 (Wallet mismatch).
+  // Pair with `serverExternalPackages` + `outputFileTracingIncludes` so Vercel copies node_modules.
   const dynamicImport = new Function("specifier", "return import(specifier)") as (
     specifier: string,
   ) => Promise<typeof import("@jup-ag/lend-read")>;

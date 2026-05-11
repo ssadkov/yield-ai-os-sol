@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ShieldCheck, RefreshCw, TrendingUp, X, Check, Loader2, Heart } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { TokenChart } from "@/components/TokenChart";
+import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";

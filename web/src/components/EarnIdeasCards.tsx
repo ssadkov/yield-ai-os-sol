@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ShieldCheck, Sparkles, Check, Loader2, X as XIcon } from "lucide-react";
+import { ShieldCheck, Sparkles, Check, Loader2, X as XIcon, Zap } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { deriveVaultPda } from "@/lib/vault";
@@ -12,6 +12,8 @@ import { EARN_IDEAS, EARN_IDEA_SYMBOLS, type EarnIdea } from "@/lib/earnIdeas";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { formatWalletError } from "@/lib/walletError";
 import { USDC_MINT_STR, SOL_MINT } from "@/lib/constants";
+import { DropZone } from "@/components/DropZone";
+import type { DragAsset } from "@/lib/dragAsset";
 
 type StepStatus = "pending" | "running" | "done" | "error";
 interface LoopStep {
@@ -447,6 +449,17 @@ export function EarnIdeasCards() {
     }
   };
 
+  const handleIdeaDrop = async (idea: EarnIdea, asset: DragAsset) => {
+    if (asset.source !== "vault") return;
+    if (pendingIdeaId) return;
+    if (!idea.requiredMints.includes(asset.mint)) return;
+    if (idea.action?.type === "kaminoKvaultDeposit") {
+      await handleKaminoDeposit(idea);
+    } else if (idea.action?.type === "stocksEarnLoop") {
+      await handleActivateLoop(idea);
+    }
+  };
+
   function renderIdeaCard(idea: EarnIdea, match: OwnedMatch | null) {
     const isReady = match !== null;
     const inVault = match?.location === "vault";
@@ -458,6 +471,7 @@ export function EarnIdeasCards() {
       isReady && !inVault && (isKvault || isLoop);
     const steps = loopSteps[idea.id];
     const isActivatingThis = pendingIdeaId === idea.id;
+    const isExecutable = isKvault || isLoop;
 
     // Pick hero asset: the one the user holds (Ready), else the first
     // required mint as canonical representative for the idea.
@@ -466,14 +480,39 @@ export function EarnIdeasCards() {
     const hasSpread = !!idea.spreadLabel;
 
     return (
-      <article
+      <DropZone
         key={idea.id}
-        className={`rounded-md border p-3 transition-colors ${
+        className={`relative rounded-md border p-3 transition-all ${
           isReady
             ? "border-primary/50 bg-primary/10"
             : "border-border bg-accent/30"
         }`}
-      >
+        compatibleClassName="ring-2 ring-success/50 ring-offset-1 ring-offset-background"
+        overClassName="ring-success bg-success/10 scale-[1.01]"
+        incompatibleClassName="opacity-40"
+        accept={(asset) =>
+          asset.source === "vault" &&
+          isExecutable &&
+          idea.requiredMints.includes(asset.mint) &&
+          asset.balance > 0 &&
+          !pendingIdeaId
+        }
+        onAssetDrop={(asset) => handleIdeaDrop(idea, asset)}
+        render={({ isCompatible, isOver, isDragActive }) => (
+          <>
+            {isDragActive && isCompatible && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md backdrop-blur-[1px] bg-success/5">
+                <div
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-success/90 text-white text-xs font-semibold shadow-lg transition-transform ${
+                    isOver ? "scale-110" : "scale-100"
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  {isOver ? "Release to activate" : "Drop to activate"}
+                </div>
+              </div>
+            )}
+            <article>
         <div className="flex items-start gap-3">
           <HeroAsset mint={heroMint} protocol={idea.protocol} />
           <div className="min-w-0 flex-1">
@@ -590,6 +629,9 @@ export function EarnIdeasCards() {
           </div>
         </div>
       </article>
+          </>
+        )}
+      />
     );
   }
 

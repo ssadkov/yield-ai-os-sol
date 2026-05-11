@@ -1150,6 +1150,7 @@ export function VaultCard() {
                 highlighted={isUsdcMint(asset.mint)}
                 onConvertToUsdc={convertAssetToUsdc}
                 converting={convertingMint === asset.mint}
+                dragSource="vault"
               />
             ))}
           </div>

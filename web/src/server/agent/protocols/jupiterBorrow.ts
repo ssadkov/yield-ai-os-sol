@@ -797,17 +797,31 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
       connection: sdkConnection as unknown as Connection,
     });
     const debtRawScaled = new BN(current.debtRaw.toString());
-    if (debtRawScaled.lte(new BN(0))) {
+    const dustDebtRaw = new BN(current.dustDebtRaw.toString());
+    // The chain's "effective" debt is debtRaw - dustDebtRaw; the dust
+    // portion is ignored by the operate validator. Compare against that.
+    const netDebtScaled = debtRawScaled.gt(dustDebtRaw)
+      ? debtRawScaled.sub(dustDebtRaw)
+      : new BN(0);
+    if (netDebtScaled.lte(new BN(0))) {
       throw new Error("Position has no outstanding debt to repay");
     }
     // All Jupiter xStocks markets borrow USDC (6 decimals) → scale factor 1000.
     const BORROW_DECIMALS = 6;
     const scalingPower = Math.max(0, 9 - BORROW_DECIMALS);
     const scaleDivisor = new BN(10).pow(new BN(scalingPower));
-    const userDebtRaw = debtRawScaled.div(scaleDivisor);
-    if (userDebtRaw.lte(new BN(0))) {
+    let userDebtRaw = netDebtScaled.div(scaleDivisor);
+    // Floor-divide can land 1 unit above the chain's effective debt
+    // (because of the +1 the SDK's getFinalPosition adds to payback math)
+    // — VAULT_USER_DEBT_TOO_LOW. Trim two raw user-units off the top to
+    // guarantee we stay under the chain figure. The resulting tiny dust
+    // (<= a few thousandths of a cent) stays below dustDebtRaw and the
+    // collateral withdraw still treats the position as cleared.
+    const safety = new BN(2);
+    if (userDebtRaw.lte(safety)) {
       throw new Error("Position has no outstanding debt to repay");
     }
+    userDebtRaw = userDebtRaw.sub(safety);
     debtArg = userDebtRaw.neg();
   } else {
     debtArg = amount.neg();

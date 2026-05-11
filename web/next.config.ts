@@ -2,14 +2,24 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   turbopack: {},
-  // Jupiter Lend SDKs ship nested Anchor; bundling them with app Anchor 0.32 breaks Turbopack.
-  // Mark external so Node loads published `dist/` + nested deps from node_modules at runtime.
-  serverExternalPackages: ["@jup-ag/lend", "@jup-ag/lend-read"],
-  // Opaque dynamic imports are invisible to NFT; ensure serverless traces still ship these trees.
+  // Jupiter Lend SDKs ship nested Anchor and load @solana/web3.js dynamically;
+  // bundling them with the app's Anchor 0.32 breaks Turbopack, and the dynamic
+  // `new Function("import")` we use in jupiterBorrow.ts hides @solana/web3.js
+  // from Vercel's NFT. Mark these packages external so Node resolves their
+  // nested deps from node_modules at runtime.
+  serverExternalPackages: [
+    "@jup-ag/lend",
+    "@jup-ag/lend-read",
+    "@solana/web3.js",
+  ],
+  // Opaque dynamic imports are invisible to NFT; force their entire package
+  // trees (and the Solana web3 runtime they reach for) into the serverless
+  // function bundle for all API routes that may touch them.
   outputFileTracingIncludes: {
     "/api/**/*": [
       "./node_modules/@jup-ag/lend/**/*",
       "./node_modules/@jup-ag/lend-read/**/*",
+      "./node_modules/@solana/web3.js/**/*",
     ],
   },
   images: {

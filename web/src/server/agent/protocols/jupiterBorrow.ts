@@ -589,22 +589,33 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     connection: sdkConnection as unknown as Connection,
   });
 
-  const cpiIxs = built.ixs.map((ix) =>
-    wrapProtocolCpiIx({
-      vaultProgramId: args.vaultProgramId,
-      authority: args.authority,
-      vault: args.vault,
-      inner: {
-        programId: ix.programId.toBase58(),
-        keys: ix.keys.map((key) => ({
-          pubkey: key.pubkey.toBase58(),
-          isSigner: key.isSigner,
-          isWritable: key.isWritable,
-        })),
-        data: ix.data,
-      },
-    }),
-  );
+  // Split: any setup ixs run directly with authority as signer (so the
+  // System program can fund new accounts from a data-less wallet), the
+  // final operate ix runs as CPI through the vault PDA. Same pattern as
+  // repay — needed because Jupiter's InitTickIdLiquidation rejects
+  // "Transfer: from must not carry data" when funded from vault PDA.
+  const directIxs = built.ixs
+    .slice(0, -1)
+    .map((ix) => replaceVaultSignerWithAuthority(normalizeIx(ix), args.vault, args.authority));
+  const operateIx = built.ixs[built.ixs.length - 1];
+  const cpiIxs = operateIx
+    ? [
+        wrapProtocolCpiIx({
+          vaultProgramId: args.vaultProgramId,
+          authority: args.authority,
+          vault: args.vault,
+          inner: {
+            programId: operateIx.programId.toBase58(),
+            keys: operateIx.keys.map((key) => ({
+              pubkey: key.pubkey.toBase58(),
+              isSigner: key.isSigner,
+              isWritable: key.isWritable,
+            })),
+            data: operateIx.data,
+          },
+        }),
+      ]
+    : [];
 
   const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
     await planVaultTopUp({
@@ -613,14 +624,24 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
       vault: args.vault,
       needsRent: built.ixs.length > 1,
     });
-  const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
-    label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
-    ixs: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
-      ...(index === 0 ? topUpIxs : []),
-      ix,
-    ],
-  }));
+  const txs: BuiltJupiterBorrowDeposit["txs"] = [
+    ...directIxs.map((ix, index) => ({
+      label: `jupiter_withdraw_setup_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+    ...cpiIxs.map((ix, index) => ({
+      label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(directIxs.length === 0 && index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+  ];
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -631,7 +652,7 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,

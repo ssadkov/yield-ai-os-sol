@@ -756,11 +756,18 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   ]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
   const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
-  // For "max", read the freshest debt from chain and pass exactly its
-  // negation. Passing the SDK's MAX_REPAY_AMOUNT (= MIN_I128) sentinel
-  // hits the on-chain VAULT_INVALID_OPERATE_AMOUNT check, and passing
-  // the UI-cached debt risks VAULT_USER_DEBT_TOO_LOW once a unit of
-  // interest accrues between fetch and execution.
+  // For "max": Jupiter stores debt internally in 9-decimal scaled
+  // precision, and getOperateContext upscales the user input by
+  // 10^(9 - tokenDecimals) before passing it to the operate ix. The
+  // chain compares the *scaled* value with the stored debtRaw. So to
+  // ask for a full repay we read current debtRaw and scale it DOWN by
+  // the same factor: the SDK then scales it back up and the chain math
+  // matches exactly.
+  //
+  // The SDK's MAX_REPAY_AMOUNT (= MIN_I128) sentinel is NOT a valid
+  // operate amount on chain (rejected with VAULT_INVALID_OPERATE_AMOUNT).
+  // And passing the raw 9-decimal debtRaw straight through gets it
+  // multiplied a second time → VAULT_EXCESS_DEBT_PAYBACK.
   let debtArg: BN;
   if (args.max) {
     const current = await getCurrentPosition({
@@ -768,11 +775,19 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
       positionId: args.positionId,
       connection: sdkConnection as unknown as Connection,
     });
-    const debtRaw = new BN(current.debtRaw.toString());
-    if (debtRaw.lte(new BN(0))) {
+    const debtRawScaled = new BN(current.debtRaw.toString());
+    if (debtRawScaled.lte(new BN(0))) {
       throw new Error("Position has no outstanding debt to repay");
     }
-    debtArg = debtRaw.neg();
+    // All Jupiter xStocks markets borrow USDC (6 decimals) → scale factor 1000.
+    const BORROW_DECIMALS = 6;
+    const scalingPower = Math.max(0, 9 - BORROW_DECIMALS);
+    const scaleDivisor = new BN(10).pow(new BN(scalingPower));
+    const userDebtRaw = debtRawScaled.div(scaleDivisor);
+    if (userDebtRaw.lte(new BN(0))) {
+      throw new Error("Position has no outstanding debt to repay");
+    }
+    debtArg = userDebtRaw.neg();
   } else {
     debtArg = amount.neg();
   }

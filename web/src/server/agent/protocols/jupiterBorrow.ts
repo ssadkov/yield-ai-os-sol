@@ -626,9 +626,19 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
   // If residual debt remains (e.g. we just dust-skipped repay), Jupiter's
   // operate math rejects MAX_WITHDRAW with LibraryMathError (0x1770) — it
   // tries to compute LTV on zero collateral. Switch to a partial withdraw
-  // that leaves a 10% collateral buffer; that's well above any plausible
-  // max_ltv (~80%) for the dust debt that's left behind. Position then
-  // sits as "dust on dust" and the user can clean it up later off-line.
+  // that keeps just enough collateral so:
+  //   1) the LTV ratio is well-defined (no div-by-zero), and
+  //   2) `debt / new_collateral <= max_ltv` for any plausible market.
+  //
+  // Buffer size scales with how much debt is actually left:
+  //   * Dust debt (< $0.10 USDC) — the LTV constraint is essentially
+  //     vacuous (you'd need a 100× price move to liquidate). Keep only
+  //     a 1% buffer so the user extracts ~99% of their collateral.
+  //   * Real residual debt (>= $0.10) — keep the conservative 10%
+  //     buffer so the position stays comfortably solvent against
+  //     normal price drift.
+  // In both cases the leftover position is unwound later by either
+  // a borrow→max-repay cycle or by topping it off so it's no longer dust.
   let colAmount: BN = MAX_WITHDRAW_AMOUNT;
   let withdrawNote: string | undefined;
   let requestedAmountLabel = "MAX_WITHDRAW_AMOUNT";
@@ -660,16 +670,21 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
           "Position has zero collateral but residual debt — manual unwind required",
         );
       }
-      // Keep 10% as health buffer; withdraw the rest.
-      const buffer = colRawUser.div(new BN(10));
+      // Threshold on net debt expressed in chain (9dp internal) units.
+      // JUPITER_REPAY_DUST_USER_RAW is in USDC 6dp; scale to 9dp internal.
+      const DUST_DEBT_INTERNAL_THRESHOLD = JUPITER_REPAY_DUST_USER_RAW.mul(new BN(1000));
+      const isDustResidual = netDebtScaled.lte(DUST_DEBT_INTERNAL_THRESHOLD);
+      const bufferDivisor = isDustResidual ? new BN(100) : new BN(10);
+      const buffer = colRawUser.div(bufferDivisor);
       const withdrawRaw = colRawUser.sub(buffer);
       if (withdrawRaw.lte(new BN(0))) {
         throw new Error("Collateral too small to safely partial-withdraw with dust debt");
       }
       colAmount = withdrawRaw.neg();
-      requestedAmountLabel = "PARTIAL_WITHDRAW";
-      withdrawNote =
-        "Jupiter Lend has residual dust debt — withdrew ~90% of collateral, ~10% kept as health buffer. Position can be unwound manually later.";
+      requestedAmountLabel = isDustResidual ? "PARTIAL_WITHDRAW_99PCT" : "PARTIAL_WITHDRAW_90PCT";
+      withdrawNote = isDustResidual
+        ? "Jupiter Lend has dust debt (< $0.10) — withdrew ~99% of collateral, ~1% kept as LTV-math buffer."
+        : "Jupiter Lend has residual debt — withdrew ~90% of collateral, ~10% kept as health buffer. Position can be unwound manually later.";
     }
   } catch (err) {
     // Best-effort: if we can't read the position, fall back to MAX_WITHDRAW

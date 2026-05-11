@@ -31,7 +31,10 @@ export interface EarnIdea {
       };
 }
 
-const KAMINO_USDC_KVAULT = "67dqmR76uAbjX6e81A1ganKv3ou31WUMEdeWJkwVfeXy";
+// Kamino Private Credit USDC — 0.1 USDC minimum deposit, accepts small
+// amounts. (The "Neutral Trade USDC" kvault has a 10 USDC minimum which
+// breaks small-position loops.)
+const KAMINO_USDC_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
 
 export const EARN_IDEAS: EarnIdea[] = [
   {

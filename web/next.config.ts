@@ -11,15 +11,22 @@ const nextConfig: NextConfig = {
     "@jup-ag/lend",
     "@jup-ag/lend-read",
     "@solana/web3.js",
+    "@solana/spl-token",
+    "@coral-xyz/anchor",
+    "axios",
+    "jup-lend-read-sdk",
   ],
-  // Opaque dynamic imports are invisible to NFT; force their entire package
-  // trees (and the Solana web3 runtime they reach for) into the serverless
-  // function bundle for all API routes that may touch them.
+  // Opaque dynamic imports are invisible to NFT; force the entire trees of the
+  // SDK and its runtime peers into the serverless bundle for all API routes.
   outputFileTracingIncludes: {
     "/api/**/*": [
       "./node_modules/@jup-ag/lend/**/*",
       "./node_modules/@jup-ag/lend-read/**/*",
+      "./node_modules/jup-lend-read-sdk/**/*",
       "./node_modules/@solana/web3.js/**/*",
+      "./node_modules/@solana/spl-token/**/*",
+      "./node_modules/@coral-xyz/anchor/**/*",
+      "./node_modules/axios/**/*",
     ],
   },
   images: {

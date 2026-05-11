@@ -22,7 +22,54 @@ import { wrapProtocolCpiIx } from "./wrapCpi";
 export const JUPITER_LEND_PROGRAM_ID = new PublicKey("jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi");
 
 const COMPUTE_UNIT_LIMIT = 1_400_000;
-const VAULT_PDA_LAMPORT_BUFFER = 50_000_000; // 0.05 SOL for Jupiter position/rent setup.
+// Target buffer the vault PDA should hold to cover Jupiter setup rent
+// (creating a position/tick account, etc). 0.025 SOL is plenty for the
+// real on-chain costs; the previous 0.05 SOL was wasteful and drained
+// user wallets across repeated activations.
+const VAULT_PDA_LAMPORT_BUFFER = 25_000_000;
+// Reserve on the authority wallet so it can still pay tx fees after the
+// top-up transfer goes out.
+const AUTHORITY_FEE_RESERVE = 5_000_000;
+
+async function planVaultTopUp(args: {
+  connection: Connection;
+  authority: PublicKey;
+  vault: PublicKey;
+  needsRent: boolean;
+}): Promise<{
+  topUpIxs: TransactionInstruction[];
+  topUpLamports: number;
+  currentVaultLamports: number;
+}> {
+  const currentVaultLamports = await args.connection.getBalance(args.vault, "confirmed");
+  if (!args.needsRent) {
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  const idealTopUp = Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentVaultLamports);
+  if (idealTopUp === 0) {
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  const authorityLamports = await args.connection.getBalance(args.authority, "confirmed");
+  const maxAffordable = Math.max(0, authorityLamports - AUTHORITY_FEE_RESERVE);
+  const topUpLamports = Math.min(idealTopUp, maxAffordable);
+  if (topUpLamports === 0) {
+    // Authority can't spare anything. Let the underlying tx try with whatever
+    // is already on the vault — if rent is short, the SDK will surface a
+    // clearer error than aborting here.
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  return {
+    topUpIxs: [
+      SystemProgram.transfer({
+        fromPubkey: args.authority,
+        toPubkey: args.vault,
+        lamports: topUpLamports,
+      }),
+    ],
+    topUpLamports,
+    currentVaultLamports,
+  };
+}
 
 export { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket };
 
@@ -475,19 +522,13 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
     }),
   );
 
-  const topUpIxs: TransactionInstruction[] = [];
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const hasRentSetupIxs = built.ixs.length > 1;
-  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
-  if (topUpLamports > 0) {
-    topUpIxs.push(
-      SystemProgram.transfer({
-        fromPubkey: args.authority,
-        toPubkey: args.vault,
-        lamports: topUpLamports,
-      }),
-    );
-  }
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
 
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
       label: `jupiter_borrow_deposit_collateral_${index + 1}`,
@@ -565,19 +606,13 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     }),
   );
 
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const hasRentSetupIxs = built.ixs.length > 1;
-  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
-  const topUpIxs: TransactionInstruction[] = [];
-  if (topUpLamports > 0) {
-    topUpIxs.push(
-      SystemProgram.transfer({
-        fromPubkey: args.authority,
-        toPubkey: args.vault,
-        lamports: topUpLamports,
-      }),
-    );
-  }
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
     label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
     ixs: [
@@ -655,19 +690,13 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     }),
   );
 
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const hasRentSetupIxs = built.ixs.length > 1;
-  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
-  const topUpIxs: TransactionInstruction[] = [];
-  if (topUpLamports > 0) {
-    topUpIxs.push(
-      SystemProgram.transfer({
-        fromPubkey: args.authority,
-        toPubkey: args.vault,
-        lamports: topUpLamports,
-      }),
-    );
-  }
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
     label: `jupiter_borrow_usdc_${index + 1}`,
     ixs: [
@@ -753,19 +782,13 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   // new rent-paying account funded by the vault PDA via invoke_signed. If
   // the PDA is under-funded the simulation fails with
   // "Transaction results in an account (0) with insufficient funds for rent".
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const hasRentSetupIxs = built.ixs.length > 1;
-  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
-  const topUpIxs: TransactionInstruction[] = [];
-  if (topUpLamports > 0) {
-    topUpIxs.push(
-      SystemProgram.transfer({
-        fromPubkey: args.authority,
-        toPubkey: args.vault,
-        lamports: topUpLamports,
-      }),
-    );
-  }
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
 
   const txs: BuiltJupiterBorrowDeposit["txs"] = [
     ...directIxs.map((ix, index) => ({

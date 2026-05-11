@@ -7,10 +7,12 @@ import { DepositCard } from "@/components/DepositCard";
 import { VaultCard } from "@/components/VaultCard";
 import { AIChat } from "@/components/AIChat";
 import { EarnIdeasCards } from "@/components/EarnIdeasCards";
+import { DragProvider } from "@/components/DragContext";
 import { SHOW_AI_CHAT } from "@/config/features";
 
 export default function Home() {
   return (
+    <DragProvider>
     <div className="min-h-screen flex flex-col">
       <Header />
       <main className="flex-1 p-4 lg:p-6 min-h-0">
@@ -35,5 +37,6 @@ export default function Home() {
         </div>
       </main>
     </div>
+    </DragProvider>
   );
 }

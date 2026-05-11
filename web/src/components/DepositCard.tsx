@@ -14,6 +14,9 @@ import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import { isProtocolPositionOrShareToken } from "@/lib/vaultPositionTokens";
 import type { AssetRow } from "@/hooks/useVaultAssets";
 import { AssetSelect, type AssetSelectItem } from "@/components/AssetSelect";
+import { DropZone } from "@/components/DropZone";
+import { ArrowDownToLine } from "lucide-react";
+import type { DragAsset } from "@/lib/dragAsset";
 
 type Tab = "deposit" | "withdraw";
 type WithdrawStep =
@@ -69,6 +72,8 @@ interface UiAsset {
 function formatAmount(n: number, decimals = 6): string {
   return n.toFixed(Math.min(decimals, 8)).replace(/0+$/, "").replace(/\.$/, "");
 }
+
+const DEPOSIT_SUPPORTED_MINTS = new Set(VAULT_DEPOSIT_ASSETS.map((a) => a.mint));
 
 function fromVaultAsset(row: AssetRow): UiAsset {
   const known = VAULT_DEPOSIT_ASSETS.find((asset) => asset.mint === row.mint);
@@ -356,8 +361,43 @@ export function DepositCard() {
     setPendingPrograms([]);
   };
 
+  const handleAssetDrop = (asset: DragAsset) => {
+    if (asset.source !== "wallet") return;
+    if (!DEPOSIT_SUPPORTED_MINTS.has(asset.mint)) return;
+    if (asset.balance <= 0) return;
+    setTab("deposit");
+    setSelectedDepositMint(asset.mint);
+    const meta = VAULT_DEPOSIT_ASSETS.find((a) => a.mint === asset.mint);
+    setAmount(formatAmount(asset.balance, meta?.decimals ?? asset.decimals));
+    resetWithdrawState();
+  };
+
   return (
-    <div className="rounded-lg border border-border bg-card p-5">
+    <DropZone
+      className="rounded-lg border border-border bg-card p-5 relative transition-all"
+      compatibleClassName="ring-2 ring-primary/40 ring-offset-2 ring-offset-background"
+      overClassName="ring-primary bg-primary/5 scale-[1.005]"
+      incompatibleClassName="opacity-60"
+      accept={(asset) =>
+        asset.source === "wallet" &&
+        DEPOSIT_SUPPORTED_MINTS.has(asset.mint) &&
+        asset.balance > 0
+      }
+      onAssetDrop={handleAssetDrop}
+      render={({ isCompatible, isOver, isDragActive }) => (
+        <>
+          {isDragActive && isCompatible && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg backdrop-blur-[1px] bg-primary/5">
+              <div
+                className={`flex items-center gap-2 px-4 py-2 rounded-full bg-primary/90 text-primary-foreground text-sm font-semibold shadow-lg transition-transform ${
+                  isOver ? "scale-110" : "scale-100"
+                }`}
+              >
+                <ArrowDownToLine className="w-4 h-4" />
+                {isOver ? "Release to prepare deposit" : "Drop here to deposit"}
+              </div>
+            </div>
+          )}
       {/* Tabs */}
       <div className="flex gap-1 mb-4 p-1 bg-muted/40 rounded-lg">
         <button
@@ -533,6 +573,8 @@ export function DepositCard() {
           {convertError || error}
         </div>
       )}
-    </div>
+        </>
+      )}
+    />
   );
 }

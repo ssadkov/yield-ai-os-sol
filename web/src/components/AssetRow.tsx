@@ -1,10 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type DragEvent } from "react";
 import type { AssetRow as AssetRowType } from "@/lib/portfolioAssets";
 import { SOL_MINT, USDC_MINT_STR } from "@/lib/constants";
-import { ArrowRightLeft, Loader2, TrendingUp, X } from "lucide-react";
+import { ArrowRightLeft, Loader2, TrendingUp, X, GripVertical } from "lucide-react";
 import { TokenChart } from "./TokenChart";
+import { useDragState } from "./DragContext";
+import {
+  DRAG_MIME,
+  serializeDragAsset,
+  type DragSource,
+} from "@/lib/dragAsset";
 
 function TokenIcon({ src, symbol }: { src?: string; symbol: string }) {
   const [failed, setFailed] = useState(false);
@@ -51,24 +57,77 @@ export function AssetRowItem({
   highlighted,
   onConvertToUsdc,
   converting,
+  dragSource,
 }: {
   asset: AssetRowType;
   highlighted?: boolean;
   onConvertToUsdc?: (asset: AssetRowType) => void | Promise<void>;
   converting?: boolean;
+  /** When set, the row becomes a HTML5 drag source with this provenance. */
+  dragSource?: DragSource;
 }) {
   const [showChart, setShowChart] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const { beginDrag, endDrag } = useDragState();
   const canConvert =
     asset.mint !== SOL_MINT && !isUsdcMint(asset.mint) && Boolean(onConvertToUsdc);
+  const draggable = Boolean(dragSource) && asset.balance > 0;
+
+  const handleDragStart = (event: DragEvent<HTMLDivElement>) => {
+    if (!dragSource) return;
+    const payload = serializeDragAsset({
+      mint: asset.mint,
+      symbol: asset.symbol,
+      decimals: asset.decimals,
+      balance: asset.balance,
+      rawAmount: asset.rawAmount,
+      logoURI: asset.logoURI,
+      source: dragSource,
+    });
+    // Set both our private MIME and a text/plain fallback for browsers that
+    // strictly require a registered type before initiating the drag.
+    event.dataTransfer.setData(DRAG_MIME, payload);
+    event.dataTransfer.setData("text/plain", `${asset.symbol} ${asset.balance}`);
+    event.dataTransfer.effectAllowed = "move";
+    setIsDragging(true);
+    beginDrag({
+      mint: asset.mint,
+      symbol: asset.symbol,
+      decimals: asset.decimals,
+      balance: asset.balance,
+      rawAmount: asset.rawAmount,
+      logoURI: asset.logoURI,
+      source: dragSource,
+    });
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+    endDrag();
+  };
+
+  const rowClasses = [
+    "group flex items-center justify-between py-2.5 px-3 rounded-md transition-all",
+    highlighted ? "border border-primary/50 bg-primary/5 -mx-2" : "",
+    draggable ? "cursor-grab active:cursor-grabbing select-none" : "",
+    isDragging ? "opacity-40 scale-[0.98]" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <>
     <div
-      className={`flex items-center justify-between py-2.5 px-3 rounded-md ${
-        highlighted ? "border border-primary/50 bg-primary/5 -mx-2" : ""
-      }`}
+      className={rowClasses}
+      draggable={draggable}
+      onDragStart={draggable ? handleDragStart : undefined}
+      onDragEnd={draggable ? handleDragEnd : undefined}
+      title={draggable ? `Drag ${asset.symbol} to deposit or activate` : undefined}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 relative">
+        {draggable && (
+          <GripVertical className="absolute -left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/30 group-hover:text-muted-foreground/80 transition-colors pointer-events-none" />
+        )}
         <TokenIcon src={asset.logoURI} symbol={asset.symbol} />
         <div>
           <div className="text-sm font-medium flex items-center gap-2">

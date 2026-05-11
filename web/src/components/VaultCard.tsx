@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ShieldCheck, RefreshCw, TrendingUp, X } from "lucide-react";
+import { ShieldCheck, RefreshCw, TrendingUp, X, Check, Loader2, Heart } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { TokenChart } from "@/components/TokenChart";
 import { useVault } from "@/hooks/useVault";
@@ -23,6 +23,17 @@ const USDC_LOGO_URL =
   "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png";
 const KAMINO_LOGO_URL = "https://cdn.kamino.finance/kamino.svg";
 const JUPITER_LOGO_URL = "https://static.jup.ag/jup/icon.png";
+const LOOP_TARGET_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
+const LOOP_STEP_PAUSE_MS = 4000;
+const sleepLoop = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type LoopStepStatus = "pending" | "running" | "done" | "error";
+interface DeactStep {
+  label: string;
+  status: LoopStepStatus;
+  signature?: string;
+  error?: string;
+}
 
 function xStockLogoUrl(symbol: string): string {
   return `https://xstocks-metadata.backed.fi/logos/tokens/${symbol}.png`;
@@ -230,6 +241,9 @@ export function VaultCard() {
   const [borrowAmounts, setBorrowAmounts] = useState<Record<string, string>>({});
   const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
   const [repayMaxFlags, setRepayMaxFlags] = useState<Record<string, boolean>>({});
+  const [deactSteps, setDeactSteps] = useState<DeactStep[] | null>(null);
+  const [deactivating, setDeactivating] = useState(false);
+  const [deactError, setDeactError] = useState<string | null>(null);
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -294,6 +308,131 @@ export function VaultCard() {
       setKaminoWithdrawError(err instanceof Error ? err.message : String(err));
     } finally {
       setKaminoWithdrawVault(null);
+    }
+  };
+
+  const handleDeactivateLoop = async (
+    jupiterLeg: (typeof jupiterBorrowPositions)[number],
+    kaminoLeg: (typeof kaminoPositions)[number] | null,
+  ) => {
+    if (!publicKey || deactivating) return;
+    setDeactivating(true);
+    setDeactError(null);
+
+    const ownerStr = publicKey.toBase58();
+    const steps: DeactStep[] = [
+      {
+        label: kaminoLeg
+          ? `Unstake ${formatTokenAmount(kaminoLeg.underlyingAmount)} USDC from Kamino`
+          : "Skip Kamino unstake (no position)",
+        status: kaminoLeg ? "pending" : "done",
+      },
+      {
+        label: `Repay ${formatTokenAmount(jupiterLeg.debtAmount)} USDC (full debt)`,
+        status: "pending",
+      },
+      {
+        label: `Withdraw ${formatTokenAmount(jupiterLeg.collateralAmount)} ${jupiterLeg.collateralSymbol} collateral`,
+        status: "pending",
+      },
+    ];
+    setDeactSteps(steps);
+
+    const update = (index: number, patch: Partial<DeactStep>) => {
+      setDeactSteps((prev) => {
+        if (!prev) return prev;
+        const next = prev.slice();
+        next[index] = { ...next[index], ...patch };
+        return next;
+      });
+    };
+
+    try {
+      // Step 1 — Kamino withdraw (skip if no kamino leg)
+      if (kaminoLeg) {
+        update(0, { status: "running" });
+        const res = await fetch("/api/kamino/kvault/withdraw", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ownerPubkey: ownerStr,
+            kvault: kaminoLeg.vaultAddress,
+            amount: kaminoLeg.totalShares,
+          }),
+        });
+        const data = (await res.json()) as { status?: string; error?: string; signatures?: string[] };
+        if (!res.ok || data.status === "error") {
+          throw new Error(`Kamino unstake: ${data.error ?? `HTTP ${res.status}`}`);
+        }
+        if (data.status === "needs_whitelist") {
+          throw new Error("Kamino unstake needs an allowlist update first.");
+        }
+        update(0, { status: "done", signature: data.signatures?.[data.signatures.length - 1] });
+        triggerBalanceRefresh();
+        await sleepLoop(LOOP_STEP_PAUSE_MS);
+      }
+
+      // Step 2 — Jupiter repay (MAX)
+      update(1, { status: "running" });
+      const repayRes = await fetch("/api/jupiter/borrow/repay-usdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: jupiterLeg.vaultId,
+          positionId: jupiterLeg.positionId,
+          amountRaw: "0",
+          max: true,
+        }),
+      });
+      const repayData = (await repayRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      if (!repayRes.ok || repayData.status === "error") {
+        throw new Error(`Repay: ${repayData.error ?? `HTTP ${repayRes.status}`}`);
+      }
+      update(1, {
+        status: "done",
+        signature: repayData.signatures?.[repayData.signatures.length - 1],
+      });
+      triggerBalanceRefresh();
+      await sleepLoop(LOOP_STEP_PAUSE_MS);
+
+      // Step 3 — Jupiter withdraw collateral
+      update(2, { status: "running" });
+      const wRes = await fetch("/api/jupiter/borrow/withdraw-collateral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: jupiterLeg.vaultId,
+          positionId: jupiterLeg.positionId,
+        }),
+      });
+      const wData = (await wRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      if (!wRes.ok || wData.status === "error") {
+        throw new Error(`Withdraw collateral: ${wData.error ?? `HTTP ${wRes.status}`}`);
+      }
+      update(2, {
+        status: "done",
+        signature: wData.signatures?.[wData.signatures.length - 1],
+      });
+      triggerBalanceRefresh();
+      // Catch chain propagation
+      for (const delay of [3000, 8000, 15000]) {
+        window.setTimeout(() => triggerBalanceRefresh(), delay);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDeactError(msg);
+      // Mark current running step as error
+      setDeactSteps((prev) => {
+        if (!prev) return prev;
+        const next = prev.slice();
+        const idx = next.findIndex((s) => s.status === "running");
+        if (idx >= 0) next[idx] = { ...next[idx], status: "error", error: msg };
+        return next;
+      });
+    } finally {
+      setDeactivating(false);
     }
   };
 
@@ -743,6 +882,176 @@ export function VaultCard() {
             </div>
           </div>
         )}
+
+        {(() => {
+          // Active loop = any Jupiter Lend xStock position with non-zero collateral
+          // or debt. We pair it with the user's Kamino Private Credit USDC position
+          // (the loop target) for the synthesized view.
+          const activeJupiterLeg = jupiterBorrowPositions.find(
+            (p) => (p.collateralUsd ?? 0) > 0.01 || (p.debtUsd ?? 0) > 0.01,
+          );
+          if (!activeJupiterLeg) return null;
+          const kaminoLeg =
+            kaminoPositions.find(
+              (p) => p.vaultAddress === LOOP_TARGET_KVAULT && (p.underlyingUsd ?? 0) > 0.01,
+            ) ?? null;
+
+          const colUsd = activeJupiterLeg.collateralUsd ?? 0;
+          const debtUsd = activeJupiterLeg.debtUsd ?? 0;
+          const kamUsd = kaminoLeg?.underlyingUsd ?? 0;
+          const netUsd = colUsd - debtUsd + kamUsd;
+          const colYield = (colUsd * (activeJupiterLeg.depositApy ?? 0)) / 100;
+          const borrowCost = (debtUsd * (activeJupiterLeg.borrowAPY ?? 0)) / 100;
+          const kamApy = kaminoLeg ? apyDecimalToPercent(kaminoLeg.apy) ?? 0 : 0;
+          const kamYield = (kamUsd * kamApy) / 100;
+          const annualYieldUsd = colYield + kamYield - borrowCost;
+          const netApy = netUsd > 0.01 ? (annualYieldUsd / netUsd) * 100 : null;
+          const health = debtUsd > 0.01 ? colUsd / debtUsd : null;
+
+          let healthLabel = "—";
+          let healthCls = "text-muted-foreground";
+          if (health !== null) {
+            healthLabel = health.toFixed(2);
+            healthCls =
+              health >= 2 ? "text-success" : health >= 1.5 ? "text-foreground" : "text-destructive";
+          }
+
+          return (
+            <div className="rounded-md border border-primary/40 bg-gradient-to-br from-primary/10 via-primary/5 to-card p-3 mb-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <DualIcon
+                    primarySrc={xStockLogoUrl(activeJupiterLeg.collateralSymbol)}
+                    primaryAlt={activeJupiterLeg.collateralSymbol}
+                    badgeSrc={JUPITER_LOGO_URL}
+                    badgeAlt="Jupiter"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+                      <span>{activeJupiterLeg.collateralSymbol} Earn Loop</span>
+                      <span className="text-[10px] uppercase tracking-wide bg-success/15 text-success px-1.5 py-0.5 rounded font-mono">
+                        Active
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Lend → Borrow USDC → Stake in Kamino
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  {netApy !== null && (
+                    <div
+                      className={`text-base font-bold leading-tight ${
+                        netApy >= 0 ? "text-success" : "text-destructive"
+                      }`}
+                    >
+                      {netApy >= 0 ? "+" : ""}
+                      {netApy.toFixed(2)}% Net
+                    </div>
+                  )}
+                  <div className={`text-[11px] font-mono flex items-center justify-end gap-1 ${healthCls}`}>
+                    <Heart className="w-3 h-3" />
+                    Health {healthLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                <div className="rounded bg-card/60 border border-border p-2">
+                  <div className="text-muted-foreground">Collateral</div>
+                  <div className="font-mono text-foreground">
+                    {formatTokenAmount(activeJupiterLeg.collateralAmount)} {activeJupiterLeg.collateralSymbol}
+                  </div>
+                  <div className="text-muted-foreground">{formatUsd(activeJupiterLeg.collateralUsd)}</div>
+                </div>
+                <div className="rounded bg-card/60 border border-border p-2">
+                  <div className="text-muted-foreground">Earning in Kamino</div>
+                  <div className="font-mono text-foreground">
+                    {kaminoLeg ? `${formatTokenAmount(kaminoLeg.underlyingAmount)} USDC` : "—"}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {kaminoLeg ? `${kamApy.toFixed(2)}% APY · ${formatUsd(kaminoLeg.underlyingUsd)}` : "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="mt-2 text-[10px] text-muted-foreground"
+                title="Demo-only watcher — auto-deleverage planner is wired but not running yet."
+              >
+                Agent will auto-deleverage if Health falls below 1.5
+              </div>
+
+              {!deactSteps && (
+                <button
+                  type="button"
+                  onClick={() => void handleDeactivateLoop(activeJupiterLeg, kaminoLeg)}
+                  disabled={deactivating}
+                  className="mt-3 cursor-pointer w-full inline-flex items-center justify-center rounded-md border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Deactivate loop
+                </button>
+              )}
+
+              {deactSteps && (
+                <div className="mt-3 space-y-1.5">
+                  {deactSteps.map((step, i) => (
+                    <div key={i} className="flex items-start gap-2 text-[11px]">
+                      <span className="shrink-0 mt-0.5">
+                        {step.status === "done" && <Check className="w-3.5 h-3.5 text-success" />}
+                        {step.status === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+                        {step.status === "error" && <X className="w-3.5 h-3.5 text-destructive" />}
+                        {step.status === "pending" && (
+                          <span className="block w-3.5 h-3.5 rounded-full border border-muted-foreground/40" />
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={
+                            step.status === "done"
+                              ? "text-success"
+                              : step.status === "running"
+                                ? "text-foreground"
+                                : step.status === "error"
+                                  ? "text-destructive"
+                                  : "text-muted-foreground"
+                          }
+                        >
+                          {step.label}
+                        </div>
+                        {step.signature && (
+                          <a
+                            href={`https://solscan.io/tx/${step.signature}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-muted-foreground hover:text-primary font-mono"
+                          >
+                            {step.signature.slice(0, 8)}…{step.signature.slice(-8)}
+                          </a>
+                        )}
+                        {step.error && (
+                          <div className="text-[10px] text-destructive break-all">{step.error}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {deactError && deactSteps.every((s) => s.status !== "running") && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeactSteps(null);
+                        setDeactError(null);
+                      }}
+                      className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline"
+                    >
+                      Dismiss
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div>
           <div className="text-sm font-medium mb-2">Holdings</div>

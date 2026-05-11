@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Vault, RefreshCw, TrendingUp, X } from "lucide-react";
+import { ShieldCheck, RefreshCw, TrendingUp, X } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { TokenChart } from "@/components/TokenChart";
 import { useVault } from "@/hooks/useVault";
@@ -495,7 +495,7 @@ export function VaultCard() {
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="text-lg font-semibold shrink-0 flex items-center gap-2">
-            <Vault className="w-5 h-5 text-primary" aria-hidden />
+            <ShieldCheck className="w-5 h-5 text-primary" aria-hidden />
             AI Agent Safe
           </h2>
           <a

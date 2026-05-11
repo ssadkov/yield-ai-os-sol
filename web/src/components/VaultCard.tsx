@@ -1515,7 +1515,13 @@ export function VaultCard() {
                       {formatUsd(pnlData.netDeposited)}
                     </span>
                   </div>
-                  {pnlData.pnl !== null && (() => {
+                  {/* PnL is reliable only for pure USDC deposit history. With
+                      non-USDC (xStocks / cbBTC) deposits we'd be marking
+                      principal at current price, which is misleading on a
+                      vault that's mostly volatile assets. Hide PnL when the
+                      history includes SPL activity; we'll bring it back once
+                      historical pricing is wired in. */}
+                  {!pnlData.hasSplActivity && pnlData.pnl !== null && (() => {
                     const negligible = Math.abs(pnlData.pnl) < 0.01;
                     const positive = pnlData.pnl > 0;
                     const colorClass = negligible

@@ -13,7 +13,7 @@ export default function Home() {
     <div className="min-h-screen flex flex-col">
       <Header />
       <main className="flex-1 p-4 lg:p-6 min-h-0">
-        <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch min-h-0">
+        <div className="max-w-[1600px] mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch min-h-0">
           {/* Left column — wallet */}
           <div className="space-y-6 min-h-0">
             <DepositCard />

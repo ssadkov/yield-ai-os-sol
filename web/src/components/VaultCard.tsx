@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { Vault, RefreshCw, TrendingUp, X } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { TokenChart } from "@/components/TokenChart";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";
@@ -40,6 +42,42 @@ function ProtocolBadge({ src, alt }: { src: string; alt: string }) {
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
     />
+  );
+}
+
+function ChartTrigger({ mint, symbol }: { mint: string; symbol: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="cursor-pointer p-0.5 rounded-md text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
+        title={`Show ${symbol} chart`}
+      >
+        <TrendingUp className="w-3.5 h-3.5" />
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden p-1">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="absolute top-4 right-4 z-50 p-2 hover:bg-accent rounded-full text-muted-foreground hover:text-foreground transition-all cursor-pointer bg-card/80 backdrop-blur-md border border-border/50"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="p-2 sm:p-4">
+              <TokenChart address={mint} symbol={symbol} />
+            </div>
+          </div>
+          <div
+            className="absolute inset-0 -z-10 cursor-pointer"
+            onClick={() => setOpen(false)}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -316,22 +354,28 @@ export function VaultCard() {
           : undefined,
       })),
     ...jupiterBorrowPositions
-      .filter((p) => (p.collateralUsd ?? 0) > 0.05)
-      .map((p) => ({
-        mint: `jupiter:${p.vaultId}:${p.positionId}`,
-        symbol: `${p.collateralSymbol} (Jupiter)`,
-        name: p.market,
-        logoURI: xStockLogoUrl(p.collateralSymbol),
-        balance: p.collateralAmount,
-        rawAmount: "0",
-        decimals: 0,
-        usdPrice: null,
-        usdValue: p.collateralUsd ?? 0,
-        apr:
-          p.depositApy != null
-            ? { value: p.depositApy, source: "jupiter" }
-            : undefined,
-      })),
+      .map((p) => {
+        // Collateral USD price (e.g. SPYx) may not be in the Jupiter price
+        // feed yet; fall back to debtUsd as a close proxy for collateral
+        // size in a balanced borrow loop so the slice still renders.
+        const usdValue = p.collateralUsd ?? p.debtUsd ?? 0;
+        return {
+          mint: `jupiter:${p.vaultId}:${p.positionId}`,
+          symbol: `${p.collateralSymbol} (Jupiter)`,
+          name: p.market,
+          logoURI: xStockLogoUrl(p.collateralSymbol),
+          balance: p.collateralAmount,
+          rawAmount: "0",
+          decimals: 0,
+          usdPrice: null,
+          usdValue,
+          apr:
+            p.depositApy != null
+              ? { value: p.depositApy, source: "jupiter" }
+              : undefined,
+        };
+      })
+      .filter((row) => row.usdValue > 0.05),
   ];
   const chartTotalUsd = chartAssets.reduce((sum, a) => sum + (a.usdValue ?? 0), 0);
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
@@ -450,7 +494,10 @@ export function VaultCard() {
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-lg font-semibold shrink-0">Vault</h2>
+          <h2 className="text-lg font-semibold shrink-0 flex items-center gap-2">
+            <Vault className="w-5 h-5 text-primary" aria-hidden />
+            AI Agent Safe
+          </h2>
           <a
             href={orbExplorerUrl(vaultAddress)}
             target="_blank"
@@ -482,9 +529,13 @@ export function VaultCard() {
             type="button"
             onClick={handleRefreshAll}
             disabled={loading || vaultAssetsLoading}
-            className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh"
+            aria-label="Refresh"
+            className="cursor-pointer p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading || vaultAssetsLoading ? "..." : "Refresh"}
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${loading || vaultAssetsLoading ? "animate-spin" : ""}`}
+            />
           </button>
         </div>
       </div>
@@ -524,6 +575,7 @@ export function VaultCard() {
 
         <VaultAllocationChart assets={chartAssets} totalUsd={chartTotalUsd} />
 
+        {vaultUsdc > 0 && (
         <div className="rounded-md border border-border bg-accent/25 p-3">
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
@@ -589,6 +641,7 @@ export function VaultCard() {
             ))}
           </div>
         </div>
+        )}
 
         {availableJupiterLendMarkets.length > 0 && (
           <div className="rounded-md border border-border bg-accent/25 p-3">
@@ -795,6 +848,10 @@ export function VaultCard() {
                         <div className="min-w-0">
                           <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
                             <span>{position.collateralSymbol}</span>
+                            <ChartTrigger
+                              mint={position.collateralMint}
+                              symbol={position.collateralSymbol}
+                            />
                             {position.depositApy != null && (
                               <span
                                 className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"

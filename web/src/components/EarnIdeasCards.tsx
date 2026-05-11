@@ -394,7 +394,7 @@ export function EarnIdeasCards() {
   return (
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
-        <h2 className="text-sm font-semibold">Earn ideas</h2>
+        <h2 className="text-sm font-semibold">Strategies</h2>
         <div
           className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
           title={

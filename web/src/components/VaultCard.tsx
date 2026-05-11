@@ -599,20 +599,23 @@ export function VaultCard() {
         <VaultAllocationChart assets={chartAssets} totalUsd={chartTotalUsd} />
 
         {vaultUsdc > 0 && (
-        <div className="rounded-md border border-border bg-accent/25 p-3">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div>
-              <div className="text-sm font-medium">Trade</div>
-              <div className="text-[11px] text-muted-foreground">
-                Buy approved assets with vault USDC
+        <details className="rounded-md border border-border bg-accent/25 p-3 group">
+          <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-muted-foreground transition-transform group-open:rotate-90 shrink-0">▶</span>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Trade</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Buy approved assets with vault USDC
+                </div>
               </div>
             </div>
-            <div className="text-right">
+            <div className="text-right shrink-0">
               <div className="text-[11px] text-muted-foreground">Vault USDC</div>
               <div className="text-xs font-mono">{formatAmount(vaultUsdc)}</div>
             </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
+          </summary>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
             <select
               value={selectedBuyTarget?.mint ?? ""}
               onChange={(e) => setBuyTargetMint(e.target.value)}
@@ -663,10 +666,10 @@ export function VaultCard() {
               </button>
             ))}
           </div>
-        </div>
+        </details>
         )}
 
-        {availableJupiterLendMarkets.length > 0 && (
+        {false && availableJupiterLendMarkets.length > 0 && (
           <div className="rounded-md border border-border bg-accent/25 p-3">
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>

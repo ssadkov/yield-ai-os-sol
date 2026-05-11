@@ -231,20 +231,20 @@ export function EarnIdeasCards() {
 
   const postKaminoDeposit = async (idea: EarnIdea): Promise<ActionResponse> => {
     if (!publicKey) throw new Error("Wallet not connected");
-    const action = idea.action;
-    if (!action || action.type !== "kaminoKvaultDeposit") {
+    const ideaAction = idea.action;
+    if (!ideaAction || ideaAction.type !== "kaminoKvaultDeposit") {
       throw new Error("This idea is not executable yet");
     }
-    const holding = vaultAssets.find((asset) => asset.mint === action.tokenMint);
+    const holding = vaultAssets.find((asset) => asset.mint === ideaAction.tokenMint);
     if (!holding || BigInt(holding.rawAmount) === BigInt(0)) {
-      throw new Error(`No ${EARN_IDEA_SYMBOLS[action.tokenMint] ?? "token"} in vault`);
+      throw new Error(`No ${EARN_IDEA_SYMBOLS[ideaAction.tokenMint] ?? "token"} in vault`);
     }
     const res = await fetch("/api/kamino/kvault/deposit", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ownerPubkey: publicKey.toBase58(),
-        kvault: action.kvault,
+        kvault: ideaAction.kvault,
         amountRaw: holding.rawAmount,
         decimals: holding.decimals,
       }),
@@ -269,28 +269,28 @@ export function EarnIdeasCards() {
   const runLoopActivation = async (idea: EarnIdea) => {
     if (!publicKey) throw new Error("Wallet not connected");
     if (idea.action?.type !== "stocksEarnLoop") throw new Error("Not a loop strategy");
-    const action = idea.action;
+    const loopAction = idea.action;
 
-    const collateral = vaultAssets.find((asset) => asset.mint === action.collateralMint);
+    const collateral = vaultAssets.find((asset) => asset.mint === loopAction.collateralMint);
     if (!collateral || collateral.balance <= 0) {
-      throw new Error(`No ${action.collateralSymbol} in safe. Move it from your wallet first.`);
+      throw new Error(`No ${loopAction.collateralSymbol} in safe. Move it from your wallet first.`);
     }
     const collateralRaw = collateral.rawAmount;
     const usdPrice = collateral.usdPrice;
     if (usdPrice == null || usdPrice <= 0) {
-      throw new Error(`No live price for ${action.collateralSymbol}; cannot size the borrow leg`);
+      throw new Error(`No live price for ${loopAction.collateralSymbol}; cannot size the borrow leg`);
     }
     const collateralUsd = collateral.balance * usdPrice;
     // 49% rather than 50% to leave a buffer against LTV rounding.
-    const borrowUsd = collateralUsd * (action.ltvPct - 1) / 100;
-    const borrowRaw = Math.floor(borrowUsd * 10 ** action.kvaultTokenDecimals);
+    const borrowUsd = collateralUsd * (loopAction.ltvPct - 1) / 100;
+    const borrowRaw = Math.floor(borrowUsd * 10 ** loopAction.kvaultTokenDecimals);
     if (borrowRaw <= 0) throw new Error("Computed borrow amount is zero");
     const borrowRawStr = String(borrowRaw);
-    const borrowUi = borrowRaw / 10 ** action.kvaultTokenDecimals;
+    const borrowUi = borrowRaw / 10 ** loopAction.kvaultTokenDecimals;
 
     const steps: LoopStep[] = [
-      { label: `Lend ${collateral.balance.toFixed(6)} ${action.collateralSymbol} as collateral`, status: "pending" },
-      { label: `Borrow ${borrowUi.toFixed(4)} USDC (≈${action.ltvPct - 1}% LTV)`, status: "pending" },
+      { label: `Lend ${collateral.balance.toFixed(6)} ${loopAction.collateralSymbol} as collateral`, status: "pending" },
+      { label: `Borrow ${borrowUi.toFixed(4)} USDC (≈${loopAction.ltvPct - 1}% LTV)`, status: "pending" },
       { label: `Stake ${borrowUi.toFixed(4)} USDC into Kamino USDC vault`, status: "pending" },
     ];
     setLoopSteps((prev) => ({ ...prev, [idea.id]: steps }));
@@ -305,7 +305,7 @@ export function EarnIdeasCards() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ownerPubkey: ownerStr,
-          vaultId: action.collateralVaultId,
+          vaultId: loopAction.collateralVaultId,
           amountRaw: collateralRaw,
         }),
       });
@@ -333,7 +333,7 @@ export function EarnIdeasCards() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ownerPubkey: ownerStr,
-          vaultId: action.collateralVaultId,
+          vaultId: loopAction.collateralVaultId,
           amountRaw: borrowRawStr,
         }),
       });
@@ -361,9 +361,9 @@ export function EarnIdeasCards() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ownerPubkey: ownerStr,
-          kvault: action.kvault,
+          kvault: loopAction.kvault,
           amountRaw: borrowRawStr,
-          decimals: action.kvaultTokenDecimals,
+          decimals: loopAction.kvaultTokenDecimals,
         }),
       });
       const data = (await res.json()) as ActionResponse;
@@ -374,9 +374,9 @@ export function EarnIdeasCards() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             ownerPubkey: ownerStr,
-            kvault: action.kvault,
+            kvault: loopAction.kvault,
             amountRaw: borrowRawStr,
-            decimals: action.kvaultTokenDecimals,
+            decimals: loopAction.kvaultTokenDecimals,
           }),
         });
         const retryData = (await retry.json()) as ActionResponse;

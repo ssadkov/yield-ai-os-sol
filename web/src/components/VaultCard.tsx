@@ -9,7 +9,6 @@ import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";
 import { useJupiterBorrowPositions } from "@/hooks/useJupiterBorrowPositions";
-import { useVaultPnl } from "@/hooks/useVaultPnl";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
 import { VaultAllocationChart } from "@/components/VaultAllocationChart";
@@ -28,6 +27,35 @@ const JUPITER_LOGO_URL = "https://static.jup.ag/jup/icon.png";
 const LOOP_TARGET_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
 const LOOP_STEP_PAUSE_MS = 4000;
 const sleepLoop = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Borrow leg sized to this fraction of collateral USD in earn loop ideas (see earnIdeas ltvPct). */
+const EARN_LOOP_BORROW_PCT_OF_COLLATERAL = 49 / 100;
+
+/**
+ * Jupiter lend often omits xStock USD when Helius has no price; that makes
+ * `collateralUsd` null and blows up Net APY / health. Prefer vault token price,
+ * else infer notional from the sized borrow leg.
+ */
+function estimateLoopCollateralUsd(
+  leg: {
+    collateralUsd: number | null;
+    debtUsd: number | null;
+    collateralAmount: number;
+    collateralMint: string;
+  },
+  vaultAssets: { mint: string; usdPrice: number | null }[],
+): number {
+  if (leg.collateralUsd != null && leg.collateralUsd > 0.01) return leg.collateralUsd;
+  const row = vaultAssets.find((a) => a.mint === leg.collateralMint);
+  if (row?.usdPrice != null && row.usdPrice > 0 && leg.collateralAmount > 0) {
+    return leg.collateralAmount * row.usdPrice;
+  }
+  const debt = leg.debtUsd ?? 0;
+  if (debt > 0.01 && EARN_LOOP_BORROW_PCT_OF_COLLATERAL > 0) {
+    return debt / EARN_LOOP_BORROW_PCT_OF_COLLATERAL;
+  }
+  return 0;
+}
 
 type LoopStepStatus = "pending" | "running" | "done" | "error";
 interface DeactStep {
@@ -278,7 +306,6 @@ export function VaultCard() {
     await Promise.all([
       refresh(),
       refreshVaultAssets(),
-      refreshPnl(),
       refreshKaminoPositions(),
       refreshJupiterBorrowPositions(),
     ]);
@@ -494,13 +521,6 @@ export function VaultCard() {
   const vaultNetUsd = visibleHoldingsUsd + kaminoPositionsUsd + jupiterNetUsd;
   const estimatedAnnualYieldUsd = directAnnualYieldUsd + kaminoAnnualYieldUsd + jupiterAnnualYieldUsd;
   const estimatedVaultApy = vaultNetUsd > 0 ? (estimatedAnnualYieldUsd / vaultNetUsd) * 100 : null;
-  const pnlCurrentValueUsd =
-    vaultAssetsLoading || kaminoPositionsLoading || jupiterBorrowPositionsLoading ? null : vaultNetUsd;
-  const {
-    data: pnlData,
-    loading: pnlLoading,
-    refresh: refreshPnl,
-  } = useVaultPnl(pnlCurrentValueUsd);
   const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
   const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
 
@@ -920,7 +940,7 @@ export function VaultCard() {
               (p) => p.vaultAddress === LOOP_TARGET_KVAULT && (p.underlyingUsd ?? 0) > 0.01,
             ) ?? null;
 
-          const colUsd = activeJupiterLeg.collateralUsd ?? 0;
+          const colUsd = estimateLoopCollateralUsd(activeJupiterLeg, vaultAssets);
           const debtUsd = activeJupiterLeg.debtUsd ?? 0;
           const kamUsd = kaminoLeg?.underlyingUsd ?? 0;
           const netUsd = colUsd - debtUsd + kamUsd;
@@ -929,7 +949,11 @@ export function VaultCard() {
           const kamApy = kaminoLeg ? apyDecimalToPercent(kaminoLeg.apy) ?? 0 : 0;
           const kamYield = (kamUsd * kamApy) / 100;
           const annualYieldUsd = colYield + kamYield - borrowCost;
-          const netApy = netUsd > 0.01 ? (annualYieldUsd / netUsd) * 100 : null;
+          const legScale = colUsd + debtUsd + kamUsd;
+          const netUsdTooSmallVsLegs =
+            netUsd > 0 && netUsd < 0.04 * Math.max(legScale, 1);
+          const netApy =
+            !netUsdTooSmallVsLegs && netUsd > 0.01 ? (annualYieldUsd / netUsd) * 100 : null;
           const health = debtUsd > 0.01 ? colUsd / debtUsd : null;
 
           let healthLabel = "—";
@@ -986,7 +1010,7 @@ export function VaultCard() {
                   <div className="font-mono text-foreground">
                     {formatTokenAmount(activeJupiterLeg.collateralAmount)} {activeJupiterLeg.collateralSymbol}
                   </div>
-                  <div className="text-muted-foreground">{formatUsd(activeJupiterLeg.collateralUsd)}</div>
+                  <div className="text-muted-foreground">{formatUsd(colUsd > 0.01 ? colUsd : null)}</div>
                 </div>
                 <div className="rounded bg-card/60 border border-border p-2">
                   <div className="text-muted-foreground">Earning in Kamino</div>
@@ -1477,53 +1501,6 @@ export function VaultCard() {
                     -{formatUsd(jupiterDebtUsd)}
                   </span>
                 </div>
-              )}
-              {kaminoPositionsUsd > 0 && (
-                <div className="flex justify-between items-center">
-                  <span className="text-xs text-muted-foreground">Kamino Earn</span>
-                  <span className="text-xs font-mono text-muted-foreground">
-                    {formatUsd(kaminoPositionsUsd)}
-                  </span>
-                </div>
-              )}
-
-              {pnlData && (
-                <div className="space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground">Net Deposited</span>
-                    <span className="text-xs font-mono text-muted-foreground">
-                      {formatUsd(pnlData.netDeposited)}
-                    </span>
-                  </div>
-                  {pnlData.pnl !== null && (() => {
-                    const negligible = Math.abs(pnlData.pnl) < 0.01;
-                    const positive = pnlData.pnl > 0;
-                    const colorClass = negligible
-                      ? "text-muted-foreground"
-                      : positive
-                        ? "text-success"
-                        : "text-destructive";
-                    return (
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs text-muted-foreground">PnL</span>
-                        <span className={`text-sm font-semibold ${colorClass}`}>
-                          {negligible
-                            ? "$0.00"
-                            : `${positive ? "+" : ""}${formatUsd(pnlData.pnl)}`}
-                          {!negligible && pnlData.pnlPercent !== null && (
-                            <span className="text-xs ml-1 font-normal opacity-80">
-                              ({pnlData.pnlPercent >= 0 ? "+" : ""}
-                              {pnlData.pnlPercent.toFixed(2)}%)
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-              {pnlLoading && !pnlData && (
-                <div className="text-xs text-muted-foreground">Loading PnL...</div>
               )}
             </div>
           )}

@@ -1,9 +1,102 @@
-# 🧠 Yield AI — Solana AI Vault
+# Yield AI — Agent-safe execution on Solana
 
-*Read setup and development instructions at the bottom of the page.*
+[![Solana](https://img.shields.io/badge/Solana-mainnet-9945FF)](https://solana.com)
+<!-- [![License: MIT](https://img.shields.io/badge/License-MIT-14F195.svg)](LICENSE) — add LICENSE at repo root, then uncomment -->
+<!-- [![CI](INSERT_CI_BADGE_MARKDOWN)](INSERT_CI_ACTIONS_URL) -->
+<!-- [![Hackathon](INSERT_HACKATHON_BADGE_MARKDOWN)](INSERT_HACKATHON_URL) -->
 
-Yield AI is an **AI-managed portfolio vault on Solana**.
-Users **deposit USDC**, pick a strategy (**Conservative / Balanced / Growth**), and the system **rebalances via Jupiter routing** while keeping funds **inside a PDA-controlled smart contract** (no “send funds to an AI wallet” custody model).
+> **Yield AI is an agent-safe execution layer for Solana.** A PDA vault with a **program allowlist** lets AI agents put user capital to work **without ever holding the keys**. **Live on mainnet today**, with a working consumer flow that **earns USDC yield on stock positions without selling them**.
+
+[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](INSERT_DEMO_VIDEO_URL) · [Deck](INSERT_DECK_URL) · [Hackathon submission](INSERT_SUBMISSION_URL)
+
+---
+
+<!-- ![Hero screenshot](INSERT_PATH_TO_SCREENSHOT.png) -->
+
+## Hackathon / submission
+
+| Name | Role | Contact |
+|------|------|---------|
+| _INSERT_NAME_ | _INSERT_ROLE_ | _INSERT_TELEGRAM_OR_X_ |
+
+---
+
+## Problem → solution
+
+| # | Problem | How Yield AI addresses it |
+|---|---------|---------------------------|
+| 1 | **AI + capital = custody risk** — users fear sending funds to an opaque “agent wallet.” | Funds stay in a **vault PDA**; there is **no private key** for the vault authority. |
+| 2 | Automation needs **on-chain execution**, not chat-only advice. | A designated **agent** pubkey can drive **whitelisted CPIs**; **withdrawals stay owner-only**. |
+| 3 | Open-ended CPIs are dangerous. | **`execute_swap_cpi`** only targets **`allowed_programs`** (max 16), controlled by the owner. |
+| 4 | Users want **yield** without necessarily exiting risk assets (e.g. tokenized equities). | **Mainnet** consumer flow: strategy targets, Jupiter routing, and integrations for **USDC yield** while retaining vault-held positions (see live app and technical section below). |
+
+---
+
+## Why Solana
+
+- **Native custody model** — PDAs + `invoke_signed` for non-custodial vaults agents can interact with.
+- **Composability** — one vault, many protocols; the allowlist is how automation **safely** opens that surface.
+- **Practical automation** — rebalance and agent-driven steps stay viable for a **consumer** product.
+
+---
+
+## What ships today (summary)
+
+- **Anchor vault** — PDA custody, owner withdrawals, allowlisted CPI execution path for the agent.
+- **Next.js app** — wallet, vault lifecycle, portfolio, rebalance / convert flows ([live app](https://yield-ai-os-sol.vercel.app/)).
+- **AI assistant** — live on-chain context, **explicit confirmation** before execution, `needs_whitelist` when routes need new program IDs.
+- **Jupiter** — server-side quote/build for swaps aligned with the vault CPI model.
+
+---
+
+## Tech stack (summary)
+
+| Layer | Stack |
+|-------|--------|
+| On-chain | Rust · Anchor |
+| App & APIs | Next.js · React · TypeScript |
+| Wallet | Solana Wallet Adapter |
+| AI / automation | Vercel AI SDK · OpenRouter · server modules in `web/` |
+| Liquidity / routes | Jupiter API |
+
+---
+
+## Quick start (demo + local)
+
+```bash
+git clone INSERT_REPO_GIT_URL
+cd INSERT_REPO_DIR_NAME
+
+anchor build
+
+cd web
+npm install
+npm run dev
+```
+
+Env and RPC: see **Environment variables** in the technical section below. Full spec: [what-we-build.md](what-we-build.md).
+
+---
+
+## Roadmap
+
+- [x] PDA vault + owner withdraw + allowlisted agent CPI path
+- [x] Next.js dashboard + Jupiter-backed rebalance
+- [x] AI chat with confirm-gated tools + allowlist update flow
+- [ ] INSERT_POST_HACKATHON_ITEM_1
+- [ ] INSERT_POST_HACKATHON_ITEM_2
+
+---
+
+## License
+
+MIT — add a `LICENSE` file at the repository root when you publish the repo publicly.
+
+---
+
+## Technical documentation
+
+The sections below are the **developer-focused** reference (program instructions, architecture diagram, API list, env vars, toolchain).
 
 ## 🚀 What it does today
 

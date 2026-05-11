@@ -410,6 +410,11 @@ export function EarnIdeasCards() {
     try {
       await runLoopActivation(idea);
       setActionMessage(`${idea.action && idea.action.type === "stocksEarnLoop" ? idea.action.collateralSymbol : ""} loop activated.`);
+      // Kamino's position endpoint typically takes a few seconds to reflect a
+      // fresh deposit even with revalidate=0 — re-pulse refresh a few times.
+      for (const delay of [3000, 8000, 15000]) {
+        window.setTimeout(() => triggerBalanceRefresh(), delay);
+      }
     } catch (err: unknown) {
       setActionError(formatWalletError(err));
     } finally {

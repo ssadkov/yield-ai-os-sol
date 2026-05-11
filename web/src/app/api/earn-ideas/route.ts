@@ -239,17 +239,39 @@ export async function GET() {
             EARN_IDEA_SYMBOLS[candidate.collateral.token] ??
             candidate.collateral.originalPool?.liquidityToken ??
             candidate.collateral.asset.split(" ")[0];
+          const isJupiterCollateral =
+            candidate.collateral.protocol === "Jupiter" &&
+            candidate.collateral.originalPool?.kind === "jupiter_borrow_vault";
+          const collateralVaultId = Number(candidate.collateral.originalPool?.vaultId ?? 0);
+          // Always route the borrowed USDC into Kamino Private Credit USDC for the
+          // loop — it has a 0.1 USDC minimum so even a small SPYx position can
+          // complete the deposit leg. (Some other kvaults require ≥10 USDC.)
+          const LOOP_TARGET_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
           ideas.push({
             id: `${group.id}-${String(symbol).toLowerCase()}`,
             title: `${symbol} collateral loop`,
             protocol: candidate.collateral.provider,
             focus: group.focus,
-            description: `Use ${symbol} collateral in ${candidate.marketName}, borrow USDC, then route USDC to ${bestUsdcEarn?.asset ?? "best USDC earn"}.`,
+            description: `Lend ${symbol}, borrow USDC, route USDC into Kamino Private Credit USDC. Auto-deleverage on low health.`,
             apyLabel: `${formatPct(bestUsdcApy)} earn`,
             borrowLabel: `${formatPct(candidate.borrowApy)} USDC borrow`,
             spreadLabel: `${candidate.spread >= 0 ? "+" : ""}${formatPct(candidate.spread)} gross spread`,
             requiredMints: [candidate.collateral.token],
             note: group.note,
+            action:
+              isJupiterCollateral && collateralVaultId > 0
+                ? {
+                    type: "stocksEarnLoop",
+                    collateralVaultId,
+                    collateralMint: candidate.collateral.token,
+                    collateralSymbol: String(symbol),
+                    collateralDecimals: candidate.collateral.tokenDecimals ?? 8,
+                    ltvPct: 50,
+                    kvault: LOOP_TARGET_KVAULT,
+                    kvaultTokenMint: USDC_MINT_STR,
+                    kvaultTokenDecimals: 6,
+                  }
+                : undefined,
           });
         }
         continue;

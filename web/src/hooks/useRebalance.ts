@@ -54,6 +54,7 @@ type PendingAction =
       vaultId: number;
       positionId: number;
       amountRaw: string;
+      max?: boolean;
     };
 
 export function useRebalance() {
@@ -166,6 +167,7 @@ export function useRebalance() {
           vaultId: repay.vaultId,
           positionId: repay.positionId,
           amountRaw: repay.amountRaw,
+          max: repay.max ?? false,
         }),
       });
       return res.json();
@@ -392,8 +394,10 @@ export function useRebalance() {
       vaultId: number;
       positionId: number;
       amountRaw: string;
+      max?: boolean;
     }) => {
-      if (!publicKey || BigInt(args.amountRaw) === BigInt(0)) return;
+      if (!publicKey) return;
+      if (!args.max && BigInt(args.amountRaw) === BigInt(0)) return;
 
       setRebalancing(true);
       setError(null);
@@ -405,6 +409,7 @@ export function useRebalance() {
         vaultId: args.vaultId,
         positionId: args.positionId,
         amountRaw: args.amountRaw,
+        max: args.max,
       };
 
       try {

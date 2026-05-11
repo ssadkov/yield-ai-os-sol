@@ -22,7 +22,54 @@ import { wrapProtocolCpiIx } from "./wrapCpi";
 export const JUPITER_LEND_PROGRAM_ID = new PublicKey("jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi");
 
 const COMPUTE_UNIT_LIMIT = 1_400_000;
-const VAULT_PDA_LAMPORT_BUFFER = 50_000_000; // 0.05 SOL for Jupiter position/rent setup.
+// Target buffer the vault PDA should hold to cover Jupiter setup rent
+// (creating a position/tick account, etc). 0.025 SOL is plenty for the
+// real on-chain costs; the previous 0.05 SOL was wasteful and drained
+// user wallets across repeated activations.
+const VAULT_PDA_LAMPORT_BUFFER = 25_000_000;
+// Reserve on the authority wallet so it can still pay tx fees after the
+// top-up transfer goes out.
+const AUTHORITY_FEE_RESERVE = 5_000_000;
+
+async function planVaultTopUp(args: {
+  connection: Connection;
+  authority: PublicKey;
+  vault: PublicKey;
+  needsRent: boolean;
+}): Promise<{
+  topUpIxs: TransactionInstruction[];
+  topUpLamports: number;
+  currentVaultLamports: number;
+}> {
+  const currentVaultLamports = await args.connection.getBalance(args.vault, "confirmed");
+  if (!args.needsRent) {
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  const idealTopUp = Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentVaultLamports);
+  if (idealTopUp === 0) {
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  const authorityLamports = await args.connection.getBalance(args.authority, "confirmed");
+  const maxAffordable = Math.max(0, authorityLamports - AUTHORITY_FEE_RESERVE);
+  const topUpLamports = Math.min(idealTopUp, maxAffordable);
+  if (topUpLamports === 0) {
+    // Authority can't spare anything. Let the underlying tx try with whatever
+    // is already on the vault — if rent is short, the SDK will surface a
+    // clearer error than aborting here.
+    return { topUpIxs: [], topUpLamports: 0, currentVaultLamports };
+  }
+  return {
+    topUpIxs: [
+      SystemProgram.transfer({
+        fromPubkey: args.authority,
+        toPubkey: args.vault,
+        lamports: topUpLamports,
+      }),
+    ],
+    topUpLamports,
+    currentVaultLamports,
+  };
+}
 
 export { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket };
 
@@ -475,19 +522,13 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
     }),
   );
 
-  const topUpIxs: TransactionInstruction[] = [];
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const hasRentSetupIxs = built.ixs.length > 1;
-  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
-  if (topUpLamports > 0) {
-    topUpIxs.push(
-      SystemProgram.transfer({
-        fromPubkey: args.authority,
-        toPubkey: args.vault,
-        lamports: topUpLamports,
-      }),
-    );
-  }
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
 
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
       label: `jupiter_borrow_deposit_collateral_${index + 1}`,
@@ -548,31 +589,59 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     connection: sdkConnection as unknown as Connection,
   });
 
-  const cpiIxs = built.ixs.map((ix) =>
-    wrapProtocolCpiIx({
-      vaultProgramId: args.vaultProgramId,
+  // Split: any setup ixs run directly with authority as signer (so the
+  // System program can fund new accounts from a data-less wallet), the
+  // final operate ix runs as CPI through the vault PDA. Same pattern as
+  // repay — needed because Jupiter's InitTickIdLiquidation rejects
+  // "Transfer: from must not carry data" when funded from vault PDA.
+  const directIxs = built.ixs
+    .slice(0, -1)
+    .map((ix) => replaceVaultSignerWithAuthority(normalizeIx(ix), args.vault, args.authority));
+  const operateIx = built.ixs[built.ixs.length - 1];
+  const cpiIxs = operateIx
+    ? [
+        wrapProtocolCpiIx({
+          vaultProgramId: args.vaultProgramId,
+          authority: args.authority,
+          vault: args.vault,
+          inner: {
+            programId: operateIx.programId.toBase58(),
+            keys: operateIx.keys.map((key) => ({
+              pubkey: key.pubkey.toBase58(),
+              isSigner: key.isSigner,
+              isWritable: key.isWritable,
+            })),
+            data: operateIx.data,
+          },
+        }),
+      ]
+    : [];
+
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
       authority: args.authority,
       vault: args.vault,
-      inner: {
-        programId: ix.programId.toBase58(),
-        keys: ix.keys.map((key) => ({
-          pubkey: key.pubkey.toBase58(),
-          isSigner: key.isSigner,
-          isWritable: key.isWritable,
-        })),
-        data: ix.data,
-      },
-    }),
-  );
-
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
-  const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
-    label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
-    ixs: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
-      ix,
-    ],
-  }));
+      needsRent: built.ixs.length > 1,
+    });
+  const txs: BuiltJupiterBorrowDeposit["txs"] = [
+    ...directIxs.map((ix, index) => ({
+      label: `jupiter_withdraw_setup_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+    ...cpiIxs.map((ix, index) => ({
+      label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(directIxs.length === 0 && index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+  ];
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -583,10 +652,10 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: 0,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
       requestedAmountRaw: "MAX_WITHDRAW_AMOUNT",
@@ -642,11 +711,18 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     }),
   );
 
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
     label: `jupiter_borrow_usdc_${index + 1}`,
     ixs: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+      ...(index === 0 ? topUpIxs : []),
       ix,
     ],
   }));
@@ -660,10 +736,10 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: 0,
+      directCount: topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
       requestedAmountRaw: amount.toString(),
@@ -682,21 +758,79 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   vaultId: number;
   positionId: number;
   amountRaw: string;
+  /** Repay the full outstanding debt. Avoids VAULT_USER_DEBT_TOO_LOW when
+   *  on-chain debt has drifted below the UI-displayed amount due to interest
+   *  accrual or rounding. */
+  max?: boolean;
 }): Promise<BuiltJupiterBorrowDeposit> {
   const amount = new BN(args.amountRaw);
-  if (amount.lte(new BN(0))) throw new Error("amountRaw must be greater than zero");
+  if (!args.max && amount.lte(new BN(0))) {
+    throw new Error("amountRaw must be greater than zero");
+  }
 
   const market = getCollateralMarket(args.vaultId);
   const collateralDecimals = market?.decimals ?? 9;
 
-  const [{ getOperateIx }, runtimeWeb3] = await Promise.all([loadJupiterBorrow(), loadRuntimeWeb3()]);
+  const [{ getOperateIx, getCurrentPosition }, runtimeWeb3] = await Promise.all([
+    loadJupiterBorrow(),
+    loadRuntimeWeb3(),
+  ]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
   const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
+  // For "max": Jupiter stores debt internally in 9-decimal scaled
+  // precision, and getOperateContext upscales the user input by
+  // 10^(9 - tokenDecimals) before passing it to the operate ix. The
+  // chain compares the *scaled* value with the stored debtRaw. So to
+  // ask for a full repay we read current debtRaw and scale it DOWN by
+  // the same factor: the SDK then scales it back up and the chain math
+  // matches exactly.
+  //
+  // The SDK's MAX_REPAY_AMOUNT (= MIN_I128) sentinel is NOT a valid
+  // operate amount on chain (rejected with VAULT_INVALID_OPERATE_AMOUNT).
+  // And passing the raw 9-decimal debtRaw straight through gets it
+  // multiplied a second time → VAULT_EXCESS_DEBT_PAYBACK.
+  let debtArg: BN;
+  if (args.max) {
+    const current = await getCurrentPosition({
+      vaultId: args.vaultId,
+      positionId: args.positionId,
+      connection: sdkConnection as unknown as Connection,
+    });
+    const debtRawScaled = new BN(current.debtRaw.toString());
+    const dustDebtRaw = new BN(current.dustDebtRaw.toString());
+    // The chain's "effective" debt is debtRaw - dustDebtRaw; the dust
+    // portion is ignored by the operate validator. Compare against that.
+    const netDebtScaled = debtRawScaled.gt(dustDebtRaw)
+      ? debtRawScaled.sub(dustDebtRaw)
+      : new BN(0);
+    if (netDebtScaled.lte(new BN(0))) {
+      throw new Error("Position has no outstanding debt to repay");
+    }
+    // All Jupiter xStocks markets borrow USDC (6 decimals) → scale factor 1000.
+    const BORROW_DECIMALS = 6;
+    const scalingPower = Math.max(0, 9 - BORROW_DECIMALS);
+    const scaleDivisor = new BN(10).pow(new BN(scalingPower));
+    let userDebtRaw = netDebtScaled.div(scaleDivisor);
+    // Several off-by-one(s) stack up between the SDK's payback +1, dust
+    // accruing between fetch and simulation, and rounding from the
+    // 1000× scale. Pay 100 raw user-units (≈ $0.0001 USDC) less than
+    // computed netDebt to absorb all of them. The residual dust stays
+    // well below dustDebtRaw, and the chain treats the position as
+    // fully cleared for the subsequent collateral withdraw.
+    const safety = new BN(100);
+    if (userDebtRaw.lte(safety)) {
+      throw new Error("Position has no outstanding debt to repay");
+    }
+    userDebtRaw = userDebtRaw.sub(safety);
+    debtArg = userDebtRaw.neg();
+  } else {
+    debtArg = amount.neg();
+  }
   const built = await getOperateIx({
     vaultId: args.vaultId,
     positionId: args.positionId,
     colAmount: new BN(0),
-    debtAmount: amount.neg(),
+    debtAmount: debtArg,
     signer: sdkSigner as unknown as PublicKey,
     positionOwner: sdkSigner as unknown as PublicKey,
     connection: sdkConnection as unknown as Connection,
@@ -723,12 +857,24 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     }),
   ] : [];
 
-  const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  // Repay setup may invoke Jupiter's InitTickIdLiquidation which creates a
+  // new rent-paying account funded by the vault PDA via invoke_signed. If
+  // the PDA is under-funded the simulation fails with
+  // "Transaction results in an account (0) with insufficient funds for rent".
+  const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
+    await planVaultTopUp({
+      connection: args.connection,
+      authority: args.authority,
+      vault: args.vault,
+      needsRent: built.ixs.length > 1,
+    });
+
   const txs: BuiltJupiterBorrowDeposit["txs"] = [
     ...directIxs.map((ix, index) => ({
       label: `jupiter_repay_setup_${index + 1}`,
       ixs: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(index === 0 ? topUpIxs : []),
         ix,
       ],
     })),
@@ -750,14 +896,14 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
-      requestedAmountRaw: amount.toString(),
-      operateAmount: amount.neg().toString(),
+      requestedAmountRaw: args.max ? "MAX_REPAY_AMOUNT" : amount.toString(),
+      operateAmount: debtArg.toString(),
       sourceBalanceRaw: null,
       programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     },

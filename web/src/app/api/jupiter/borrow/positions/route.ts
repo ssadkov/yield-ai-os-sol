@@ -5,7 +5,8 @@ import { deriveVaultPda } from "@/lib/vault";
 import { readVaultJupiterBorrowPositions } from "@/server/agent/protocols/jupiterBorrow";
 
 export const runtime = "nodejs";
-export const revalidate = 15;
+// Always fetch fresh — post-action refresh must show on-chain state.
+export const revalidate = 0;
 
 function optionalEnv(name: string): string | undefined {
   const value = process.env[name];

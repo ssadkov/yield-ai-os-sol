@@ -52,7 +52,7 @@ export async function runRebalanceJob(args: {
     optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
   if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
 
-  const slippageBps = Number(optionalEnv("SLIPPAGE_BPS") ?? "100");
+  const slippageBps = Number(optionalEnv("SLIPPAGE_BPS") ?? "300");
   if (!Number.isFinite(slippageBps) || slippageBps <= 0) {
     throw new Error("Invalid SLIPPAGE_BPS");
   }
@@ -400,6 +400,7 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
   vaultId: number;
   amountRaw: string;
   positionId?: number;
+  max?: boolean;
 }): Promise<RebalanceResult> {
   const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
   if (!rpcUrl) throw new Error("Missing RPC_URL");
@@ -440,15 +441,28 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
     };
   }
 
-  const built = await buildJupiterBorrowUsdcRepayTx({
-    connection,
-    vaultProgramId,
-    authority: authority.publicKey,
-    vault: vaultPda,
-    vaultId: args.vaultId,
-    positionId,
-    amountRaw: args.amountRaw,
-  });
+  let built;
+  try {
+    built = await buildJupiterBorrowUsdcRepayTx({
+      connection,
+      vaultProgramId,
+      authority: authority.publicKey,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+      positionId,
+      amountRaw: args.amountRaw,
+      max: args.max,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // If on-chain debt is already 0 (e.g. a prior repay attempt actually
+    // landed before its receipt got back to us), the deactivation flow
+    // should sail past this step rather than error out.
+    if (/no outstanding debt/i.test(msg)) {
+      return { status: "success", signatures: [], swaps: [] };
+    }
+    throw err;
+  }
 
   const signatures: string[] = [];
   for (let i = 0; i < built.txs.length; i++) {

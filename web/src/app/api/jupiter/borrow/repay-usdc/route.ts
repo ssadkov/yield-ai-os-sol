@@ -12,6 +12,7 @@ export async function POST(req: NextRequest) {
     const amountRaw = String(body.amountRaw ?? "");
     const vaultId = Number(body.vaultId ?? 0);
     const positionId = Number(body.positionId ?? 0);
+    const max = body.max === true;
 
     if (!ownerPubkey) {
       return NextResponse.json({ status: "error", error: "ownerPubkey is required" }, { status: 400 });
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
     if (!Number.isInteger(vaultId) || vaultId <= 0) {
       return NextResponse.json({ status: "error", error: "valid vaultId is required" }, { status: 400 });
     }
-    if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= BigInt(0)) {
+    if (!max && (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= BigInt(0))) {
       return NextResponse.json({ status: "error", error: "amountRaw must be greater than zero" }, { status: 400 });
     }
     if (!JUPITER_XSTOCKS_USDC_MARKETS.some((market) => market.vaultId === vaultId)) {
@@ -40,6 +41,7 @@ export async function POST(req: NextRequest) {
       vaultId,
       amountRaw,
       positionId: positionId > 0 ? positionId : undefined,
+      max,
     });
     const httpStatus = result.status === "needs_whitelist" ? 428 : result.status === "error" ? 500 : 200;
     return NextResponse.json(result, { status: httpStatus });

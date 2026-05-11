@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { ShieldCheck, RefreshCw, TrendingUp, X, Check, Loader2, Heart } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { TokenChart } from "@/components/TokenChart";
+import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useKaminoKvaultPositions } from "@/hooks/useKaminoKvaultPositions";
@@ -21,6 +24,17 @@ const USDC_LOGO_URL =
   "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png";
 const KAMINO_LOGO_URL = "https://cdn.kamino.finance/kamino.svg";
 const JUPITER_LOGO_URL = "https://static.jup.ag/jup/icon.png";
+const LOOP_TARGET_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
+const LOOP_STEP_PAUSE_MS = 4000;
+const sleepLoop = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+type LoopStepStatus = "pending" | "running" | "done" | "error";
+interface DeactStep {
+  label: string;
+  status: LoopStepStatus;
+  signature?: string;
+  error?: string;
+}
 
 function xStockLogoUrl(symbol: string): string {
   return `https://xstocks-metadata.backed.fi/logos/tokens/${symbol}.png`;
@@ -40,6 +54,42 @@ function ProtocolBadge({ src, alt }: { src: string; alt: string }) {
         (e.currentTarget as HTMLImageElement).style.display = "none";
       }}
     />
+  );
+}
+
+function ChartTrigger({ mint, symbol }: { mint: string; symbol: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="cursor-pointer p-0.5 rounded-md text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
+        title={`Show ${symbol} chart`}
+      >
+        <TrendingUp className="w-3.5 h-3.5" />
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden p-1">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="absolute top-4 right-4 z-50 p-2 hover:bg-accent rounded-full text-muted-foreground hover:text-foreground transition-all cursor-pointer bg-card/80 backdrop-blur-md border border-border/50"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="p-2 sm:p-4">
+              <TokenChart address={mint} symbol={symbol} />
+            </div>
+          </div>
+          <div
+            className="absolute inset-0 -z-10 cursor-pointer"
+            onClick={() => setOpen(false)}
+          />
+        </div>
+      )}
+    </>
   );
 }
 
@@ -191,6 +241,13 @@ export function VaultCard() {
   const [lendAmount, setLendAmount] = useState("");
   const [borrowAmounts, setBorrowAmounts] = useState<Record<string, string>>({});
   const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
+  const [repayMaxFlags, setRepayMaxFlags] = useState<Record<string, boolean>>({});
+  const [deactState, setDeactState] = useState<{
+    positionId: number;
+    steps: DeactStep[];
+  } | null>(null);
+  const [deactivating, setDeactivating] = useState(false);
+  const [deactError, setDeactError] = useState<string | null>(null);
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -246,10 +303,139 @@ export function VaultCard() {
         throw new Error("Vault allowlist needs an update before Kamino withdraw can run.");
       }
       await handleRefreshAll();
+      // Chain state typically propagates within a few seconds after the
+      // server-side tx confirmation; re-refresh once so the UI catches up.
+      window.setTimeout(() => {
+        void handleRefreshAll();
+      }, 3500);
     } catch (err: unknown) {
       setKaminoWithdrawError(err instanceof Error ? err.message : String(err));
     } finally {
       setKaminoWithdrawVault(null);
+    }
+  };
+
+  const handleDeactivateLoop = async (
+    jupiterLeg: (typeof jupiterBorrowPositions)[number],
+    kaminoLeg: (typeof kaminoPositions)[number] | null,
+  ) => {
+    if (!publicKey || deactivating) return;
+    setDeactivating(true);
+    setDeactError(null);
+
+    const ownerStr = publicKey.toBase58();
+    const steps: DeactStep[] = [
+      {
+        label: kaminoLeg
+          ? `Unstake ${formatTokenAmount(kaminoLeg.underlyingAmount)} USDC from Kamino`
+          : "Skip Kamino unstake (no position)",
+        status: kaminoLeg ? "pending" : "done",
+      },
+      {
+        label: `Repay ${formatTokenAmount(jupiterLeg.debtAmount)} USDC (full debt)`,
+        status: "pending",
+      },
+      {
+        label: `Withdraw ${formatTokenAmount(jupiterLeg.collateralAmount)} ${jupiterLeg.collateralSymbol} collateral`,
+        status: "pending",
+      },
+    ];
+    setDeactState({ positionId: jupiterLeg.positionId, steps });
+
+    const update = (index: number, patch: Partial<DeactStep>) => {
+      setDeactState((prev) => {
+        if (!prev) return prev;
+        const nextSteps = prev.steps.slice();
+        nextSteps[index] = { ...nextSteps[index], ...patch };
+        return { ...prev, steps: nextSteps };
+      });
+    };
+
+    // Track which step is currently active so the catch always marks the right one.
+    let currentStep = 0;
+    try {
+      // Step 1 — Kamino withdraw (skip if no kamino leg)
+      if (kaminoLeg) {
+        currentStep = 0;
+        update(0, { status: "running" });
+        const res = await fetch("/api/kamino/kvault/withdraw", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ownerPubkey: ownerStr,
+            kvault: kaminoLeg.vaultAddress,
+            amount: kaminoLeg.totalShares,
+          }),
+        });
+        const data = (await res.json()) as { status?: string; error?: string; signatures?: string[] };
+        if (!res.ok || data.status === "error") {
+          throw new Error(`Kamino unstake: ${data.error ?? `HTTP ${res.status}`}`);
+        }
+        if (data.status === "needs_whitelist") {
+          throw new Error("Kamino unstake needs an allowlist update first.");
+        }
+        update(0, { status: "done", signature: data.signatures?.[data.signatures.length - 1] });
+        triggerBalanceRefresh();
+        await sleepLoop(LOOP_STEP_PAUSE_MS);
+      }
+
+      // Step 2 — Jupiter repay (MAX)
+      currentStep = 1;
+      update(1, { status: "running" });
+      const repayRes = await fetch("/api/jupiter/borrow/repay-usdc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: jupiterLeg.vaultId,
+          positionId: jupiterLeg.positionId,
+          amountRaw: "0",
+          max: true,
+        }),
+      });
+      const repayData = (await repayRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      if (!repayRes.ok || repayData.status === "error") {
+        throw new Error(`Repay: ${repayData.error ?? `HTTP ${repayRes.status}`}`);
+      }
+      update(1, {
+        status: "done",
+        signature: repayData.signatures?.[repayData.signatures.length - 1],
+      });
+      triggerBalanceRefresh();
+      await sleepLoop(LOOP_STEP_PAUSE_MS);
+
+      // Step 3 — Jupiter withdraw collateral
+      currentStep = 2;
+      update(2, { status: "running" });
+      const wRes = await fetch("/api/jupiter/borrow/withdraw-collateral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: jupiterLeg.vaultId,
+          positionId: jupiterLeg.positionId,
+        }),
+      });
+      const wData = (await wRes.json()) as { status?: string; error?: string; signatures?: string[] };
+      if (!wRes.ok || wData.status === "error") {
+        throw new Error(`Withdraw collateral: ${wData.error ?? `HTTP ${wRes.status}`}`);
+      }
+      update(2, {
+        status: "done",
+        signature: wData.signatures?.[wData.signatures.length - 1],
+      });
+      triggerBalanceRefresh();
+      for (const delay of [3000, 8000, 15000]) {
+        window.setTimeout(() => triggerBalanceRefresh(), delay);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setDeactError(msg);
+      // Mark the step that was active when the error happened, regardless
+      // of whether its "running" state had committed in React.
+      update(currentStep, { status: "error", error: msg });
+    } finally {
+      setDeactivating(false);
     }
   };
 
@@ -316,22 +502,28 @@ export function VaultCard() {
           : undefined,
       })),
     ...jupiterBorrowPositions
-      .filter((p) => (p.collateralUsd ?? 0) > 0.05)
-      .map((p) => ({
-        mint: `jupiter:${p.vaultId}:${p.positionId}`,
-        symbol: `${p.collateralSymbol} (Jupiter)`,
-        name: p.market,
-        logoURI: xStockLogoUrl(p.collateralSymbol),
-        balance: p.collateralAmount,
-        rawAmount: "0",
-        decimals: 0,
-        usdPrice: null,
-        usdValue: p.collateralUsd ?? 0,
-        apr:
-          p.depositApy != null
-            ? { value: p.depositApy, source: "jupiter" }
-            : undefined,
-      })),
+      .map((p) => {
+        // Collateral USD price (e.g. SPYx) may not be in the Jupiter price
+        // feed yet; fall back to debtUsd as a close proxy for collateral
+        // size in a balanced borrow loop so the slice still renders.
+        const usdValue = p.collateralUsd ?? p.debtUsd ?? 0;
+        return {
+          mint: `jupiter:${p.vaultId}:${p.positionId}`,
+          symbol: `${p.collateralSymbol} (Jupiter)`,
+          name: p.market,
+          logoURI: xStockLogoUrl(p.collateralSymbol),
+          balance: p.collateralAmount,
+          rawAmount: "0",
+          decimals: 0,
+          usdPrice: null,
+          usdValue,
+          apr:
+            p.depositApy != null
+              ? { value: p.depositApy, source: "jupiter" }
+              : undefined,
+        };
+      })
+      .filter((row) => row.usdValue > 0.05),
   ];
   const chartTotalUsd = chartAssets.reduce((sum, a) => sum + (a.usdValue ?? 0), 0);
   const vaultUsdcAsset = vaultAssets.find((asset) => asset.mint === USDC_MINT_STR);
@@ -402,6 +594,7 @@ export function VaultCard() {
       positionId: position.positionId,
     });
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
   const handleJupiterUsdcBorrow = async (position: (typeof jupiterBorrowPositions)[number]) => {
     const key = `${position.vaultId}:${position.positionId}`;
@@ -414,18 +607,23 @@ export function VaultCard() {
     });
     setBorrowAmounts((prev) => ({ ...prev, [key]: "" }));
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
   const handleJupiterUsdcRepay = async (position: (typeof jupiterBorrowPositions)[number]) => {
     const key = `${position.vaultId}:${position.positionId}`;
     const raw = usdcToRawAmount(repayAmounts[key] ?? "");
-    if (BigInt(raw) === BigInt(0)) return;
+    const max = repayMaxFlags[key] === true;
+    if (!max && BigInt(raw) === BigInt(0)) return;
     await repayJupiterUsdc({
       vaultId: position.vaultId,
       positionId: position.positionId,
       amountRaw: raw,
+      max,
     });
     setRepayAmounts((prev) => ({ ...prev, [key]: "" }));
+    setRepayMaxFlags((prev) => ({ ...prev, [key]: false }));
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
 
   if (!publicKey) return null;
@@ -450,7 +648,10 @@ export function VaultCard() {
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-lg font-semibold shrink-0">Vault</h2>
+          <h2 className="text-lg font-semibold shrink-0 flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-primary" aria-hidden />
+            AI Agent Safe
+          </h2>
           <a
             href={orbExplorerUrl(vaultAddress)}
             target="_blank"
@@ -482,9 +683,13 @@ export function VaultCard() {
             type="button"
             onClick={handleRefreshAll}
             disabled={loading || vaultAssetsLoading}
-            className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh"
+            aria-label="Refresh"
+            className="cursor-pointer p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading || vaultAssetsLoading ? "..." : "Refresh"}
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${loading || vaultAssetsLoading ? "animate-spin" : ""}`}
+            />
           </button>
         </div>
       </div>
@@ -511,33 +716,48 @@ export function VaultCard() {
                 </span>
               </span>
             )}
-            <button
-              type="button"
-              onClick={rebalance}
-              disabled={txPending || rebalancing}
-              className="cursor-pointer text-xs px-2.5 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {rebalancing ? "Rebalancing..." : "Rebalance"}
-            </button>
+            {(() => {
+              const hasActiveLoops =
+                kaminoPositions.length > 0 || jupiterBorrowPositions.length > 0;
+              return (
+                <button
+                  type="button"
+                  onClick={rebalance}
+                  disabled={txPending || rebalancing || hasActiveLoops}
+                  title={
+                    hasActiveLoops
+                      ? "Unwind active Kamino / Jupiter Lend positions before strategy rebalance."
+                      : "Rebalance vault holdings to match strategy target."
+                  }
+                  className="cursor-pointer text-xs px-2.5 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {rebalancing ? "Rebalancing..." : "Rebalance"}
+                </button>
+              );
+            })()}
           </div>
         </div>
 
         <VaultAllocationChart assets={chartAssets} totalUsd={chartTotalUsd} />
 
-        <div className="rounded-md border border-border bg-accent/25 p-3">
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div>
-              <div className="text-sm font-medium">Trade</div>
-              <div className="text-[11px] text-muted-foreground">
-                Buy approved assets with vault USDC
+        {false && vaultUsdc > 0 && (
+        <details className="rounded-md border border-border bg-accent/25 p-3 group">
+          <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-muted-foreground transition-transform group-open:rotate-90 shrink-0">▶</span>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Trade</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Buy approved assets with vault USDC
+                </div>
               </div>
             </div>
-            <div className="text-right">
+            <div className="text-right shrink-0">
               <div className="text-[11px] text-muted-foreground">Vault USDC</div>
               <div className="text-xs font-mono">{formatAmount(vaultUsdc)}</div>
             </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
+          </summary>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(150px,190px)_auto] gap-2">
             <select
               value={selectedBuyTarget?.mint ?? ""}
               onChange={(e) => setBuyTargetMint(e.target.value)}
@@ -588,9 +808,10 @@ export function VaultCard() {
               </button>
             ))}
           </div>
-        </div>
+        </details>
+        )}
 
-        {availableJupiterLendMarkets.length > 0 && (
+        {false && availableJupiterLendMarkets.length > 0 && (
           <div className="rounded-md border border-border bg-accent/25 p-3">
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
@@ -664,6 +885,206 @@ export function VaultCard() {
             </div>
           </div>
         )}
+
+        {(() => {
+          // Active loop = any Jupiter Lend xStock position with non-zero collateral
+          // or debt. We pair it with the user's Kamino Private Credit USDC position
+          // (the loop target) for the synthesized view.
+          const activeJupiterLeg = jupiterBorrowPositions.find(
+            (p) => (p.collateralUsd ?? 0) > 0.01 || (p.debtUsd ?? 0) > 0.01,
+          );
+          if (!activeJupiterLeg) return null;
+          const kaminoLeg =
+            kaminoPositions.find(
+              (p) => p.vaultAddress === LOOP_TARGET_KVAULT && (p.underlyingUsd ?? 0) > 0.01,
+            ) ?? null;
+
+          const colUsd = activeJupiterLeg.collateralUsd ?? 0;
+          const debtUsd = activeJupiterLeg.debtUsd ?? 0;
+          const kamUsd = kaminoLeg?.underlyingUsd ?? 0;
+          const netUsd = colUsd - debtUsd + kamUsd;
+          const colYield = (colUsd * (activeJupiterLeg.depositApy ?? 0)) / 100;
+          const borrowCost = (debtUsd * (activeJupiterLeg.borrowAPY ?? 0)) / 100;
+          const kamApy = kaminoLeg ? apyDecimalToPercent(kaminoLeg.apy) ?? 0 : 0;
+          const kamYield = (kamUsd * kamApy) / 100;
+          const annualYieldUsd = colYield + kamYield - borrowCost;
+          const netApy = netUsd > 0.01 ? (annualYieldUsd / netUsd) * 100 : null;
+          const health = debtUsd > 0.01 ? colUsd / debtUsd : null;
+
+          let healthLabel = "—";
+          let healthCls = "text-muted-foreground";
+          if (health !== null) {
+            healthLabel = health.toFixed(2);
+            healthCls =
+              health >= 2 ? "text-success" : health >= 1.5 ? "text-foreground" : "text-destructive";
+          }
+
+          return (
+            <div className="rounded-md border border-primary/40 bg-gradient-to-br from-primary/10 via-primary/5 to-card p-3 mb-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <DualIcon
+                    primarySrc={xStockLogoUrl(activeJupiterLeg.collateralSymbol)}
+                    primaryAlt={activeJupiterLeg.collateralSymbol}
+                    badgeSrc={JUPITER_LOGO_URL}
+                    badgeAlt="Jupiter"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+                      <span>{activeJupiterLeg.collateralSymbol} Earn Loop</span>
+                      <span className="text-[10px] uppercase tracking-wide bg-success/15 text-success px-1.5 py-0.5 rounded font-mono">
+                        Active
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Lend → Borrow USDC → Stake in Kamino
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  {netApy !== null && (
+                    <div
+                      className={`text-base font-bold leading-tight ${
+                        netApy >= 0 ? "text-success" : "text-destructive"
+                      }`}
+                    >
+                      {netApy >= 0 ? "+" : ""}
+                      {netApy.toFixed(2)}% Net
+                    </div>
+                  )}
+                  <div className={`text-[11px] font-mono flex items-center justify-end gap-1 ${healthCls}`}>
+                    <Heart className="w-3 h-3" />
+                    Health {healthLabel}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                <div className="rounded bg-card/60 border border-border p-2">
+                  <div className="text-muted-foreground">Collateral</div>
+                  <div className="font-mono text-foreground">
+                    {formatTokenAmount(activeJupiterLeg.collateralAmount)} {activeJupiterLeg.collateralSymbol}
+                  </div>
+                  <div className="text-muted-foreground">{formatUsd(activeJupiterLeg.collateralUsd)}</div>
+                </div>
+                <div className="rounded bg-card/60 border border-border p-2">
+                  <div className="text-muted-foreground">Earning in Kamino</div>
+                  <div className="font-mono text-foreground">
+                    {kaminoLeg ? `${formatTokenAmount(kaminoLeg.underlyingAmount)} USDC` : "—"}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {kaminoLeg ? `${kamApy.toFixed(2)}% APY · ${formatUsd(kaminoLeg.underlyingUsd)}` : "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="mt-2 text-[10px] text-muted-foreground"
+                title="Demo-only watcher — auto-deleverage planner is wired but not running yet."
+              >
+                Agent will auto-deleverage if Health falls below 1.5
+              </div>
+
+              {(() => {
+                // Only surface step state if it belongs to the *current* active
+                // position — otherwise it's a stale checklist from a prior loop
+                // that already unwound and got re-activated.
+                const stepsForThisLeg =
+                  deactState && deactState.positionId === activeJupiterLeg.positionId
+                    ? deactState.steps
+                    : null;
+                if (!stepsForThisLeg) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void handleDeactivateLoop(activeJupiterLeg, kaminoLeg)}
+                      disabled={deactivating}
+                      className="mt-3 cursor-pointer w-full inline-flex items-center justify-center rounded-md border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Deactivate loop
+                    </button>
+                  );
+                }
+                return (
+                  <>
+                    {deactError && (
+                      <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive break-all">
+                        {deactError}
+                      </div>
+                    )}
+                    <div className="mt-3 space-y-1.5">
+                      {stepsForThisLeg.map((step, i) => (
+                    <div key={i} className="flex items-start gap-2 text-[11px]">
+                      <span className="shrink-0 mt-0.5">
+                        {step.status === "done" && <Check className="w-3.5 h-3.5 text-success" />}
+                        {step.status === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+                        {step.status === "error" && <X className="w-3.5 h-3.5 text-destructive" />}
+                        {step.status === "pending" && (
+                          <span className="block w-3.5 h-3.5 rounded-full border border-muted-foreground/40" />
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={
+                            step.status === "done"
+                              ? "text-success"
+                              : step.status === "running"
+                                ? "text-foreground"
+                                : step.status === "error"
+                                  ? "text-destructive"
+                                  : "text-muted-foreground"
+                          }
+                        >
+                          {step.label}
+                        </div>
+                        {step.signature && (
+                          <a
+                            href={`https://solscan.io/tx/${step.signature}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-muted-foreground hover:text-primary font-mono"
+                          >
+                            {step.signature.slice(0, 8)}…{step.signature.slice(-8)}
+                          </a>
+                        )}
+                        {step.error && (
+                          <div className="text-[10px] text-destructive break-all">{step.error}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {deactError && stepsForThisLeg.every((s) => s.status !== "running") && (
+                    <div className="mt-2 flex gap-3 items-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeactState(null);
+                          setDeactError(null);
+                        }}
+                        className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeactState(null);
+                          setDeactError(null);
+                          void handleDeactivateLoop(activeJupiterLeg, kaminoLeg);
+                        }}
+                        className="text-[10px] text-primary hover:underline"
+                      >
+                        Retry from current state
+                      </button>
+                    </div>
+                  )}
+                </div>
+                  </>
+                );
+              })()}
+            </div>
+          );
+        })()}
 
         <div>
           <div className="text-sm font-medium mb-2">Holdings</div>
@@ -795,6 +1216,10 @@ export function VaultCard() {
                         <div className="min-w-0">
                           <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
                             <span>{position.collateralSymbol}</span>
+                            <ChartTrigger
+                              mint={position.collateralMint}
+                              symbol={position.collateralSymbol}
+                            />
                             {position.depositApy != null && (
                               <span
                                 className="text-[10px] bg-success/15 text-success px-1.5 py-0.5 rounded font-mono"
@@ -924,12 +1349,13 @@ export function VaultCard() {
                           inputMode="decimal"
                           value={repayAmounts[`${position.vaultId}:${position.positionId}`] ?? ""}
                           onChange={(e) => {
+                            const key = `${position.vaultId}:${position.positionId}`;
                             const next = e.target.value.replace(",", ".");
                             if (/^\d*\.?\d*$/.test(next)) {
-                              setRepayAmounts((prev) => ({
-                                ...prev,
-                                [`${position.vaultId}:${position.positionId}`]: next,
-                              }));
+                              setRepayAmounts((prev) => ({ ...prev, [key]: next }));
+                              // Manual edit clears any prior MAX intent so a
+                              // typed-in amount is treated as an exact value.
+                              setRepayMaxFlags((prev) => ({ ...prev, [key]: false }));
                             }
                           }}
                           placeholder="Repay USDC"
@@ -938,11 +1364,17 @@ export function VaultCard() {
                         <button
                           type="button"
                           onClick={() => {
+                            const key = `${position.vaultId}:${position.positionId}`;
                             const repayMax = Math.min(vaultUsdc, position.debtAmount);
                             setRepayAmounts((prev) => ({
                               ...prev,
-                              [`${position.vaultId}:${position.positionId}`]: formatAmount(repayMax),
+                              [key]: formatAmount(repayMax),
                             }));
+                            // Use the SDK's MAX_REPAY_AMOUNT sentinel server-side
+                            // so we don't hit VAULT_USER_DEBT_TOO_LOW when the
+                            // on-chain debt has accrued a few raw units since
+                            // the UI last refreshed.
+                            setRepayMaxFlags((prev) => ({ ...prev, [key]: true }));
                           }}
                           disabled={vaultUsdc <= 0 || position.debtAmount <= 0}
                           className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
@@ -959,7 +1391,8 @@ export function VaultCard() {
                         disabled={
                           rebalancing ||
                           BigInt(position.debtRaw) === BigInt(0) ||
-                          BigInt(usdcToRawAmount(repayAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0)
+                          (!repayMaxFlags[`${position.vaultId}:${position.positionId}`] &&
+                            BigInt(usdcToRawAmount(repayAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0))
                         }
                         className="cursor-pointer rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >

@@ -750,13 +750,32 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   const market = getCollateralMarket(args.vaultId);
   const collateralDecimals = market?.decimals ?? 9;
 
-  const [{ getOperateIx, MAX_REPAY_AMOUNT }, runtimeWeb3] = await Promise.all([
+  const [{ getOperateIx, getCurrentPosition }, runtimeWeb3] = await Promise.all([
     loadJupiterBorrow(),
     loadRuntimeWeb3(),
   ]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
   const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
-  const debtArg = args.max ? MAX_REPAY_AMOUNT : amount.neg();
+  // For "max", read the freshest debt from chain and pass exactly its
+  // negation. Passing the SDK's MAX_REPAY_AMOUNT (= MIN_I128) sentinel
+  // hits the on-chain VAULT_INVALID_OPERATE_AMOUNT check, and passing
+  // the UI-cached debt risks VAULT_USER_DEBT_TOO_LOW once a unit of
+  // interest accrues between fetch and execution.
+  let debtArg: BN;
+  if (args.max) {
+    const current = await getCurrentPosition({
+      vaultId: args.vaultId,
+      positionId: args.positionId,
+      connection: sdkConnection as unknown as Connection,
+    });
+    const debtRaw = new BN(current.debtRaw.toString());
+    if (debtRaw.lte(new BN(0))) {
+      throw new Error("Position has no outstanding debt to repay");
+    }
+    debtArg = debtRaw.neg();
+  } else {
+    debtArg = amount.neg();
+  }
   const built = await getOperateIx({
     vaultId: args.vaultId,
     positionId: args.positionId,

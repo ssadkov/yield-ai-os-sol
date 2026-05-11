@@ -231,7 +231,8 @@ export function EarnIdeasCards() {
 
   const postKaminoDeposit = async (idea: EarnIdea): Promise<ActionResponse> => {
     if (!publicKey) throw new Error("Wallet not connected");
-    if (!idea.action || idea.action.type !== "kaminoKvaultDeposit") {
+    const action = idea.action;
+    if (!action || action.type !== "kaminoKvaultDeposit") {
       throw new Error("This idea is not executable yet");
     }
     const action = idea.action;

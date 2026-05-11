@@ -11,3 +11,7 @@ client/keys/*.json
 *.log
 _gen*.py
 Cargo.lock
+# Build artifacts
+*.tsbuildinfo
+# Tooling worktrees / scratch
+.claude/

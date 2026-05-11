@@ -22,6 +22,8 @@ export interface RebalanceResult {
   missingPrograms?: string[];
   swaps?: RebalanceSwap[];
   error?: string;
+  /** Optional non-fatal note (e.g. dust repay skipped). */
+  note?: string;
 }
 
 type PendingAction =

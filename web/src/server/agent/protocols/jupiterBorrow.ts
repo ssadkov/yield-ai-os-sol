@@ -21,6 +21,26 @@ import { wrapProtocolCpiIx } from "./wrapCpi";
 
 export const JUPITER_LEND_PROGRAM_ID = new PublicKey("jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi");
 
+// Jupiter Borrow's `Operate` enforces a non-zero `min_user_debt` (see
+// vaults/src/utils/operate.rs:195 — `VAULT_USER_DEBT_TOO_LOW`). The exact
+// floor isn't exposed by the SDK, but empirically positions with user-scale
+// debt under ~$0.10 USDC can't be closed by a partial repay: any safety
+// margin we leave behind ends up between 0 and `min_user_debt` and the
+// protocol rejects the tx. We refuse to build a max-repay below this
+// threshold and let the runner / UI treat the position as effectively
+// closed (e.g. proceed to collateral withdraw or surface a friendly note).
+export const JUPITER_REPAY_DUST_USER_RAW = new BN(100_000); // $0.10 USDC (6 dp)
+export const JUPITER_REPAY_DUST_PREFIX = "JupiterRepayDust:";
+// Above this debt size we shift to "aggressive close" mode: leave only a
+// 2 user-unit safety margin (≈ $0.000002 USDC) so the residual visible debt
+// rounds to zero in any UI. For debt between DUST and FULL_CLOSE we fall
+// back to the larger 100 user-unit safety — that range is small enough
+// that the SDK's `+1` quirk plus interest drift can otherwise land us in
+// the forbidden (0, min_user_debt) zone.
+export const JUPITER_REPAY_FULL_CLOSE_USER_RAW = new BN(500_000); // $0.50 USDC (6 dp)
+export const JUPITER_REPAY_SAFETY_FULL = new BN(2);    // user units (≈ $0.000002)
+export const JUPITER_REPAY_SAFETY_MEDIUM = new BN(100); // user units (≈ $0.0001)
+
 const COMPUTE_UNIT_LIMIT = 1_400_000;
 // Target buffer the vault PDA should hold to cover Jupiter setup rent
 // (creating a position/tick account, etc). 0.025 SOL is plenty for the
@@ -120,6 +140,8 @@ export type BuiltJupiterBorrowDeposit = {
     sourceBalanceRaw: string | null;
     programs: string[];
   };
+  /** Optional non-fatal note to surface in UI (e.g. dust-debt fallbacks). */
+  note?: string;
 };
 
 export type BuiltJupiterBorrowInitPosition = {
@@ -505,22 +527,33 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
     connection: sdkConnection as unknown as Connection,
   });
 
-  const cpiIxs = built.ixs.map((ix) =>
-    wrapProtocolCpiIx({
-      vaultProgramId: args.vaultProgramId,
-      authority: args.authority,
-      vault: args.vault,
-      inner: {
-        programId: ix.programId.toBase58(),
-        keys: ix.keys.map((key) => ({
-          pubkey: key.pubkey.toBase58(),
-          isSigner: key.isSigner,
-          isWritable: key.isWritable,
-        })),
-        data: ix.data,
-      },
-    }),
-  );
+  // SDK may emit a setup ix (e.g. InitTickIdLiquidation) BEFORE the operate
+  // ix. Setup invokes SystemProgram.transfer to fund a rent-paying account
+  // and fails with "Transfer: from must not carry data" if the source is a
+  // PDA. Same split pattern as withdraw/repay: run setup as a direct ix
+  // signed by authority; only the final operate ix goes through CPI.
+  const directIxs = built.ixs
+    .slice(0, -1)
+    .map((ix) => replaceVaultSignerWithAuthority(normalizeIx(ix), args.vault, args.authority));
+  const operateIx = built.ixs[built.ixs.length - 1];
+  const cpiIxs = operateIx
+    ? [
+        wrapProtocolCpiIx({
+          vaultProgramId: args.vaultProgramId,
+          authority: args.authority,
+          vault: args.vault,
+          inner: {
+            programId: operateIx.programId.toBase58(),
+            keys: operateIx.keys.map((key) => ({
+              pubkey: key.pubkey.toBase58(),
+              isSigner: key.isSigner,
+              isWritable: key.isWritable,
+            })),
+            data: operateIx.data,
+          },
+        }),
+      ]
+    : [];
 
   const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
     await planVaultTopUp({
@@ -530,14 +563,24 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
       needsRent: built.ixs.length > 1,
     });
 
-  const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
-      label: `jupiter_borrow_deposit_collateral_${index + 1}`,
+  const txs: BuiltJupiterBorrowDeposit["txs"] = [
+    ...directIxs.map((ix, index) => ({
+      label: `jupiter_borrow_deposit_setup_${index + 1}`,
       ixs: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
         ...(index === 0 ? topUpIxs : []),
         ix,
       ],
-    }));
+    })),
+    ...cpiIxs.map((ix, index) => ({
+      label: `jupiter_borrow_deposit_collateral_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(directIxs.length === 0 && index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+  ];
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -548,7 +591,7 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -573,16 +616,89 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
   const market = getCollateralMarket(args.vaultId);
   const collateralDecimals = market?.decimals ?? 9;
 
-  const [{ getOperateIx, MAX_WITHDRAW_AMOUNT }, runtimeWeb3] = await Promise.all([
+  const [{ getOperateIx, MAX_WITHDRAW_AMOUNT, getCurrentPosition }, runtimeWeb3] = await Promise.all([
     loadJupiterBorrow(),
     loadRuntimeWeb3(),
   ]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
   const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
+
+  // If residual debt remains (e.g. we just dust-skipped repay), Jupiter's
+  // operate math rejects MAX_WITHDRAW with LibraryMathError (0x1770) — it
+  // tries to compute LTV on zero collateral. Switch to a partial withdraw
+  // that keeps just enough collateral so:
+  //   1) the LTV ratio is well-defined (no div-by-zero), and
+  //   2) `debt / new_collateral <= max_ltv` for any plausible market.
+  //
+  // Buffer size scales with how much debt is actually left:
+  //   * Dust debt (< $0.10 USDC) — the LTV constraint is essentially
+  //     vacuous (you'd need a 100× price move to liquidate). Keep only
+  //     a 1% buffer so the user extracts ~99% of their collateral.
+  //   * Real residual debt (>= $0.10) — keep the conservative 10%
+  //     buffer so the position stays comfortably solvent against
+  //     normal price drift.
+  // In both cases the leftover position is unwound later by either
+  // a borrow→max-repay cycle or by topping it off so it's no longer dust.
+  let colAmount: BN = MAX_WITHDRAW_AMOUNT;
+  let withdrawNote: string | undefined;
+  let requestedAmountLabel = "MAX_WITHDRAW_AMOUNT";
+  try {
+    const current = await getCurrentPosition({
+      vaultId: args.vaultId,
+      positionId: args.positionId,
+      connection: sdkConnection as unknown as Connection,
+    });
+    const debtRawScaled = new BN(current.debtRaw.toString());
+    const dustDebtRaw = new BN(current.dustDebtRaw.toString());
+    const netDebtScaled = debtRawScaled.gt(dustDebtRaw)
+      ? debtRawScaled.sub(dustDebtRaw)
+      : new BN(0);
+    if (netDebtScaled.gt(new BN(0))) {
+      // Jupiter Borrow keeps collateral internally in 9-decimal scaled
+      // precision, but getOperateIx expects user input in the token's
+      // *natural* decimals and rescales by 10^(9 - tokenDecimals) itself
+      // (same trick as the repay path uses for debt). Convert
+      // current.colRaw down to user units first — otherwise the SDK
+      // double-scales and we ask to withdraw 10×-1000× the position size,
+      // tripping its "Ratio out of bounds" precheck.
+      const colRawScaled = new BN(current.colRaw.toString());
+      const scalingPower = Math.max(0, 9 - collateralDecimals);
+      const scaleDivisor = new BN(10).pow(new BN(scalingPower));
+      const colRawUser = colRawScaled.div(scaleDivisor);
+      if (colRawUser.lte(new BN(0))) {
+        throw new Error(
+          "Position has zero collateral but residual debt — manual unwind required",
+        );
+      }
+      // Threshold on net debt expressed in chain (9dp internal) units.
+      // JUPITER_REPAY_DUST_USER_RAW is in USDC 6dp; scale to 9dp internal.
+      const DUST_DEBT_INTERNAL_THRESHOLD = JUPITER_REPAY_DUST_USER_RAW.mul(new BN(1000));
+      const isDustResidual = netDebtScaled.lte(DUST_DEBT_INTERNAL_THRESHOLD);
+      const bufferDivisor = isDustResidual ? new BN(100) : new BN(10);
+      const buffer = colRawUser.div(bufferDivisor);
+      const withdrawRaw = colRawUser.sub(buffer);
+      if (withdrawRaw.lte(new BN(0))) {
+        throw new Error("Collateral too small to safely partial-withdraw with dust debt");
+      }
+      colAmount = withdrawRaw.neg();
+      requestedAmountLabel = isDustResidual ? "PARTIAL_WITHDRAW_99PCT" : "PARTIAL_WITHDRAW_90PCT";
+      withdrawNote = isDustResidual
+        ? "Jupiter Lend has dust debt (< $0.10) — withdrew ~99% of collateral, ~1% kept as LTV-math buffer."
+        : "Jupiter Lend has residual debt — withdrew ~90% of collateral, ~10% kept as health buffer. Position can be unwound manually later.";
+    }
+  } catch (err) {
+    // Best-effort: if we can't read the position, fall back to MAX_WITHDRAW
+    // (legacy behavior). The caller will still surface any chain error.
+    console.warn(
+      "[jupiterBorrow] getCurrentPosition failed during withdraw build; falling back to MAX_WITHDRAW",
+      err,
+    );
+  }
+
   const built = await getOperateIx({
     vaultId: args.vaultId,
     positionId: args.positionId,
-    colAmount: MAX_WITHDRAW_AMOUNT,
+    colAmount,
     debtAmount: new BN(0),
     signer: sdkSigner as unknown as PublicKey,
     positionOwner: sdkSigner as unknown as PublicKey,
@@ -658,11 +774,12 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
       topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
-      requestedAmountRaw: "MAX_WITHDRAW_AMOUNT",
-      operateAmount: MAX_WITHDRAW_AMOUNT.toString(),
+      requestedAmountRaw: requestedAmountLabel,
+      operateAmount: colAmount.toString(),
       sourceBalanceRaw: null,
       programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     },
+    note: withdrawNote,
   };
 }
 
@@ -694,22 +811,31 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     connection: sdkConnection as unknown as Connection,
   });
 
-  const cpiIxs = built.ixs.map((ix) =>
-    wrapProtocolCpiIx({
-      vaultProgramId: args.vaultProgramId,
-      authority: args.authority,
-      vault: args.vault,
-      inner: {
-        programId: ix.programId.toBase58(),
-        keys: ix.keys.map((key) => ({
-          pubkey: key.pubkey.toBase58(),
-          isSigner: key.isSigner,
-          isWritable: key.isWritable,
-        })),
-        data: ix.data,
-      },
-    }),
-  );
+  // Same split as deposit/withdraw/repay: setup ixs run direct via
+  // authority (System.transfer can't fund from a PDA with data), and only
+  // the final operate ix goes through CPI.
+  const directIxs = built.ixs
+    .slice(0, -1)
+    .map((ix) => replaceVaultSignerWithAuthority(normalizeIx(ix), args.vault, args.authority));
+  const operateIx = built.ixs[built.ixs.length - 1];
+  const cpiIxs = operateIx
+    ? [
+        wrapProtocolCpiIx({
+          vaultProgramId: args.vaultProgramId,
+          authority: args.authority,
+          vault: args.vault,
+          inner: {
+            programId: operateIx.programId.toBase58(),
+            keys: operateIx.keys.map((key) => ({
+              pubkey: key.pubkey.toBase58(),
+              isSigner: key.isSigner,
+              isWritable: key.isWritable,
+            })),
+            data: operateIx.data,
+          },
+        }),
+      ]
+    : [];
 
   const { topUpIxs, topUpLamports, currentVaultLamports: currentLamports } =
     await planVaultTopUp({
@@ -718,14 +844,24 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
       vault: args.vault,
       needsRent: built.ixs.length > 1,
     });
-  const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
-    label: `jupiter_borrow_usdc_${index + 1}`,
-    ixs: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
-      ...(index === 0 ? topUpIxs : []),
-      ix,
-    ],
-  }));
+  const txs: BuiltJupiterBorrowDeposit["txs"] = [
+    ...directIxs.map((ix, index) => ({
+      label: `jupiter_borrow_usdc_setup_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+    ...cpiIxs.map((ix, index) => ({
+      label: `jupiter_borrow_usdc_${index + 1}`,
+      ixs: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(directIxs.length === 0 && index === 0 ? topUpIxs : []),
+        ix,
+      ],
+    })),
+  ];
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -736,7 +872,7 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -762,6 +898,11 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
    *  on-chain debt has drifted below the UI-displayed amount due to interest
    *  accrual or rounding. */
   max?: boolean;
+  /** Override the safety-trim picked by the size-based heuristic. Used by
+   *  the runner to retry a failed full-close with a fatter safety margin
+   *  (e.g. when SDK +1 + interest drift land the residual in
+   *  VAULT_USER_DEBT_TOO_LOW). Value is in user-decimal units. */
+  safetyOverrideUserRaw?: BN;
 }): Promise<BuiltJupiterBorrowDeposit> {
   const amount = new BN(args.amountRaw);
   if (!args.max && amount.lte(new BN(0))) {
@@ -790,6 +931,7 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   // And passing the raw 9-decimal debtRaw straight through gets it
   // multiplied a second time → VAULT_EXCESS_DEBT_PAYBACK.
   let debtArg: BN;
+  let repayMode: "manual" | "max_full_close" | "max_medium" = "manual";
   if (args.max) {
     const current = await getCurrentPosition({
       vaultId: args.vaultId,
@@ -810,19 +952,36 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     const BORROW_DECIMALS = 6;
     const scalingPower = Math.max(0, 9 - BORROW_DECIMALS);
     const scaleDivisor = new BN(10).pow(new BN(scalingPower));
-    let userDebtRaw = netDebtScaled.div(scaleDivisor);
-    // Several off-by-one(s) stack up between the SDK's payback +1, dust
-    // accruing between fetch and simulation, and rounding from the
-    // 1000× scale. Pay 100 raw user-units (≈ $0.0001 USDC) less than
-    // computed netDebt to absorb all of them. The residual dust stays
-    // well below dustDebtRaw, and the chain treats the position as
-    // fully cleared for the subsequent collateral withdraw.
-    const safety = new BN(100);
-    if (userDebtRaw.lte(safety)) {
-      throw new Error("Position has no outstanding debt to repay");
+    const userDebtRaw = netDebtScaled.div(scaleDivisor);
+    // Below ~$0.10 USDC we can't safely close via partial repay: every
+    // safety margin we leave puts the residual into the forbidden
+    // (0, min_user_debt) band → VAULT_USER_DEBT_TOO_LOW. Bail with a
+    // typed prefix so callers can decide (skip repay / surface dust UX).
+    if (userDebtRaw.lte(JUPITER_REPAY_DUST_USER_RAW)) {
+      throw new Error(
+        `${JUPITER_REPAY_DUST_PREFIX} debtUserRaw=${userDebtRaw.toString()} threshold=${JUPITER_REPAY_DUST_USER_RAW.toString()}`,
+      );
     }
-    userDebtRaw = userDebtRaw.sub(safety);
-    debtArg = userDebtRaw.neg();
+    // Adaptive safety. Two error modes stack up between SDK upscale +1,
+    // dust accruing between fetch and simulation, and rounding from the
+    // 1000× scale: VAULT_EXCESS_DEBT_PAYBACK (overshoot) and
+    // VAULT_USER_DEBT_TOO_LOW (residual in forbidden zone). For "healthy"
+    // debts (>= $0.50 USDC) we can afford a very thin 2 user-unit margin,
+    // because the absolute residual stays well below any reasonable UI
+    // rounding. The chain treats `debtRaw - dustDebtRaw` as effective
+    // debt, so paying `(debtRaw - dustDebtRaw)/1000 - 2` user units
+    // collapses visible debt to ≈ $0.000002 — i.e. "$0.00" in any UI.
+    // For "medium" debts ($0.10..$0.50) we keep the older 100 user-unit
+    // safety: that range is small enough that the +1/interest jitter can
+    // otherwise land us in the forbidden zone.
+    const heuristicSafety = userDebtRaw.gte(JUPITER_REPAY_FULL_CLOSE_USER_RAW)
+      ? JUPITER_REPAY_SAFETY_FULL
+      : JUPITER_REPAY_SAFETY_MEDIUM;
+    const safety = args.safetyOverrideUserRaw ?? heuristicSafety;
+    repayMode = safety.eq(JUPITER_REPAY_SAFETY_FULL)
+      ? "max_full_close"
+      : "max_medium";
+    debtArg = userDebtRaw.sub(safety).neg();
   } else {
     debtArg = amount.neg();
   }
@@ -887,6 +1046,13 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     })),
   ];
 
+  const note =
+    repayMode === "max_full_close"
+      ? "Full-close repay: aiming for ≈ $0.00 visible residual debt."
+      : repayMode === "max_medium"
+        ? "Medium-debt repay: ~$0.0001 USDC kept as safety to avoid VAULT_USER_DEBT_TOO_LOW."
+        : undefined;
+
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     txs,
@@ -902,11 +1068,12 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
       topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
-      requestedAmountRaw: args.max ? "MAX_REPAY_AMOUNT" : amount.toString(),
+      requestedAmountRaw: args.max ? `MAX_REPAY_AMOUNT (${repayMode})` : amount.toString(),
       operateAmount: debtArg.toString(),
       sourceBalanceRaw: null,
       programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     },
+    note,
   };
 }
 

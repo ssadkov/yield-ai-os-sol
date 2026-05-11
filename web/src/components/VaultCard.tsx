@@ -242,7 +242,10 @@ export function VaultCard() {
   const [borrowAmounts, setBorrowAmounts] = useState<Record<string, string>>({});
   const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
   const [repayMaxFlags, setRepayMaxFlags] = useState<Record<string, boolean>>({});
-  const [deactSteps, setDeactSteps] = useState<DeactStep[] | null>(null);
+  const [deactState, setDeactState] = useState<{
+    positionId: number;
+    steps: DeactStep[];
+  } | null>(null);
   const [deactivating, setDeactivating] = useState(false);
   const [deactError, setDeactError] = useState<string | null>(null);
 
@@ -337,14 +340,14 @@ export function VaultCard() {
         status: "pending",
       },
     ];
-    setDeactSteps(steps);
+    setDeactState({ positionId: jupiterLeg.positionId, steps });
 
     const update = (index: number, patch: Partial<DeactStep>) => {
-      setDeactSteps((prev) => {
+      setDeactState((prev) => {
         if (!prev) return prev;
-        const next = prev.slice();
-        next[index] = { ...next[index], ...patch };
-        return next;
+        const nextSteps = prev.steps.slice();
+        nextSteps[index] = { ...nextSteps[index], ...patch };
+        return { ...prev, steps: nextSteps };
       });
     };
 
@@ -982,25 +985,35 @@ export function VaultCard() {
                 Agent will auto-deleverage if Health falls below 1.5
               </div>
 
-              {!deactSteps && (
-                <button
-                  type="button"
-                  onClick={() => void handleDeactivateLoop(activeJupiterLeg, kaminoLeg)}
-                  disabled={deactivating}
-                  className="mt-3 cursor-pointer w-full inline-flex items-center justify-center rounded-md border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Deactivate loop
-                </button>
-              )}
-
-              {deactSteps && deactError && (
-                <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive break-all">
-                  {deactError}
-                </div>
-              )}
-              {deactSteps && (
-                <div className="mt-3 space-y-1.5">
-                  {deactSteps.map((step, i) => (
+              {(() => {
+                // Only surface step state if it belongs to the *current* active
+                // position — otherwise it's a stale checklist from a prior loop
+                // that already unwound and got re-activated.
+                const stepsForThisLeg =
+                  deactState && deactState.positionId === activeJupiterLeg.positionId
+                    ? deactState.steps
+                    : null;
+                if (!stepsForThisLeg) {
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void handleDeactivateLoop(activeJupiterLeg, kaminoLeg)}
+                      disabled={deactivating}
+                      className="mt-3 cursor-pointer w-full inline-flex items-center justify-center rounded-md border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Deactivate loop
+                    </button>
+                  );
+                }
+                return (
+                  <>
+                    {deactError && (
+                      <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive break-all">
+                        {deactError}
+                      </div>
+                    )}
+                    <div className="mt-3 space-y-1.5">
+                      {stepsForThisLeg.map((step, i) => (
                     <div key={i} className="flex items-start gap-2 text-[11px]">
                       <span className="shrink-0 mt-0.5">
                         {step.status === "done" && <Check className="w-3.5 h-3.5 text-success" />}
@@ -1040,12 +1053,12 @@ export function VaultCard() {
                       </div>
                     </div>
                   ))}
-                  {deactError && deactSteps.every((s) => s.status !== "running") && (
+                  {deactError && stepsForThisLeg.every((s) => s.status !== "running") && (
                     <div className="mt-2 flex gap-3 items-center">
                       <button
                         type="button"
                         onClick={() => {
-                          setDeactSteps(null);
+                          setDeactState(null);
                           setDeactError(null);
                         }}
                         className="text-[10px] text-muted-foreground hover:text-foreground underline"
@@ -1055,7 +1068,7 @@ export function VaultCard() {
                       <button
                         type="button"
                         onClick={() => {
-                          setDeactSteps(null);
+                          setDeactState(null);
                           setDeactError(null);
                           void handleDeactivateLoop(activeJupiterLeg, kaminoLeg);
                         }}
@@ -1066,7 +1079,9 @@ export function VaultCard() {
                     </div>
                   )}
                 </div>
-              )}
+                  </>
+                );
+              })()}
             </div>
           );
         })()}

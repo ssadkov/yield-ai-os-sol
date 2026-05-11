@@ -284,6 +284,11 @@ export function VaultCard() {
         throw new Error("Vault allowlist needs an update before Kamino withdraw can run.");
       }
       await handleRefreshAll();
+      // Chain state typically propagates within a few seconds after the
+      // server-side tx confirmation; re-refresh once so the UI catches up.
+      window.setTimeout(() => {
+        void handleRefreshAll();
+      }, 3500);
     } catch (err: unknown) {
       setKaminoWithdrawError(err instanceof Error ? err.message : String(err));
     } finally {

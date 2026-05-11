@@ -300,13 +300,13 @@ export function EarnIdeasCards() {
               <div className="text-right shrink-0">
                 {hasSpread ? (
                   <>
-                    <div className="text-base font-bold text-primary leading-tight">
+                    <div className="text-sm font-semibold text-primary leading-tight">
                       {idea.spreadLabel}
                     </div>
                     <div className="text-[11px] text-success">{idea.apyLabel}</div>
                   </>
                 ) : (
-                  <div className="text-base font-bold text-success leading-tight">
+                  <div className="text-sm font-semibold text-success leading-tight">
                     {idea.apyLabel}
                   </div>
                 )}

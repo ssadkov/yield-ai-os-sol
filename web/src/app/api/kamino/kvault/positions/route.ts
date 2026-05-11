@@ -4,7 +4,9 @@ import { PublicKey } from "@solana/web3.js";
 import { deriveVaultPda } from "@/lib/vault";
 
 export const runtime = "nodejs";
-export const revalidate = 30;
+// Always fetch fresh — after a user-triggered withdraw/deposit the UI relies
+// on this route reflecting on-chain state within seconds.
+export const revalidate = 0;
 
 const KAMINO_API_BASE = "https://api.kamino.finance";
 

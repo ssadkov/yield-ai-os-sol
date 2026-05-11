@@ -347,9 +347,12 @@ export function VaultCard() {
       });
     };
 
+    // Track which step is currently active so the catch always marks the right one.
+    let currentStep = 0;
     try {
       // Step 1 — Kamino withdraw (skip if no kamino leg)
       if (kaminoLeg) {
+        currentStep = 0;
         update(0, { status: "running" });
         const res = await fetch("/api/kamino/kvault/withdraw", {
           method: "POST",
@@ -373,6 +376,7 @@ export function VaultCard() {
       }
 
       // Step 2 — Jupiter repay (MAX)
+      currentStep = 1;
       update(1, { status: "running" });
       const repayRes = await fetch("/api/jupiter/borrow/repay-usdc", {
         method: "POST",
@@ -397,6 +401,7 @@ export function VaultCard() {
       await sleepLoop(LOOP_STEP_PAUSE_MS);
 
       // Step 3 — Jupiter withdraw collateral
+      currentStep = 2;
       update(2, { status: "running" });
       const wRes = await fetch("/api/jupiter/borrow/withdraw-collateral", {
         method: "POST",
@@ -416,21 +421,15 @@ export function VaultCard() {
         signature: wData.signatures?.[wData.signatures.length - 1],
       });
       triggerBalanceRefresh();
-      // Catch chain propagation
       for (const delay of [3000, 8000, 15000]) {
         window.setTimeout(() => triggerBalanceRefresh(), delay);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setDeactError(msg);
-      // Mark current running step as error
-      setDeactSteps((prev) => {
-        if (!prev) return prev;
-        const next = prev.slice();
-        const idx = next.findIndex((s) => s.status === "running");
-        if (idx >= 0) next[idx] = { ...next[idx], status: "error", error: msg };
-        return next;
-      });
+      // Mark the step that was active when the error happened, regardless
+      // of whether its "running" state had committed in React.
+      update(currentStep, { status: "error", error: msg });
     } finally {
       setDeactivating(false);
     }
@@ -993,6 +992,11 @@ export function VaultCard() {
                 </button>
               )}
 
+              {deactSteps && deactError && (
+                <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive break-all">
+                  {deactError}
+                </div>
+              )}
               {deactSteps && (
                 <div className="mt-3 space-y-1.5">
                   {deactSteps.map((step, i) => (
@@ -1036,16 +1040,29 @@ export function VaultCard() {
                     </div>
                   ))}
                   {deactError && deactSteps.every((s) => s.status !== "running") && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeactSteps(null);
-                        setDeactError(null);
-                      }}
-                      className="mt-2 text-[10px] text-muted-foreground hover:text-foreground underline"
-                    >
-                      Dismiss
-                    </button>
+                    <div className="mt-2 flex gap-3 items-center">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeactSteps(null);
+                          setDeactError(null);
+                        }}
+                        className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                      >
+                        Dismiss
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeactSteps(null);
+                          setDeactError(null);
+                          void handleDeactivateLoop(activeJupiterLeg, kaminoLeg);
+                        }}
+                        className="text-[10px] text-primary hover:underline"
+                      >
+                        Retry from current state
+                      </button>
+                    </div>
                   )}
                 </div>
               )}

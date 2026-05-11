@@ -21,12 +21,42 @@ interface ApiResponse {
   totalDeposited: number;
   totalWithdrawn: number;
   netDeposited: number;
+  hasSplActivity?: boolean;
   error?: string;
 }
 
-export function useVaultPnl(currentValueUsd: number | null) {
+export interface VaultPnlWithCaveat extends VaultPnl {
+  hasSplActivity: boolean;
+}
+
+function computeNetFromEntries(
+  entries: VaultTxEntry[],
+  priceByMint: Record<string, number | null | undefined>,
+): { totalDeposited: number; totalWithdrawn: number; netDeposited: number } {
+  let totalDeposited = 0;
+  let totalWithdrawn = 0;
+  for (const e of entries) {
+    let usd: number | null = e.amountUsdc;
+    if (usd == null) {
+      const price = priceByMint[e.mint];
+      if (price != null && price > 0) {
+        const ui = Number(e.amountRaw) / 10 ** e.decimals;
+        usd = ui * price;
+      }
+    }
+    if (usd == null) continue;
+    if (e.type === "deposit") totalDeposited += usd;
+    else totalWithdrawn += usd;
+  }
+  return { totalDeposited, totalWithdrawn, netDeposited: totalDeposited - totalWithdrawn };
+}
+
+export function useVaultPnl(
+  currentValueUsd: number | null,
+  priceByMint: Record<string, number | null | undefined> = {},
+) {
   const { publicKey } = useWallet();
-  const [data, setData] = useState<VaultPnl | null>(null);
+  const [data, setData] = useState<VaultPnlWithCaveat | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +64,8 @@ export function useVaultPnl(currentValueUsd: number | null) {
 
   const currentValueUsdRef = useRef(currentValueUsd);
   currentValueUsdRef.current = currentValueUsd;
+  const priceByMintRef = useRef(priceByMint);
+  priceByMintRef.current = priceByMint;
 
   const refresh = useCallback(async () => {
     if (!ownerKey) {
@@ -53,20 +85,22 @@ export function useVaultPnl(currentValueUsd: number | null) {
 
       const json: ApiResponse = await res.json();
 
+      const computed = computeNetFromEntries(json.entries, priceByMintRef.current);
       const cv = currentValueUsdRef.current;
-      const pnl = cv !== null ? cv - json.netDeposited : null;
+      const pnl = cv !== null ? cv - computed.netDeposited : null;
       const pnlPercent =
-        pnl !== null && json.netDeposited > 0
-          ? (pnl / json.netDeposited) * 100
+        pnl !== null && computed.netDeposited > 0
+          ? (pnl / computed.netDeposited) * 100
           : null;
 
       setData({
         entries: json.entries,
-        totalDeposited: json.totalDeposited,
-        totalWithdrawn: json.totalWithdrawn,
-        netDeposited: json.netDeposited,
+        totalDeposited: computed.totalDeposited,
+        totalWithdrawn: computed.totalWithdrawn,
+        netDeposited: computed.netDeposited,
         pnl,
         pnlPercent,
+        hasSplActivity: Boolean(json.hasSplActivity),
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -77,26 +111,39 @@ export function useVaultPnl(currentValueUsd: number | null) {
   }, [ownerKey]);
 
   useEffect(() => {
-    // Always load once on mount / wallet change.
     refresh();
   }, [refresh]);
 
-  // Recompute PnL when vault USD total updates (no extra /api/vault-history call).
+  // Recompute PnL when vault USD total or live prices update — no extra API call.
   useEffect(() => {
     setData((prev) => {
       if (!prev) return prev;
+      const computed = computeNetFromEntries(prev.entries, priceByMint);
       const pnl =
-        currentValueUsd !== null ? currentValueUsd - prev.netDeposited : null;
+        currentValueUsd !== null ? currentValueUsd - computed.netDeposited : null;
       const pnlPercent =
-        pnl !== null && prev.netDeposited > 0
-          ? (pnl / prev.netDeposited) * 100
+        pnl !== null && computed.netDeposited > 0
+          ? (pnl / computed.netDeposited) * 100
           : null;
-      if (prev.pnl === pnl && prev.pnlPercent === pnlPercent) return prev;
-      return { ...prev, pnl, pnlPercent };
+      if (
+        prev.pnl === pnl &&
+        prev.pnlPercent === pnlPercent &&
+        prev.netDeposited === computed.netDeposited
+      )
+        return prev;
+      return {
+        ...prev,
+        totalDeposited: computed.totalDeposited,
+        totalWithdrawn: computed.totalWithdrawn,
+        netDeposited: computed.netDeposited,
+        pnl,
+        pnlPercent,
+      };
     });
-  }, [currentValueUsd]);
+    // priceByMint identity changes every render; deep-compare via JSON for stability.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentValueUsd, JSON.stringify(priceByMint)]);
 
-  // Refresh only after successful on-chain actions.
   useEffect(() => onBalanceRefresh(refresh), [refresh]);
 
   return { data, loading, error, refresh };

@@ -496,11 +496,21 @@ export function VaultCard() {
   const estimatedVaultApy = vaultNetUsd > 0 ? (estimatedAnnualYieldUsd / vaultNetUsd) * 100 : null;
   const pnlCurrentValueUsd =
     vaultAssetsLoading || kaminoPositionsLoading || jupiterBorrowPositionsLoading ? null : vaultNetUsd;
+  // Live prices keyed by mint — fed to useVaultPnl so deposit_spl / withdraw_spl
+  // entries (xStocks, cbBTC, etc.) can be valued in USD. Without this PnL
+  // counts only USDC deposits and looks like 100% gain on any SPL position.
+  const priceByMint = useMemo(() => {
+    const map: Record<string, number | null | undefined> = {};
+    for (const a of vaultAssets) {
+      if (a.usdPrice != null && a.usdPrice > 0) map[a.mint] = a.usdPrice;
+    }
+    return map;
+  }, [vaultAssets]);
   const {
     data: pnlData,
     loading: pnlLoading,
     refresh: refreshPnl,
-  } = useVaultPnl(pnlCurrentValueUsd);
+  } = useVaultPnl(pnlCurrentValueUsd, priceByMint);
   const holdingsHiddenCount = visibleVaultAssets.length - COLLAPSED_COUNT;
   const holdingsHasMore = visibleVaultAssets.length > COLLAPSED_COUNT;
 
@@ -920,8 +930,18 @@ export function VaultCard() {
               (p) => p.vaultAddress === LOOP_TARGET_KVAULT && (p.underlyingUsd ?? 0) > 0.01,
             ) ?? null;
 
-          const colUsd = activeJupiterLeg.collateralUsd ?? 0;
+          // Jupiter's price feed sometimes doesn't have xStocks live (especially
+          // shortly after a fresh deposit). Without a fallback the math
+          // collapses to nonsense — e.g. colUsd=0, debtUsd=12, kamUsd=12 →
+          // netUsd=$0.04 → Net APY ~2000%, Health 0.
           const debtUsd = activeJupiterLeg.debtUsd ?? 0;
+          const colUsdRaw = activeJupiterLeg.collateralUsd;
+          const colUsdMissing = colUsdRaw == null || colUsdRaw <= 0;
+          const colUsd = colUsdMissing
+            ? debtUsd > 0
+              ? debtUsd // proxy: loop is roughly balanced, debt USD ≈ collateral USD
+              : 0
+            : colUsdRaw;
           const kamUsd = kaminoLeg?.underlyingUsd ?? 0;
           const netUsd = colUsd - debtUsd + kamUsd;
           const colYield = (colUsd * (activeJupiterLeg.depositApy ?? 0)) / 100;
@@ -1495,7 +1515,13 @@ export function VaultCard() {
                       {formatUsd(pnlData.netDeposited)}
                     </span>
                   </div>
-                  {pnlData.pnl !== null && (() => {
+                  {/* PnL is reliable only for pure USDC deposit history. With
+                      non-USDC (xStocks / cbBTC) deposits we'd be marking
+                      principal at current price, which is misleading on a
+                      vault that's mostly volatile assets. Hide PnL when the
+                      history includes SPL activity; we'll bring it back once
+                      historical pricing is wired in. */}
+                  {!pnlData.hasSplActivity && pnlData.pnl !== null && (() => {
                     const negligible = Math.abs(pnlData.pnl) < 0.01;
                     const positive = pnlData.pnl > 0;
                     const colorClass = negligible

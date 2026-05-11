@@ -235,6 +235,7 @@ export function EarnIdeasCards() {
     if (!action || action.type !== "kaminoKvaultDeposit") {
       throw new Error("This idea is not executable yet");
     }
+    const action = idea.action;
     const holding = vaultAssets.find((asset) => asset.mint === action.tokenMint);
     if (!holding || BigInt(holding.rawAmount) === BigInt(0)) {
       throw new Error(`No ${EARN_IDEA_SYMBOLS[action.tokenMint] ?? "token"} in vault`);
@@ -537,7 +538,7 @@ export function EarnIdeasCards() {
                 You need {match?.symbol ?? idea.requiredMints[0]} in your safe — move it from your wallet first.
               </p>
             )}
-            {!isReady && (idea.action?.type === "stocksEarnLoop") && (
+            {!isReady && idea.action?.type === "stocksEarnLoop" && (
               <p className="mt-2 text-[11px] text-muted-foreground">
                 You need {idea.action.collateralSymbol} in your safe to activate this loop.
               </p>

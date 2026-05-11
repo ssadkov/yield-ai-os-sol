@@ -441,16 +441,28 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
     };
   }
 
-  const built = await buildJupiterBorrowUsdcRepayTx({
-    connection,
-    vaultProgramId,
-    authority: authority.publicKey,
-    vault: vaultPda,
-    vaultId: args.vaultId,
-    positionId,
-    amountRaw: args.amountRaw,
-    max: args.max,
-  });
+  let built;
+  try {
+    built = await buildJupiterBorrowUsdcRepayTx({
+      connection,
+      vaultProgramId,
+      authority: authority.publicKey,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+      positionId,
+      amountRaw: args.amountRaw,
+      max: args.max,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // If on-chain debt is already 0 (e.g. a prior repay attempt actually
+    // landed before its receipt got back to us), the deactivation flow
+    // should sail past this step rather than error out.
+    if (/no outstanding debt/i.test(msg)) {
+      return { status: "success", signatures: [], swaps: [] };
+    }
+    throw err;
+  }
 
   const signatures: string[] = [];
   for (let i = 0; i < built.txs.length; i++) {

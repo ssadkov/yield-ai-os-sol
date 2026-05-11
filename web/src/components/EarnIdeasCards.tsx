@@ -60,42 +60,69 @@ function mintLogoUrl(mint: string): string | undefined {
   return undefined;
 }
 
-function TokenChip({ mint, dimmed }: { mint: string; dimmed?: boolean }) {
+function ProtocolLogo({ protocol, size = 7 }: { protocol: string; size?: 5 | 7 }) {
+  const logo = protocolLogo(protocol);
+  const [failed, setFailed] = useState(false);
+  const cls =
+    size === 5
+      ? "w-5 h-5 rounded-md bg-card ring-1 ring-border p-0.5"
+      : "w-7 h-7 rounded-md bg-card ring-1 ring-border p-1";
+  const fallbackCls =
+    size === 5
+      ? "w-5 h-5 rounded-md bg-muted ring-1 ring-border flex items-center justify-center text-[9px] font-bold text-muted-foreground"
+      : "w-7 h-7 rounded-md bg-muted ring-1 ring-border flex items-center justify-center text-[10px] font-bold text-muted-foreground";
+  if (!logo || failed) {
+    return <div className={fallbackCls}>{protocol.charAt(0)}</div>;
+  }
+  return (
+    <img src={logo.src} alt={logo.alt} className={cls} onError={() => setFailed(true)} />
+  );
+}
+
+function HeroAsset({
+  mint,
+  protocol,
+}: {
+  mint: string;
+  protocol: string;
+}) {
   const [failed, setFailed] = useState(false);
   const src = mintLogoUrl(mint);
   const symbol = EARN_IDEA_SYMBOLS[mint] ?? mint.slice(0, 4);
-  const cls = `w-5 h-5 rounded-full bg-muted ring-1 ring-border ${dimmed ? "opacity-60" : ""}`;
-  if (src && !failed) {
-    return <img src={src} alt={symbol} className={cls} onError={() => setFailed(true)} />;
-  }
+  const protoLogo = protocolLogo(protocol);
   return (
-    <div
-      className={`${cls} flex items-center justify-center text-[9px] font-bold text-muted-foreground`}
-      title={symbol}
-    >
-      {symbol.charAt(0)}
+    <div className="relative w-10 h-10 shrink-0">
+      {src && !failed ? (
+        <img
+          src={src}
+          alt={symbol}
+          className="w-10 h-10 rounded-full bg-muted ring-1 ring-border"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className="w-10 h-10 rounded-full bg-muted ring-1 ring-border flex items-center justify-center text-sm font-bold text-muted-foreground">
+          {symbol.charAt(0)}
+        </div>
+      )}
+      {protoLogo && (
+        <img
+          src={protoLogo.src}
+          alt={protoLogo.alt}
+          className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-md bg-card ring-1 ring-border p-0.5"
+          onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+        />
+      )}
     </div>
   );
 }
 
-function ProtocolLogo({ protocol }: { protocol: string }) {
-  const logo = protocolLogo(protocol);
-  const [failed, setFailed] = useState(false);
-  if (!logo || failed) {
-    return (
-      <div className="w-7 h-7 rounded-md bg-muted ring-1 ring-border flex items-center justify-center text-[10px] font-bold text-muted-foreground">
-        {protocol.charAt(0)}
-      </div>
-    );
-  }
-  return (
-    <img
-      src={logo.src}
-      alt={logo.alt}
-      className="w-7 h-7 rounded-md bg-card ring-1 ring-border p-1"
-      onError={() => setFailed(true)}
-    />
-  );
+function formatRelativeTime(ms?: number): string | null {
+  if (!ms) return null;
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 function formatBalance(n: number): string {
@@ -119,6 +146,7 @@ export function EarnIdeasCards() {
   const { assets: walletAssets } = useWalletAssets();
   const [ideas, setIdeas] = useState<EarnIdea[]>(EARN_IDEAS);
   const [sourceState, setSourceState] = useState<"loading" | "live" | "fallback">("loading");
+  const [fetchedAtMs, setFetchedAtMs] = useState<number | null>(null);
   const [pendingIdeaId, setPendingIdeaId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -133,6 +161,7 @@ export function EarnIdeasCards() {
         if (data.ideas?.length) {
           setIdeas(data.ideas);
           setSourceState(data.fallback ? "fallback" : "live");
+          if (data.fetchedAtMs) setFetchedAtMs(data.fetchedAtMs);
         } else {
           setSourceState("fallback");
         }
@@ -242,9 +271,11 @@ export function EarnIdeasCards() {
     const showMoveToVault =
       isReady && !inVault && idea.action?.type === "kaminoKvaultDeposit";
 
-    // Asset chips: requiredMints, but cap to 3 to avoid clutter.
-    const chips = idea.requiredMints.slice(0, 3);
-    const extraChips = idea.requiredMints.length - chips.length;
+    // Pick hero asset: the one the user holds (Ready), else the first
+    // required mint as canonical representative for the idea.
+    const heroMint = match?.mint ?? idea.requiredMints[0];
+    const extras = idea.requiredMints.length - 1;
+    const hasSpread = !!idea.spreadLabel;
 
     return (
       <article
@@ -256,38 +287,39 @@ export function EarnIdeasCards() {
         }`}
       >
         <div className="flex items-start gap-3">
-          <ProtocolLogo protocol={idea.protocol} />
+          <HeroAsset mint={heroMint} protocol={idea.protocol} />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2 min-w-0">
-                <h3 className="text-sm font-medium truncate">{idea.title}</h3>
-                <div className="flex items-center -space-x-1 shrink-0">
-                  {chips.map((mint) => (
-                    <TokenChip key={mint} mint={mint} dimmed={!isReady} />
-                  ))}
-                  {extraChips > 0 && (
-                    <span className="text-[10px] text-muted-foreground ml-1.5">
-                      +{extraChips}
-                    </span>
-                  )}
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold truncate">{idea.title}</h3>
+                <div className="text-[11px] text-muted-foreground">
+                  {idea.protocol}
+                  {extras > 0 ? ` · +${extras} more option${extras > 1 ? "s" : ""}` : ""}
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-sm font-semibold text-success">{idea.apyLabel}</div>
-                {idea.spreadLabel && (
-                  <div className="text-[10px] text-primary">{idea.spreadLabel}</div>
+                {hasSpread ? (
+                  <>
+                    <div className="text-base font-bold text-primary leading-tight">
+                      {idea.spreadLabel}
+                    </div>
+                    <div className="text-[11px] text-success">{idea.apyLabel}</div>
+                  </>
+                ) : (
+                  <div className="text-base font-bold text-success leading-tight">
+                    {idea.apyLabel}
+                  </div>
                 )}
               </div>
             </div>
 
-            {/* Owned/Discover sub-line */}
             {isReady ? (
-              <div className="mt-1 text-[11px] text-success font-medium">
+              <div className="mt-1.5 text-[11px] text-success font-medium">
                 {formatBalance(match.balance)} {match.symbol} in{" "}
                 {match.location === "vault" ? "safe" : "wallet"}
               </div>
             ) : idea.borrowLabel ? (
-              <div className="mt-1 text-[11px] text-muted-foreground">
+              <div className="mt-1.5 text-[11px] text-muted-foreground">
                 {idea.borrowLabel}
               </div>
             ) : null}
@@ -363,9 +395,27 @@ export function EarnIdeasCards() {
     <section className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3 mb-3">
         <h2 className="text-sm font-semibold">Earn ideas</h2>
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
-          {sourceState === "loading" ? "loading" : sourceState === "live" ? "live" : "fallback"}
-        </span>
+        <div
+          className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+          title={
+            sourceState === "fallback"
+              ? "Showing cached snapshot — live feed unavailable"
+              : "APY feed pulled from Kamino and Jupiter Lend"
+          }
+        >
+          <ProtocolLogo protocol="Kamino" size={5} />
+          <ProtocolLogo protocol="Jupiter" size={5} />
+          <span className="uppercase tracking-wide">
+            {sourceState === "loading"
+              ? "Loading"
+              : sourceState === "fallback"
+                ? "Cached"
+                : (() => {
+                    const rel = formatRelativeTime(fetchedAtMs ?? undefined);
+                    return rel ? `Live · ${rel}` : "Live";
+                  })()}
+          </span>
+        </div>
       </div>
 
       {ready.length > 0 && (

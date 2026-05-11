@@ -11,6 +11,7 @@ import { USDC_MINT_STR, USDC_DECIMALS } from "@/lib/constants";
 import { deriveVaultPda, setAllowedPrograms } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
+import { isProtocolPositionOrShareToken } from "@/lib/vaultPositionTokens";
 import type { AssetRow } from "@/hooks/useVaultAssets";
 import { AssetSelect, type AssetSelectItem } from "@/components/AssetSelect";
 
@@ -130,6 +131,7 @@ export function DepositCard() {
     const byMint = new Map<string, UiAsset>();
     for (const row of vaultAssets) {
       if (row.balance <= 0) continue;
+      if (isProtocolPositionOrShareToken(row)) continue;
       byMint.set(row.mint, fromVaultAsset(row));
     }
     if (vaultUsdc > 0 && !byMint.has(USDC_MINT_STR)) {
@@ -178,7 +180,10 @@ export function DepositCard() {
 
   const hasNonUsdcHoldings = useMemo(() => {
     return vaultAssets.some(
-      (a) => a.mint !== USDC_MINT_STR && a.balance > 0
+      (a) =>
+        a.mint !== USDC_MINT_STR &&
+        a.balance > 0 &&
+        !isProtocolPositionOrShareToken(a),
     );
   }, [vaultAssets]);
 

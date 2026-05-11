@@ -26,6 +26,8 @@ export interface RebalanceResult {
   missingPrograms?: string[];
   swaps?: SwapAction[];
   error?: string;
+  /** Optional non-fatal note (e.g. "dust debt — repay skipped"). */
+  note?: string;
 }
 
 function computeSwaps(snapshot: PortfolioSnapshot): SwapAction[] {

@@ -1,4 +1,5 @@
 import bs58 from "bs58";
+import BN from "bn.js";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { convertAll, rebalance, individualSwap, type RebalanceResult } from "./rebalance/engine";
 import { buildKaminoKvaultDepositTx, buildKaminoKvaultWithdrawTx } from "./protocols/kaminoKvault";
@@ -9,6 +10,8 @@ import {
   buildJupiterBorrowUsdcRepayTx,
   buildJupiterBorrowInitPositionSetupTx,
   findExistingVaultJupiterBorrowPosition,
+  JUPITER_REPAY_DUST_PREFIX,
+  JUPITER_REPAY_SAFETY_MEDIUM,
 } from "./protocols/jupiterBorrow";
 import { readVaultAccount } from "./rebalance/portfolio";
 import { signAndSendTx } from "./swap/send";
@@ -283,14 +286,40 @@ export async function runJupiterBorrowCollateralWithdrawJob(args: {
     };
   }
 
-  const built = await buildJupiterBorrowCollateralWithdrawTx({
-    connection,
-    vaultProgramId,
-    authority: authority.publicKey,
-    vault: vaultPda,
-    vaultId: args.vaultId,
-    positionId,
-  });
+  let built;
+  try {
+    built = await buildJupiterBorrowCollateralWithdrawTx({
+      connection,
+      vaultProgramId,
+      authority: authority.publicKey,
+      vault: vaultPda,
+      vaultId: args.vaultId,
+      positionId,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Jupiter SDK precheck (e.g. "Ratio … out of bounds") fires before any
+    // tx is built. Surface as a clean error instead of a 500 from the
+    // route — dust positions are the typical trigger here.
+    if (/ratio.*out of bounds/i.test(msg)) {
+      return {
+        status: "error",
+        signatures: [],
+        swaps: [],
+        error:
+          "Jupiter Lend rejected withdraw planning (Ratio out of bounds). This usually means residual debt + dust collateral leave the position in a state it can't auto-unwind. Try a fresh borrow→repay round to clear dust, or unwind manually.",
+      };
+    }
+    if (/manual unwind required|too small to safely partial-withdraw/i.test(msg)) {
+      return {
+        status: "error",
+        signatures: [],
+        swaps: [],
+        error: msg,
+      };
+    }
+    throw err;
+  }
 
   const signatures: string[] = [];
   for (let i = 0; i < built.txs.length; i++) {
@@ -303,17 +332,36 @@ export async function runJupiterBorrowCollateralWithdrawJob(args: {
     });
 
     if (result.err) {
+      const errStr = JSON.stringify(result.err);
+      // LIBRARY_MATH_ERROR (custom 0x1770 = 6000) on MAX withdraw means
+      // residual debt still trips the LTV math (col_final = 0, debt > 0).
+      // Surface as a friendly note rather than a wall of logs — partial
+      // withdraw is the recommended next step (and the builder already
+      // does that when it can read the position).
+      if (
+        errStr.includes("0x1770") ||
+        errStr.includes("LibraryMathError") ||
+        errStr.includes("LIBRARY_MATH_ERROR")
+      ) {
+        return {
+          status: "error",
+          signatures,
+          swaps: [],
+          error:
+            "Jupiter Lend collateral withdraw failed: position has residual debt that prevents pulling all collateral. Repay the dust first or unwind manually.",
+        };
+      }
       return {
         status: "error",
         signatures,
         swaps: [],
-        error: `Jupiter Lend collateral withdraw (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+        error: `Jupiter Lend collateral withdraw (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${errStr}. Build summary: ${JSON.stringify(built.summary)}`,
       };
     }
     if (result.signature) signatures.push(result.signature);
   }
 
-  return { status: "success", signatures, swaps: [] };
+  return { status: "success", signatures, swaps: [], note: built.note };
 }
 
 export async function runJupiterBorrowUsdcBorrowJob(args: {
@@ -441,51 +489,132 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
     };
   }
 
-  let built;
-  try {
-    built = await buildJupiterBorrowUsdcRepayTx({
-      connection,
-      vaultProgramId,
-      authority: authority.publicKey,
-      vault: vaultPda,
-      vaultId: args.vaultId,
-      positionId,
-      amountRaw: args.amountRaw,
-      max: args.max,
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // If on-chain debt is already 0 (e.g. a prior repay attempt actually
-    // landed before its receipt got back to us), the deactivation flow
-    // should sail past this step rather than error out.
-    if (/no outstanding debt/i.test(msg)) {
-      return { status: "success", signatures: [], swaps: [] };
+  type RepayAttempt =
+    | { kind: "success"; signatures: string[]; note?: string }
+    | { kind: "user_debt_too_low"; signatures: string[]; error: string }
+    | { kind: "error"; signatures: string[]; error: string }
+    | { kind: "no_debt" }
+    | { kind: "dust_skip" };
+
+  const attemptRepay = async (
+    safetyOverrideUserRaw?: BN,
+  ): Promise<RepayAttempt> => {
+    let built;
+    try {
+      built = await buildJupiterBorrowUsdcRepayTx({
+        connection,
+        vaultProgramId,
+        authority: authority.publicKey,
+        vault: vaultPda,
+        vaultId: args.vaultId,
+        positionId: positionId!,
+        amountRaw: args.amountRaw,
+        max: args.max,
+        safetyOverrideUserRaw,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/no outstanding debt/i.test(msg)) return { kind: "no_debt" };
+      if (msg.startsWith(JUPITER_REPAY_DUST_PREFIX)) return { kind: "dust_skip" };
+      throw err;
     }
-    throw err;
-  }
 
-  const signatures: string[] = [];
-  for (let i = 0; i < built.txs.length; i++) {
-    const tx = built.txs[i];
-    const result = await signAndSendTx({
-      connection,
-      authority,
-      ixs: tx.ixs,
-      alts: built.alts,
-    });
+    const signatures: string[] = [];
+    for (let i = 0; i < built.txs.length; i++) {
+      const tx = built.txs[i];
+      const result = await signAndSendTx({
+        connection,
+        authority,
+        ixs: tx.ixs,
+        alts: built.alts,
+      });
 
-    if (result.err) {
+      if (result.err) {
+        const errStr = JSON.stringify(result.err);
+        if (
+          args.max &&
+          (errStr.includes("0x1789") ||
+            errStr.includes("VaultUserDebtTooLow") ||
+            errStr.includes("VAULT_USER_DEBT_TOO_LOW"))
+        ) {
+          return {
+            kind: "user_debt_too_low",
+            signatures,
+            error: `Jupiter Lend USDC repay (${tx.label}, step ${i + 1}/${built.txs.length}) hit VAULT_USER_DEBT_TOO_LOW. Build summary: ${JSON.stringify(built.summary)}`,
+          };
+        }
+        return {
+          kind: "error",
+          signatures,
+          error: `Jupiter Lend USDC repay (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${errStr}. Build summary: ${JSON.stringify(built.summary)}`,
+        };
+      }
+      if (result.signature) signatures.push(result.signature);
+    }
+    return { kind: "success", signatures, note: built.note };
+  };
+
+  // Aggressive full-close first (decided inside the builder based on size).
+  const attempt = await attemptRepay();
+
+  // If our heuristic chose `safety=2` and the chain rejected the residual as
+  // below min_user_debt, retry once with the safer 100 user-unit margin.
+  // We never know exactly where Jupiter's min_user_debt sits, so this lets
+  // the runner self-heal without forcing the user to retry manually.
+  if (attempt.kind === "user_debt_too_low" && args.max) {
+    const retry = await attemptRepay(JUPITER_REPAY_SAFETY_MEDIUM);
+    if (retry.kind === "success") {
       return {
-        status: "error",
-        signatures,
+        status: "success",
+        signatures: retry.signatures,
         swaps: [],
-        error: `Jupiter Lend USDC repay (${tx.label}, step ${i + 1}/${built.txs.length}) failed: ${JSON.stringify(result.err)}. Build summary: ${JSON.stringify(built.summary)}`,
+        note: retry.note
+          ? `${retry.note} (retried with medium safety after VAULT_USER_DEBT_TOO_LOW)`
+          : "Retried repay with medium safety margin after VAULT_USER_DEBT_TOO_LOW.",
       };
     }
-    if (result.signature) signatures.push(result.signature);
+    if (retry.kind === "user_debt_too_low") {
+      return {
+        status: "success",
+        signatures: retry.signatures,
+        swaps: [],
+        note: "Jupiter Lend rejected partial repay (debt below protocol minimum after both safety attempts). Treating position as effectively closed.",
+      };
+    }
+    if (retry.kind === "dust_skip") {
+      return {
+        status: "success",
+        signatures: [],
+        swaps: [],
+        note: "Jupiter Lend rejected partial repay (debt below protocol minimum after both safety attempts). Treating position as effectively closed.",
+      };
+    }
+    if (retry.kind === "error") {
+      return { status: "error", signatures: retry.signatures, swaps: [], error: retry.error };
+    }
+    // retry.kind === "no_debt" — fall through to success
+    return { status: "success", signatures: [], swaps: [] };
   }
 
-  return { status: "success", signatures, swaps: [] };
+  if (attempt.kind === "success") {
+    return { status: "success", signatures: attempt.signatures, swaps: [], note: attempt.note };
+  }
+  if (attempt.kind === "no_debt") {
+    return { status: "success", signatures: [], swaps: [] };
+  }
+  if (attempt.kind === "dust_skip") {
+    return {
+      status: "success",
+      signatures: [],
+      swaps: [],
+      note: "Jupiter Lend debt is dust (< $0.10 USDC) — partial repay skipped, treating position as effectively closed.",
+    };
+  }
+  if (attempt.kind === "user_debt_too_low") {
+    // Non-max repays that hit this error are a real failure — propagate.
+    return { status: "error", signatures: attempt.signatures, swaps: [], error: attempt.error };
+  }
+  return { status: "error", signatures: attempt.signatures, swaps: [], error: attempt.error };
 }
 
 async function runKaminoKvaultActionJob(args: {

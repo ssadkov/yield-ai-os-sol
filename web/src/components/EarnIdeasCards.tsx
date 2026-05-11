@@ -231,19 +231,20 @@ export function EarnIdeasCards() {
 
   const postKaminoDeposit = async (idea: EarnIdea): Promise<ActionResponse> => {
     if (!publicKey) throw new Error("Wallet not connected");
-    if (!idea.action || idea.action.type !== "kaminoKvaultDeposit") {
+    const action = idea.action;
+    if (!action || action.type !== "kaminoKvaultDeposit") {
       throw new Error("This idea is not executable yet");
     }
-    const holding = vaultAssets.find((asset) => asset.mint === idea.action?.tokenMint);
+    const holding = vaultAssets.find((asset) => asset.mint === action.tokenMint);
     if (!holding || BigInt(holding.rawAmount) === BigInt(0)) {
-      throw new Error(`No ${EARN_IDEA_SYMBOLS[idea.action.tokenMint] ?? "token"} in vault`);
+      throw new Error(`No ${EARN_IDEA_SYMBOLS[action.tokenMint] ?? "token"} in vault`);
     }
     const res = await fetch("/api/kamino/kvault/deposit", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ownerPubkey: publicKey.toBase58(),
-        kvault: idea.action.kvault,
+        kvault: action.kvault,
         amountRaw: holding.rawAmount,
         decimals: holding.decimals,
       }),

@@ -451,6 +451,7 @@ export function VaultCard() {
       positionId: position.positionId,
     });
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
   const handleJupiterUsdcBorrow = async (position: (typeof jupiterBorrowPositions)[number]) => {
     const key = `${position.vaultId}:${position.positionId}`;
@@ -463,6 +464,7 @@ export function VaultCard() {
     });
     setBorrowAmounts((prev) => ({ ...prev, [key]: "" }));
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
   const handleJupiterUsdcRepay = async (position: (typeof jupiterBorrowPositions)[number]) => {
     const key = `${position.vaultId}:${position.positionId}`;
@@ -475,6 +477,7 @@ export function VaultCard() {
     });
     setRepayAmounts((prev) => ({ ...prev, [key]: "" }));
     await handleRefreshAll();
+    window.setTimeout(() => void handleRefreshAll(), 3500);
   };
 
   if (!publicKey) return null;
@@ -567,14 +570,25 @@ export function VaultCard() {
                 </span>
               </span>
             )}
-            <button
-              type="button"
-              onClick={rebalance}
-              disabled={txPending || rebalancing}
-              className="cursor-pointer text-xs px-2.5 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {rebalancing ? "Rebalancing..." : "Rebalance"}
-            </button>
+            {(() => {
+              const hasActiveLoops =
+                kaminoPositions.length > 0 || jupiterBorrowPositions.length > 0;
+              return (
+                <button
+                  type="button"
+                  onClick={rebalance}
+                  disabled={txPending || rebalancing || hasActiveLoops}
+                  title={
+                    hasActiveLoops
+                      ? "Unwind active Kamino / Jupiter Lend positions before strategy rebalance."
+                      : "Rebalance vault holdings to match strategy target."
+                  }
+                  className="cursor-pointer text-xs px-2.5 py-1 rounded-md border border-border bg-accent hover:bg-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {rebalancing ? "Rebalancing..." : "Rebalance"}
+                </button>
+              );
+            })()}
           </div>
         </div>
 

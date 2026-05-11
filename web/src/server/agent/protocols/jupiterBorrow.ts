@@ -566,10 +566,23 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
   );
 
   const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const hasRentSetupIxs = built.ixs.length > 1;
+  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
+  const topUpIxs: TransactionInstruction[] = [];
+  if (topUpLamports > 0) {
+    topUpIxs.push(
+      SystemProgram.transfer({
+        fromPubkey: args.authority,
+        toPubkey: args.vault,
+        lamports: topUpLamports,
+      }),
+    );
+  }
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
     label: `jupiter_borrow_withdraw_collateral_${index + 1}`,
     ixs: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+      ...(index === 0 ? topUpIxs : []),
       ix,
     ],
   }));
@@ -583,10 +596,10 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: 0,
+      directCount: topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
       requestedAmountRaw: "MAX_WITHDRAW_AMOUNT",
@@ -643,10 +656,23 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
   );
 
   const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const hasRentSetupIxs = built.ixs.length > 1;
+  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
+  const topUpIxs: TransactionInstruction[] = [];
+  if (topUpLamports > 0) {
+    topUpIxs.push(
+      SystemProgram.transfer({
+        fromPubkey: args.authority,
+        toPubkey: args.vault,
+        lamports: topUpLamports,
+      }),
+    );
+  }
   const txs: BuiltJupiterBorrowDeposit["txs"] = cpiIxs.map((ix, index) => ({
     label: `jupiter_borrow_usdc_${index + 1}`,
     ixs: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+      ...(index === 0 ? topUpIxs : []),
       ix,
     ],
   }));
@@ -660,10 +686,10 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: 0,
+      directCount: topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
       requestedAmountRaw: amount.toString(),
@@ -723,12 +749,30 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     }),
   ] : [];
 
+  // Repay setup may invoke Jupiter's InitTickIdLiquidation which creates a
+  // new rent-paying account funded by the vault PDA via invoke_signed. If
+  // the PDA is under-funded the simulation fails with
+  // "Transaction results in an account (0) with insufficient funds for rent".
   const currentLamports = await args.connection.getBalance(args.vault, "confirmed");
+  const hasRentSetupIxs = built.ixs.length > 1;
+  const topUpLamports = hasRentSetupIxs ? Math.max(0, VAULT_PDA_LAMPORT_BUFFER - currentLamports) : 0;
+  const topUpIxs: TransactionInstruction[] = [];
+  if (topUpLamports > 0) {
+    topUpIxs.push(
+      SystemProgram.transfer({
+        fromPubkey: args.authority,
+        toPubkey: args.vault,
+        lamports: topUpLamports,
+      }),
+    );
+  }
+
   const txs: BuiltJupiterBorrowDeposit["txs"] = [
     ...directIxs.map((ix, index) => ({
       label: `jupiter_repay_setup_${index + 1}`,
       ixs: [
         ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_UNIT_LIMIT }),
+        ...(index === 0 ? topUpIxs : []),
         ix,
       ],
     })),
@@ -750,10 +794,10 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length,
+      directCount: directIxs.length + topUpIxs.length,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
-      topUpLamports: 0,
+      topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
       requestedAmountRaw: amount.toString(),

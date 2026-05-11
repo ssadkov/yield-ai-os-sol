@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ShieldCheck, Sparkles } from "lucide-react";
+import { ShieldCheck, Sparkles, Check, Loader2, X as XIcon } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
 import { deriveVaultPda } from "@/lib/vault";
@@ -12,6 +12,17 @@ import { EARN_IDEAS, EARN_IDEA_SYMBOLS, type EarnIdea } from "@/lib/earnIdeas";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { formatWalletError } from "@/lib/walletError";
 import { USDC_MINT_STR, SOL_MINT } from "@/lib/constants";
+
+type StepStatus = "pending" | "running" | "done" | "error";
+interface LoopStep {
+  label: string;
+  status: StepStatus;
+  signature?: string;
+  error?: string;
+}
+
+const STEP_PAUSE_MS = 4000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface EarnIdeasResponse {
   success?: boolean;
@@ -150,6 +161,7 @@ export function EarnIdeasCards() {
   const [pendingIdeaId, setPendingIdeaId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [loopSteps, setLoopSteps] = useState<Record<string, LoopStep[]>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -239,6 +251,172 @@ export function EarnIdeasCards() {
     return (await res.json()) as ActionResponse;
   };
 
+  const updateStep = (
+    ideaId: string,
+    index: number,
+    patch: Partial<LoopStep>,
+  ) => {
+    setLoopSteps((prev) => {
+      const arr = prev[ideaId];
+      if (!arr) return prev;
+      const next = arr.slice();
+      next[index] = { ...next[index], ...patch };
+      return { ...prev, [ideaId]: next };
+    });
+  };
+
+  const runLoopActivation = async (idea: EarnIdea) => {
+    if (!publicKey) throw new Error("Wallet not connected");
+    if (idea.action?.type !== "stocksEarnLoop") throw new Error("Not a loop strategy");
+    const action = idea.action;
+
+    const collateral = vaultAssets.find((asset) => asset.mint === action.collateralMint);
+    if (!collateral || collateral.balance <= 0) {
+      throw new Error(`No ${action.collateralSymbol} in safe. Move it from your wallet first.`);
+    }
+    const collateralRaw = collateral.rawAmount;
+    const usdPrice = collateral.usdPrice;
+    if (usdPrice == null || usdPrice <= 0) {
+      throw new Error(`No live price for ${action.collateralSymbol}; cannot size the borrow leg`);
+    }
+    const collateralUsd = collateral.balance * usdPrice;
+    // 49% rather than 50% to leave a buffer against LTV rounding.
+    const borrowUsd = collateralUsd * (action.ltvPct - 1) / 100;
+    const borrowRaw = Math.floor(borrowUsd * 10 ** action.kvaultTokenDecimals);
+    if (borrowRaw <= 0) throw new Error("Computed borrow amount is zero");
+    const borrowRawStr = String(borrowRaw);
+    const borrowUi = borrowRaw / 10 ** action.kvaultTokenDecimals;
+
+    const steps: LoopStep[] = [
+      { label: `Lend ${collateral.balance.toFixed(6)} ${action.collateralSymbol} as collateral`, status: "pending" },
+      { label: `Borrow ${borrowUi.toFixed(4)} USDC (≈${action.ltvPct - 1}% LTV)`, status: "pending" },
+      { label: `Stake ${borrowUi.toFixed(4)} USDC into Kamino USDC vault`, status: "pending" },
+    ];
+    setLoopSteps((prev) => ({ ...prev, [idea.id]: steps }));
+
+    const ownerStr = publicKey.toBase58();
+
+    // Step 1: lend collateral
+    updateStep(idea.id, 0, { status: "running" });
+    try {
+      const res = await fetch("/api/jupiter/borrow/deposit-collateral", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: action.collateralVaultId,
+          amountRaw: collateralRaw,
+        }),
+      });
+      const data = (await res.json()) as ActionResponse;
+      if (data.status !== "success") {
+        throw new Error(data.error ?? `Jupiter Lend deposit failed: ${data.status ?? "unknown"}`);
+      }
+      updateStep(idea.id, 0, {
+        status: "done",
+        signature: data.signatures?.[data.signatures.length - 1],
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      updateStep(idea.id, 0, { status: "error", error: msg });
+      throw err;
+    }
+    triggerBalanceRefresh();
+    await sleep(STEP_PAUSE_MS);
+
+    // Step 2: borrow USDC against the new collateral
+    updateStep(idea.id, 1, { status: "running" });
+    try {
+      const res = await fetch("/api/jupiter/borrow/borrow-usdc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          vaultId: action.collateralVaultId,
+          amountRaw: borrowRawStr,
+        }),
+      });
+      const data = (await res.json()) as ActionResponse;
+      if (data.status !== "success") {
+        throw new Error(data.error ?? `Jupiter Lend borrow failed: ${data.status ?? "unknown"}`);
+      }
+      updateStep(idea.id, 1, {
+        status: "done",
+        signature: data.signatures?.[data.signatures.length - 1],
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      updateStep(idea.id, 1, { status: "error", error: msg });
+      throw err;
+    }
+    triggerBalanceRefresh();
+    await sleep(STEP_PAUSE_MS);
+
+    // Step 3: stake the freshly-borrowed USDC into Kamino
+    updateStep(idea.id, 2, { status: "running" });
+    try {
+      const res = await fetch("/api/kamino/kvault/deposit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ownerPubkey: ownerStr,
+          kvault: action.kvault,
+          amountRaw: borrowRawStr,
+          decimals: action.kvaultTokenDecimals,
+        }),
+      });
+      const data = (await res.json()) as ActionResponse;
+      if (data.status === "needs_whitelist") {
+        await updateAllowlist();
+        const retry = await fetch("/api/kamino/kvault/deposit", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ownerPubkey: ownerStr,
+            kvault: action.kvault,
+            amountRaw: borrowRawStr,
+            decimals: action.kvaultTokenDecimals,
+          }),
+        });
+        const retryData = (await retry.json()) as ActionResponse;
+        if (retryData.status !== "success") {
+          throw new Error(retryData.error ?? "Kamino deposit failed after allowlist update");
+        }
+        updateStep(idea.id, 2, {
+          status: "done",
+          signature: retryData.signatures?.[retryData.signatures.length - 1],
+        });
+      } else if (data.status !== "success") {
+        throw new Error(data.error ?? `Kamino deposit failed: ${data.status ?? "unknown"}`);
+      } else {
+        updateStep(idea.id, 2, {
+          status: "done",
+          signature: data.signatures?.[data.signatures.length - 1],
+        });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      updateStep(idea.id, 2, { status: "error", error: msg });
+      throw err;
+    }
+    triggerBalanceRefresh();
+  };
+
+  const handleActivateLoop = async (idea: EarnIdea) => {
+    if (pendingIdeaId) return;
+    setPendingIdeaId(idea.id);
+    setActionMessage(null);
+    setActionError(null);
+    try {
+      await runLoopActivation(idea);
+      setActionMessage(`${idea.action && idea.action.type === "stocksEarnLoop" ? idea.action.collateralSymbol : ""} loop activated.`);
+    } catch (err: unknown) {
+      setActionError(formatWalletError(err));
+    } finally {
+      setPendingIdeaId(null);
+    }
+  };
+
   const handleKaminoDeposit = async (idea: EarnIdea) => {
     setPendingIdeaId(idea.id);
     setActionMessage(null);
@@ -266,10 +444,14 @@ export function EarnIdeasCards() {
   function renderIdeaCard(idea: EarnIdea, match: OwnedMatch | null) {
     const isReady = match !== null;
     const inVault = match?.location === "vault";
-    const canActivate =
-      isReady && inVault && idea.action?.type === "kaminoKvaultDeposit";
+    const isLoop = idea.action?.type === "stocksEarnLoop";
+    const isKvault = idea.action?.type === "kaminoKvaultDeposit";
+    const canActivateKvault = isReady && inVault && isKvault;
+    const canActivateLoop = isReady && inVault && isLoop;
     const showMoveToVault =
-      isReady && !inVault && idea.action?.type === "kaminoKvaultDeposit";
+      isReady && !inVault && (isKvault || isLoop);
+    const steps = loopSteps[idea.id];
+    const isActivatingThis = pendingIdeaId === idea.id;
 
     // Pick hero asset: the one the user holds (Ready), else the first
     // required mint as canonical representative for the idea.
@@ -324,20 +506,80 @@ export function EarnIdeasCards() {
               </div>
             ) : null}
 
-            {canActivate && (
+            {canActivateKvault && (
               <button
                 type="button"
                 disabled={pendingIdeaId !== null}
                 onClick={() => void handleKaminoDeposit(idea)}
                 className="mt-2 inline-flex h-7 items-center rounded-md bg-primary text-primary-foreground px-3 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {pendingIdeaId === idea.id ? "Activating..." : "Activate"}
+                {isActivatingThis ? "Activating..." : "Activate"}
+              </button>
+            )}
+            {canActivateLoop && !steps && (
+              <button
+                type="button"
+                disabled={pendingIdeaId !== null}
+                onClick={() => void handleActivateLoop(idea)}
+                className="mt-2 inline-flex h-7 items-center rounded-md bg-primary text-primary-foreground px-3 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Activate loop
               </button>
             )}
             {showMoveToVault && (
               <p className="mt-2 text-[11px] text-muted-foreground">
-                Move {match.symbol} to the safe first to activate in one click.
+                You need {match?.symbol ?? idea.requiredMints[0]} in your safe — move it from your wallet first.
               </p>
+            )}
+            {!isReady && (idea.action?.type === "stocksEarnLoop") && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                You need {idea.action.collateralSymbol} in your safe to activate this loop.
+              </p>
+            )}
+
+            {steps && (
+              <div className="mt-3 space-y-1.5">
+                {steps.map((step, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px]">
+                    <span className="shrink-0 mt-0.5">
+                      {step.status === "done" && <Check className="w-3.5 h-3.5 text-success" />}
+                      {step.status === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+                      {step.status === "error" && <XIcon className="w-3.5 h-3.5 text-destructive" />}
+                      {step.status === "pending" && (
+                        <span className="block w-3.5 h-3.5 rounded-full border border-muted-foreground/40" />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className={
+                          step.status === "done"
+                            ? "text-success"
+                            : step.status === "running"
+                              ? "text-foreground"
+                              : step.status === "error"
+                                ? "text-destructive"
+                                : "text-muted-foreground"
+                        }
+                      >
+                        {step.label}
+                      </div>
+                      {step.signature && (
+                        <a
+                          href={`https://solscan.io/tx/${step.signature}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-muted-foreground hover:text-primary font-mono"
+                        >
+                          {step.signature.slice(0, 8)}…{step.signature.slice(-8)}
+                        </a>
+                      )}
+                      {step.error && (
+                        <div className="text-[10px] text-destructive break-all">{step.error}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>

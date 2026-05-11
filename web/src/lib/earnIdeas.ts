@@ -11,13 +11,27 @@ export interface EarnIdea {
   borrowLabel?: string;
   requiredMints: string[];
   note: string;
-  action?: {
-    type: "kaminoKvaultDeposit";
-    kvault: string;
-    tokenMint: string;
-    tokenDecimals: number;
-  };
+  action?:
+    | {
+        type: "kaminoKvaultDeposit";
+        kvault: string;
+        tokenMint: string;
+        tokenDecimals: number;
+      }
+    | {
+        type: "stocksEarnLoop";
+        collateralVaultId: number;
+        collateralMint: string;
+        collateralSymbol: string;
+        collateralDecimals: number;
+        ltvPct: number;
+        kvault: string;
+        kvaultTokenMint: string;
+        kvaultTokenDecimals: number;
+      };
 }
+
+const KAMINO_USDC_KVAULT = "67dqmR76uAbjX6e81A1ganKv3ou31WUMEdeWJkwVfeXy";
 
 export const EARN_IDEAS: EarnIdea[] = [
   {
@@ -31,16 +45,42 @@ export const EARN_IDEAS: EarnIdea[] = [
     note: "Highest USDC-only destination in the current snapshot.",
     action: {
       type: "kaminoKvaultDeposit",
-      kvault: "67dqmR76uAbjX6e81A1ganKv3ou31WUMEdeWJkwVfeXy",
+      kvault: KAMINO_USDC_KVAULT,
       tokenMint: USDC_MINT_STR,
       tokenDecimals: 6,
     },
   },
+  ...(
+    [
+      ["SPYx",  "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", 78, "Jupiter", "SPYx / USDC",   "0.41% USDC borrow", "+7.98% gross spread"],
+      ["QQQx",  "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ", 79, "Jupiter", "QQQx / USDC",   "2.41% USDC borrow", "+5.98% gross spread"],
+      ["NVDAx", "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", 80, "Jupiter", "NVDAx / USDC",  "2.41% USDC borrow", "+5.98% gross spread"],
+      ["TSLAx", "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", 77, "Jupiter", "TSLAx / USDC",  "2.41% USDC borrow", "+5.98% gross spread"],
+    ] as const
+  ).map(([symbol, mint, vaultId, protocol, market, borrowLabel, spreadLabel]) => ({
+    id: `xstocks-usdc-loop-${symbol.toLowerCase()}`,
+    title: `${symbol} collateral loop`,
+    protocol,
+    focus: "xStocks" as const,
+    description: `Lend ${symbol}, borrow 50% USDC, route to Kamino USDC earn. Auto-deleverage if health < 1.5.`,
+    apyLabel: "8.39% earn",
+    borrowLabel,
+    spreadLabel,
+    requiredMints: [mint],
+    note: "Loop runs as 3 server-signed transactions with health watch.",
+    action: {
+      type: "stocksEarnLoop" as const,
+      collateralVaultId: vaultId,
+      collateralMint: mint,
+      collateralSymbol: symbol,
+      collateralDecimals: 8,
+      ltvPct: 50,
+      kvault: KAMINO_USDC_KVAULT,
+      kvaultTokenMint: USDC_MINT_STR,
+      kvaultTokenDecimals: 6,
+    },
+  })),
   ...[
-    ["SPYx", "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W", "Jupiter", "SPYx / USDC", "0.41% USDC borrow", "+7.98% gross spread"],
-    ["QQQx", "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ", "Jupiter", "QQQx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
-    ["NVDAx", "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", "Jupiter", "NVDAx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
-    ["TSLAx", "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", "Jupiter", "TSLAx / USDC", "2.41% USDC borrow", "+5.98% gross spread"],
     ["AAPLx", "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
     ["GOOGLx", "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
     ["MSTRx", "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ", "Kamino", "xStocks Market", "4.76% USDC borrow", "+3.64% gross spread"],
@@ -54,7 +94,7 @@ export const EARN_IDEAS: EarnIdea[] = [
     borrowLabel,
     spreadLabel,
     requiredMints: [mint],
-    note: "Direct Token-2022 deposit/withdraw still needs token-interface support.",
+    note: "Kamino Lend integration coming next.",
   })),
   {
     id: "btc-usdc-loop",

@@ -811,13 +811,13 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     const scalingPower = Math.max(0, 9 - BORROW_DECIMALS);
     const scaleDivisor = new BN(10).pow(new BN(scalingPower));
     let userDebtRaw = netDebtScaled.div(scaleDivisor);
-    // Floor-divide can land 1 unit above the chain's effective debt
-    // (because of the +1 the SDK's getFinalPosition adds to payback math)
-    // — VAULT_USER_DEBT_TOO_LOW. Trim two raw user-units off the top to
-    // guarantee we stay under the chain figure. The resulting tiny dust
-    // (<= a few thousandths of a cent) stays below dustDebtRaw and the
-    // collateral withdraw still treats the position as cleared.
-    const safety = new BN(2);
+    // Several off-by-one(s) stack up between the SDK's payback +1, dust
+    // accruing between fetch and simulation, and rounding from the
+    // 1000× scale. Pay 100 raw user-units (≈ $0.0001 USDC) less than
+    // computed netDebt to absorb all of them. The residual dust stays
+    // well below dustDebtRaw, and the chain treats the position as
+    // fully cleared for the subsequent collateral withdraw.
+    const safety = new BN(100);
     if (userDebtRaw.lte(safety)) {
       throw new Error("Position has no outstanding debt to repay");
     }

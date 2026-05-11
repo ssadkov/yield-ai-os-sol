@@ -598,7 +598,7 @@ export function VaultCard() {
 
         <VaultAllocationChart assets={chartAssets} totalUsd={chartTotalUsd} />
 
-        {vaultUsdc > 0 && (
+        {false && vaultUsdc > 0 && (
         <details className="rounded-md border border-border bg-accent/25 p-3 group">
           <summary className="cursor-pointer list-none flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">

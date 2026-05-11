@@ -52,7 +52,7 @@ export async function runRebalanceJob(args: {
     optionalEnv("VAULT_PROGRAM_ID") ?? optionalEnv("NEXT_PUBLIC_PROGRAM_ID") ?? "";
   if (!vaultProgramIdStr) throw new Error("Missing VAULT_PROGRAM_ID");
 
-  const slippageBps = Number(optionalEnv("SLIPPAGE_BPS") ?? "100");
+  const slippageBps = Number(optionalEnv("SLIPPAGE_BPS") ?? "300");
   if (!Number.isFinite(slippageBps) || slippageBps <= 0) {
     throw new Error("Invalid SLIPPAGE_BPS");
   }

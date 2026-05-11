@@ -6,7 +6,12 @@ import { signAndSendTx } from "../swap/send";
 import { deriveVaultPda } from "../swap/anchorIx";
 
 const MIN_SWAP_USD = 0.1;
-const DEFAULT_SLIPPAGE_BPS = 100;
+// 1% slippage was too tight for the lower-liquidity Token-2022 routes
+// (xStocks, sometimes cbBTC) and Jupiter's RouteV2 panicked at the
+// final amount-out check. 3% is a saner default for the kinds of
+// assets this vault routes through; the user-facing UI shows the
+// final price impact so they can still bail if it looks bad.
+const DEFAULT_SLIPPAGE_BPS = 300;
 
 export interface SwapAction {
   from: TokenDef;

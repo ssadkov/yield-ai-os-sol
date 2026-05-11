@@ -400,6 +400,7 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
   vaultId: number;
   amountRaw: string;
   positionId?: number;
+  max?: boolean;
 }): Promise<RebalanceResult> {
   const rpcUrl = optionalEnv("RPC_URL") ?? optionalEnv("NEXT_PUBLIC_RPC_URL") ?? "";
   if (!rpcUrl) throw new Error("Missing RPC_URL");
@@ -448,6 +449,7 @@ export async function runJupiterBorrowUsdcRepayJob(args: {
     vaultId: args.vaultId,
     positionId,
     amountRaw: args.amountRaw,
+    max: args.max,
   });
 
   const signatures: string[] = [];

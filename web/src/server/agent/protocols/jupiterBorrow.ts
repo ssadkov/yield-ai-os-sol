@@ -737,21 +737,31 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
   vaultId: number;
   positionId: number;
   amountRaw: string;
+  /** Repay the full outstanding debt. Avoids VAULT_USER_DEBT_TOO_LOW when
+   *  on-chain debt has drifted below the UI-displayed amount due to interest
+   *  accrual or rounding. */
+  max?: boolean;
 }): Promise<BuiltJupiterBorrowDeposit> {
   const amount = new BN(args.amountRaw);
-  if (amount.lte(new BN(0))) throw new Error("amountRaw must be greater than zero");
+  if (!args.max && amount.lte(new BN(0))) {
+    throw new Error("amountRaw must be greater than zero");
+  }
 
   const market = getCollateralMarket(args.vaultId);
   const collateralDecimals = market?.decimals ?? 9;
 
-  const [{ getOperateIx }, runtimeWeb3] = await Promise.all([loadJupiterBorrow(), loadRuntimeWeb3()]);
+  const [{ getOperateIx, MAX_REPAY_AMOUNT }, runtimeWeb3] = await Promise.all([
+    loadJupiterBorrow(),
+    loadRuntimeWeb3(),
+  ]);
   const sdkConnection = new runtimeWeb3.Connection(args.connection.rpcEndpoint, "confirmed");
   const sdkSigner = new runtimeWeb3.PublicKey(args.vault.toBase58());
+  const debtArg = args.max ? MAX_REPAY_AMOUNT : amount.neg();
   const built = await getOperateIx({
     vaultId: args.vaultId,
     positionId: args.positionId,
     colAmount: new BN(0),
-    debtAmount: amount.neg(),
+    debtAmount: debtArg,
     signer: sdkSigner as unknown as PublicKey,
     positionOwner: sdkSigner as unknown as PublicKey,
     connection: sdkConnection as unknown as Connection,
@@ -823,8 +833,8 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
       topUpLamports,
       currentVaultLamports: currentLamports,
       collateralDecimals,
-      requestedAmountRaw: amount.toString(),
-      operateAmount: amount.neg().toString(),
+      requestedAmountRaw: args.max ? "MAX_REPAY_AMOUNT" : amount.toString(),
+      operateAmount: debtArg.toString(),
       sourceBalanceRaw: null,
       programs: [JUPITER_LEND_PROGRAM_ID.toBase58()],
     },

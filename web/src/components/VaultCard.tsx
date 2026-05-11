@@ -229,6 +229,7 @@ export function VaultCard() {
   const [lendAmount, setLendAmount] = useState("");
   const [borrowAmounts, setBorrowAmounts] = useState<Record<string, string>>({});
   const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
+  const [repayMaxFlags, setRepayMaxFlags] = useState<Record<string, boolean>>({});
 
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const vaultAddress = vaultPda?.toBase58() ?? "";
@@ -469,13 +470,16 @@ export function VaultCard() {
   const handleJupiterUsdcRepay = async (position: (typeof jupiterBorrowPositions)[number]) => {
     const key = `${position.vaultId}:${position.positionId}`;
     const raw = usdcToRawAmount(repayAmounts[key] ?? "");
-    if (BigInt(raw) === BigInt(0)) return;
+    const max = repayMaxFlags[key] === true;
+    if (!max && BigInt(raw) === BigInt(0)) return;
     await repayJupiterUsdc({
       vaultId: position.vaultId,
       positionId: position.positionId,
       amountRaw: raw,
+      max,
     });
     setRepayAmounts((prev) => ({ ...prev, [key]: "" }));
+    setRepayMaxFlags((prev) => ({ ...prev, [key]: false }));
     await handleRefreshAll();
     window.setTimeout(() => void handleRefreshAll(), 3500);
   };
@@ -1000,12 +1004,13 @@ export function VaultCard() {
                           inputMode="decimal"
                           value={repayAmounts[`${position.vaultId}:${position.positionId}`] ?? ""}
                           onChange={(e) => {
+                            const key = `${position.vaultId}:${position.positionId}`;
                             const next = e.target.value.replace(",", ".");
                             if (/^\d*\.?\d*$/.test(next)) {
-                              setRepayAmounts((prev) => ({
-                                ...prev,
-                                [`${position.vaultId}:${position.positionId}`]: next,
-                              }));
+                              setRepayAmounts((prev) => ({ ...prev, [key]: next }));
+                              // Manual edit clears any prior MAX intent so a
+                              // typed-in amount is treated as an exact value.
+                              setRepayMaxFlags((prev) => ({ ...prev, [key]: false }));
                             }
                           }}
                           placeholder="Repay USDC"
@@ -1014,11 +1019,17 @@ export function VaultCard() {
                         <button
                           type="button"
                           onClick={() => {
+                            const key = `${position.vaultId}:${position.positionId}`;
                             const repayMax = Math.min(vaultUsdc, position.debtAmount);
                             setRepayAmounts((prev) => ({
                               ...prev,
-                              [`${position.vaultId}:${position.positionId}`]: formatAmount(repayMax),
+                              [key]: formatAmount(repayMax),
                             }));
+                            // Use the SDK's MAX_REPAY_AMOUNT sentinel server-side
+                            // so we don't hit VAULT_USER_DEBT_TOO_LOW when the
+                            // on-chain debt has accrued a few raw units since
+                            // the UI last refreshed.
+                            setRepayMaxFlags((prev) => ({ ...prev, [key]: true }));
                           }}
                           disabled={vaultUsdc <= 0 || position.debtAmount <= 0}
                           className="absolute right-12 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1035,7 +1046,8 @@ export function VaultCard() {
                         disabled={
                           rebalancing ||
                           BigInt(position.debtRaw) === BigInt(0) ||
-                          BigInt(usdcToRawAmount(repayAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0)
+                          (!repayMaxFlags[`${position.vaultId}:${position.positionId}`] &&
+                            BigInt(usdcToRawAmount(repayAmounts[`${position.vaultId}:${position.positionId}`] ?? "")) === BigInt(0))
                         }
                         className="cursor-pointer rounded-md border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >

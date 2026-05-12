@@ -69,15 +69,35 @@ If Jupiter wants stronger signal on CLI/MCP: the gap for us is **“show a refer
 
 ## 4. Where the APIs / docs “bit us” (high-signal)
 
+### 4.0 Concrete documentation gaps (URLs)
+
+These pages are the right place to capture what integrators actually hit in production — today they **do not yet carry that depth**:
+
+- **Borrow API (marked “Soon” / WIP)** — [Borrow API](https://developers.jup.ag/docs/lend/borrow/api) currently states that the **Borrow API is a work in progress** and full documentation is **coming soon**. That matches our experience: we could not treat HTTP Borrow docs as the source of truth and fell back to **SDK + chain experimentation**.
+
+- **Repay page should spell out submission complexity** — [Repay](https://developers.jup.ag/docs/lend/borrow/repay) should document **more than field names**: it should explain **how to construct a repay that lands on-chain safely** under interest accrual, internal precision, dust floors, and multi-instruction flows. Today integrators still reverse-engineer from program errors.
+
+- **Doc discovery** — the documentation index at [llms.txt](https://dev.jup.ag/docs/llms.txt) helped us find entry points, but **Borrow/repay remains the weakest narrative** relative to Swap.
+
+**Ask for Jupiter:** expand [Repay](https://developers.jup.ag/docs/lend/borrow/repay) into an **integrator cookbook** (see bullets below) and link it prominently from [Borrow API](https://developers.jup.ag/docs/lend/borrow/api) once the API stabilizes.
+
 ### 4.1 Jupiter Lend **Borrow** — repay is the hardest part
 
-**Problem class:** max repay / dust / internal scaling / `Operate` validation (`min_user_debt`, `dustDebtRaw`, etc.) are **real**, but the **docs do not walk an integrator** through a robust “close position” recipe the way Swap docs do.
+**Problem class:** max repay / dust / internal scaling / `Operate` validation (`min_user_debt`, `dustDebtRaw`, etc.) are **real**, but the **docs do not walk an integrator** through a robust “close position” recipe the way Swap docs do — and the official **Repay** page is not yet the “single source of truth” for submission edge cases ([Repay](https://developers.jup.ag/docs/lend/borrow/repay)).
 
 **What we needed (and largely inferred):**
 
 - Exact relationship between **SDK user units**, **9dp internal accounting**, and **what the chain validates** on repay.
 - How **`MAX_REPAY` / sentinels** interact with on-chain checks (some sentinels are **not** valid `Operate` amounts — we learned by failing fast).
 - How **multi-ix flows** (e.g. setup like `InitTickIdLiquidation`) must be split: **some setup cannot be funded/signed from a PDA that carries data** — we split “setup” vs final `Operate` to avoid `SystemProgram` transfer failures.
+
+**What the [Repay](https://developers.jup.ag/docs/lend/borrow/repay) page should add (actionable outline):**
+
+1. **Units diagram** — `debtRaw` (on-chain, scaled) ↔ user-facing repay amount ↔ SDK input after `getOperateContext` scaling; where `dustDebtRaw` enters “effective debt”.
+2. **Three outcomes** — full close (what “zero” means on-chain vs UI dust), partial repay, and **dust-band** where the protocol rejects repay (`min_user_debt` / `VAULT_USER_DEBT_TOO_LOW`).
+3. **Error matrix** — map common Anchor errors to “what to change in the next simulation” (too high → excess payback; too low → debt-too-low; math → collateral/LTV edge).
+4. **Multi-transaction pattern** — when the SDK returns **>1 instruction**, which legs must be **fee-payer signed** vs **vault CPI**, and why `Transfer: from must not carry data` appears if you wrap the wrong leg.
+5. **Position identity** — how `positionId` / NFT receipts relate to `getCurrentPosition`, and how to enumerate positions for a vault-like signer.
 
 **DX impact:** this is where we burned the most time. A single “**Repay: three supported modes** (full, partial, dust)**” cookbook with **expected errors** would have saved days.
 

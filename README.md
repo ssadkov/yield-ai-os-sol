@@ -47,10 +47,10 @@
 ## What ships today (summary)
 
 - **Anchor vault** — [PDA custody](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl), owner withdrawals, allowlisted CPI execution path for the agent.
-- **Next.js app** — wallet, vault lifecycle, portfolio, rebalance / convert flows ([live app](https://yield-ai-os-sol.vercel.app/)).
-- **Jupiter** — server-side quote/build for swaps aligned with the vault CPI model.
-- **Kamino** — integration for earning USDC yield (kVault deposit/withdraw + positions).
-- **Birdeye** — token charts in the UI.
+- **Next.js app (`web/`)** — wallet + deposit, vault lifecycle, portfolio charts, **strategy rebalance / convert-all**, **Kamino kVault** earn/withdraw, **Jupiter Lend** collateral + borrow/repay USDC flows, and **Earn Ideas** cards (server-backed APY hints) — [live app](https://yield-ai-os-sol.vercel.app/).
+- **Jupiter** — Price API, Swap V2 build for vault CPI swaps, Lend/Borrow SDK usage from server routes.
+- **Kamino** — kVault deposit/withdraw + position reads for the vault UI.
+- **Birdeye** — historical candles for token charts.
 
 ---
 
@@ -61,10 +61,24 @@
 | On-chain | Rust · Anchor |
 | App & APIs | Next.js · React · TypeScript |
 | Wallet | Solana Wallet Adapter |
-| AI / automation | Vercel AI SDK · OpenRouter · server modules in `web/` |
-| Liquidity / routes | Jupiter API |
+| AI / automation | Vercel AI SDK · OpenRouter · **optional** chat UI (`SHOW_AI_CHAT` in `web/src/config/features.ts`) · Earn Ideas + rebalance orchestration in `web/src/server/agent/` |
+| Liquidity / routes | Jupiter API (swap build, prices) · Jupiter Lend (`@jup-ag/lend`, `@jup-ag/lend-read`) |
 | Yield protocols | Kamino (kVaults) |
 | Market data | Birdeye (charts) |
+
+---
+
+## Live application (`web/`)
+
+The dashboard is a **three-column** layout driven by [`web/src/app/page.tsx`](web/src/app/page.tsx):
+
+| Column | What runs |
+|--------|-------------|
+| **Wallet** | `DepositCard`, `WalletAssetsCard` — connect wallet, deposit to vault, see wallet balances. |
+| **Vault** | `CreateVaultCard`, `VaultCard` — initialize vault, holdings, allocation chart, **rebalance / convert-all**, **Kamino kVault** loop, **Jupiter Lend** borrow/repay/collateral actions, Birdeye chart. |
+| **Ideas / assistant** | `EarnIdeasCards` — always-on **Earn Ideas** (calls `GET /api/earn-ideas`). **`AIChat`** is **gated** by `SHOW_AI_CHAT` in [`web/src/config/features.ts`](web/src/config/features.ts) (currently `false` for the public demo). |
+
+Server logic for swaps, rebalance, Kamino, and Jupiter Borrow lives under [`web/src/server/agent/`](web/src/server/agent/) and is invoked from `web/src/app/api/**` routes — there is **no separate production “agent service”** for the live app.
 
 ---
 
@@ -78,6 +92,7 @@ anchor build
 
 cd web
 npm install
+cp .env.local.example .env.local   # then fill RPC, program id, optional API keys (see below)
 npm run dev
 ```
 
@@ -104,6 +119,17 @@ MIT — add a `LICENSE` file at the repository root when you publish the repo pu
 
 ---
 
+## Resources
+
+- [Live app](https://yield-ai-os-sol.vercel.app/)
+- [Demo video](https://youtu.be/_a5KCpidm6Y)
+- [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing)
+- [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai)
+- [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl)
+- [X / @yieldai_app](https://x.com/yieldai_app)
+
+---
+
 ## Technical documentation
 
 The sections below are the **developer-focused** reference (program instructions, architecture diagram, API list, env vars, toolchain).
@@ -125,75 +151,54 @@ The vault program is the **security boundary**. Funds live in SPL token accounts
 - **`execute_swap_cpi(data)`**: Performs a CPI into a **whitelisted** program ID using `invoke_signed`. Caller must be either `Vault.owner` or `Vault.agent`.
 
 ### 💻 Web app (Next.js)
-A dashboard to manage the vault and visualize portfolio state.
+A dashboard to manage the vault and visualize portfolio state (see **Live application (`web/`)** above for the layout).
 
-- **Wallet connection (Solana Wallet Adapter)**: connect + sign transactions (initialize/deposit/withdraw/whitelist updates).
-- **Portfolio analytics**: wallet vs vault holdings, allocation charts.
-- **Yield display**: server-fetched APR/APY for selected yield tokens (where available).
+- **Wallet (Solana Wallet Adapter)**: connect + sign transactions (initialize, deposit, withdraw, allowlist updates, swaps, Kamino, Jupiter Borrow legs).
+- **Portfolio**: wallet vs vault holdings, allocation chart, token chart (Birdeye).
+- **Earn Ideas**: curated loops (e.g. collateral → borrow USDC → Kamino) with **explicit user confirmation** per step; uses `/api/earn-ideas` and the same rebalance / protocol builders as the vault card.
+- **Yield reads**: `/api/yields` and earn-ideas path for APR/APY hints where available.
 
-### 🤖 AI chat (Vercel AI SDK + OpenRouter)
-An AI assistant embedded into the UI that is grounded on **live on-chain snapshots** and can propose or trigger actions **only with explicit confirmation**.
-
-- **Context-aware chat**: uses wallet + vault balances, current strategy, and CPI allowlist.
-- **Chat-triggered actions**:
-  - Rebalance to strategy targets (`rebalance`)
-  - Emergency exit: convert everything to USDC (`convert_all`)
-  - Individual swap proposals (user-confirmed)
-- **Smart fallback**: if a Jupiter route requires additional programs, the system returns `needs_whitelist` + missing program IDs, and the owner can approve them with a one-time `set_allowed_programs` transaction.
+### Earn Ideas vs AI chat
+- **Earn Ideas (`EarnIdeasCards`)** — **shipped in the live UI**; orchestrates multi-step flows with clear labels and signatures.
+- **AI chat (`AIChat`, Vercel AI SDK + OpenRouter)** — **optional**; enable by setting `SHOW_AI_CHAT` to `true` in [`web/src/config/features.ts`](web/src/config/features.ts). When on, it is grounded on live snapshots and only executes after explicit confirmation (`rebalance`, `convert_all`, individual swaps). If a Jupiter route needs extra programs, responses include `needs_whitelist` + missing program IDs for `set_allowed_programs`.
 
 ---
 
 ## 🧩 Architecture (for GitHub)
-All production execution logic lives inside `web/` as Next.js API routes + server-side modules.
-There is **no separate long-running agent service required** for the MVP (a standalone `agent/` package exists for dev/experiments).
+Production behavior matches the **Next.js app in `web/`**: React UI → `web/src/app/api/*` routes → `web/src/server/agent/*` (rebalance engine, vault swap build, Kamino, Jupiter Lend borrow) → external APIs and Solana RPC → **user-signed** transactions against the vault program (`execute_swap_cpi`, deposits, withdraws, etc.).
 
-```mermaid
-flowchart LR
-  %% --- Web / Off-chain ---
-  subgraph WEB["Web (Next.js 16)"]
-    UI["UI (React + Wallet Adapter)"]
-    CHAT["/api/chat (Vercel AI SDK + OpenRouter)"]
-    REB["/api/rebalance (server route)"]
-    ENG["Rebalance Engine (server module)"]
-    UI --> CHAT
-    UI --> REB
-    CHAT --> ENG
-    REB --> ENG
-  end
+A standalone [`agent/`](agent/) Node package remains for **local experiments**; it is not required to run the live dashboard.
 
-  subgraph EXT["External Services"]
-    JUP["Jupiter API (quote/build)"]
-    RPC["Solana RPC"]
-  end
-
-  %% --- On-chain ---
-  subgraph CHAIN["Solana On-chain"]
-    VAULT["Yield Vault Program (Anchor)"]
-    PDA["Vault PDA (authority)"]
-    VUSDC["Vault USDC ATA"]
-    VTOK["Vault token ATAs (portfolio)"]
-
-    VAULT --- PDA
-    PDA --> VUSDC
-    PDA --> VTOK
-  end
-
-  %% Data / tx edges
-  ENG --> JUP
-  ENG --> RPC
-  ENG --> VAULT
-
-  %% CPI
-  subgraph CPI["CPI Targets (whitelisted program IDs only)"]
-    JUPROUTER["Jupiter Router Program"]
-    DEX["DEX Programs (route legs)"]
-    TOKEN["SPL Token / Token-2022"]
-  end
-
-  VAULT -->|CPI invoke_signed| TOKEN
-  VAULT -->|CPI whitelist| JUPROUTER
-  VAULT -->|CPI whitelist| DEX
 ```
+┌─────────────────────────────────────────────────────────────────┐
+│  Browser — web/src/app (React, Wallet Adapter)                  │
+│  page.tsx → components → hooks                                  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ fetch / sign
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Next.js API — web/src/app/api/*                                │
+│  rebalance, earn-ideas, jupiter/*, kamino/*, vault-holdings, … │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Server modules — web/src/server/agent/*                        │
+│  rebalance engine · buildVaultSwapTx · kaminoKvault · jupiterBorrow │
+└───────────────┬─────────────────────────────┬────────────────────┘
+                │                             │
+                ▼                             ▼
+        Jupiter / Kamino / Birdeye              Solana RPC
+                │                             │
+                └──────────────┬──────────────┘
+                               ▼
+                ┌──────────────────────────────┐
+                │  Vault program (Anchor) + PDAs│
+                │  allowlisted CPI only       │
+                └──────────────────────────────┘
+```
+
+Swaps and protocol legs execute as **CPI from the vault** into **allowlisted program IDs** (Jupiter router, route legs, SPL Token, plus Kamino / Jupiter Lend programs once added to the owner’s list).
 
 ---
 
@@ -215,15 +220,29 @@ flowchart LR
 ---
 
 ## 🌐 Web API routes (current)
-Inside `web/src/app/api/`:
-- `POST /api/chat`: AI chat (streaming) + action proposals/execution hooks
-- `POST /api/rebalance`: rebalance / convert-all execution endpoint
-- `POST /api/cron/rebalance`: same execution endpoint protected by `x-cron-secret`
-- `GET /api/vault-history?owner=<pubkey>`: vault deposit/withdraw history summary
-- `GET /api/yields`: yield/APY sources (currently includes Onre/ONe; extendable)
-- `GET|POST /api/jupiter/prices`: token price fetch via RPC `getAssetBatch` with caching
-- `GET|POST /api/jupiter/tokens`: token metadata fetch via RPC `getAssetBatch` with caching
-- `GET /api/birdeye/history?address=<mint>&type=4H&time_from=...&time_to=...`: historical price candles (rate-limited)
+Routes live under [`web/src/app/api/`](web/src/app/api/):
+
+| Method | Path | Role |
+|--------|------|------|
+| `POST` | `/api/chat` | Streaming AI chat + tool hooks (when chat UI is enabled). |
+| `POST` | `/api/rebalance` | Build/sign flow for rebalance and convert-all. |
+| `POST` | `/api/cron/rebalance` | Same as rebalance; requires `x-cron-secret`. |
+| `GET` | `/api/earn-ideas` | Server-composed earn ideas (APY / pool hints) for the UI cards. |
+| `GET` | `/api/vault-history?owner=<pubkey>` | Deposit / withdraw history summary. |
+| `GET` | `/api/vault-holdings` | Aggregated vault token view for the dashboard. |
+| `GET` | `/api/yields` | Yield / APY payload for selected tokens. |
+| `GET` / `POST` | `/api/jupiter/prices` | Token prices (cached RPC `getAssetBatch`). |
+| `GET` / `POST` | `/api/jupiter/tokens` | Token metadata (cached). |
+| `GET` | `/api/protocols/jupiter/borrowLend` | Jupiter Lend / borrow-lend market payload for UI. |
+| `GET` | `/api/jupiter/borrow/positions` | Borrow positions for the connected vault context. |
+| `POST` | `/api/jupiter/borrow/borrow-usdc` | Build borrow leg (unsigned tx / ix for wallet). |
+| `POST` | `/api/jupiter/borrow/repay-usdc` | Build repay leg. |
+| `POST` | `/api/jupiter/borrow/deposit-collateral` | Collateral deposit leg. |
+| `POST` | `/api/jupiter/borrow/withdraw-collateral` | Collateral withdraw leg. |
+| `GET` | `/api/kamino/kvault/positions` | Kamino kVault positions. |
+| `POST` | `/api/kamino/kvault/deposit` | kVault deposit tx build. |
+| `POST` | `/api/kamino/kvault/withdraw` | kVault withdraw tx build. |
+| `GET` | `/api/birdeye/history?address=<mint>&type=4H&time_from=...&time_to=...` | Historical candles (rate-limited). |
 
 ---
 
@@ -293,7 +312,7 @@ The script loads the IDL from `target/idl/yield_vault.json`. Run `anchor build` 
 ---
 
 ## ⚙️ Environment variables (selected)
-The repo contains `.env.example` files inside packages.
+Use [`web/.env.local.example`](web/.env.local.example) as the template for the dashboard (`cp` step in Quick start). [`client/.env.example`](client/.env.example) and [`agent/.env.example`](agent/.env.example) cover the TypeScript smoke client and the standalone agent package.
 
 **Web (`web/`)**
 - `NEXT_PUBLIC_RPC_URL`: Solana RPC endpoint (often a Helius URL for token metadata/prices)

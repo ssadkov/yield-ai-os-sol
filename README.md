@@ -7,7 +7,7 @@
 
 > **Yield AI is an agent-safe execution layer for Solana.** A PDA vault with a **program allowlist** lets AI agents put user capital to work **without ever holding the keys**. **Live on mainnet today**, with a working consumer flow that **earns USDC yield on stock positions without selling them**.
 
-[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](https://youtu.be/_a5KCpidm6Y) · [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing) · [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai) · [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl)
+[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](https://youtu.be/_a5KCpidm6Y) · [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing) · [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai) · [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl) · [X](https://x.com/yieldai_app)
 
 ---
 
@@ -17,24 +17,9 @@
 
 | Name | Role | Notes |
 |------|------|-------|
-| Sergey Sadkov | Product | ~30k DeFi YouTube; Superteam Kazakhstan |
-| Andrey Aniskov | Core developer | |
-| Alexander Rybakov | Marketing & growth | |
-
-**Mobile (Solana Seeker)** — companion app prototype is ready for Seeker-class demos alongside the web vault.
-
----
-
-## Business model
-
-- **Performance fee** — 10% on **yield generated** for users (not on principal).
-- **Open SDK** — third-party agents and strategies plug into the same **Safe + program-allowlist** primitive and monetize independently; the protocol can take a **small revenue share** from external agents that route execution through the vault.
-
----
-
-## Agent layer (one primitive, many surfaces)
-
-The **Stocks Earn Loop** in the live demo (lend collateral → borrow USDC → earn in Kamino) is **one application** of the agent execution layer. The same vault + allowlist pattern extends to **lending, staking, RWAs, and custom strategies** without changing the custody model.
+| Sergei Sadkov | CEO and core developer | [YouTube](https://www.youtube.com/@crypto_rentier) · [X](https://x.com/ssadkov) · [Telegram](https://t.me/ssadkov) · Superteam Kazakhstan |
+| Andrey Aniskov | Core developer | Integrations: Jupiter + Kamino |
+| Alexander Rybakov | Marketing & growth | [X](https://x.com/rybakov_alv) |
 
 ---
 
@@ -64,6 +49,8 @@ The **Stocks Earn Loop** in the live demo (lend collateral → borrow USDC → e
 - **Anchor vault** — [PDA custody](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl), owner withdrawals, allowlisted CPI execution path for the agent.
 - **Next.js app** — wallet, vault lifecycle, portfolio, rebalance / convert flows ([live app](https://yield-ai-os-sol.vercel.app/)).
 - **Jupiter** — server-side quote/build for swaps aligned with the vault CPI model.
+- **Kamino** — integration for earning USDC yield (kVault deposit/withdraw + positions).
+- **Birdeye** — token charts in the UI.
 
 ---
 
@@ -103,7 +90,6 @@ Env and RPC: see **Environment variables** in the technical section below. Full 
 - [ ] AI chat with confirm-gated tools + allowlist update flow (post-hackathon; hidden in UI for demo)
 - [ ] INSERT_POST_HACKATHON_ITEM_1
 - [ ] INSERT_POST_HACKATHON_ITEM_2
-- [ ] Deeper Solana Seeker ↔ vault integration (mobile prototype exists)
 
 ---
 
@@ -141,8 +127,6 @@ A dashboard to manage the vault and visualize portfolio state.
 - **Yield display**: server-fetched APR/APY for selected yield tokens (where available).
 
 ### 🤖 AI chat (Vercel AI SDK + OpenRouter)
-*Temporarily hidden in the production UI for the hackathon demo; the route and tooling remain in-repo for a post-hackathon release.*
-
 An AI assistant embedded into the UI that is grounded on **live on-chain snapshots** and can propose or trigger actions **only with explicit confirmation**.
 
 - **Context-aware chat**: uses wallet + vault balances, current strategy, and CPI allowlist.
@@ -213,7 +197,7 @@ flowchart LR
 - **Owner-only withdrawals**: `withdraw` and `withdraw_spl` require the `owner` signer.
 - **CPI allowlist**: swaps are executed only via CPI into **explicitly whitelisted program IDs** (`allowed_programs`), reducing the “arbitrary instruction” attack surface.
 - **Agent is not a custodian**: the `agent` can execute swaps (when allowed), but cannot withdraw funds.
-- **Explicit user intent for execution**: rebalance and swap flows require explicit confirmation before running them.
+- **Explicit user intent for execution**: chat proposes actions and requires explicit confirmation before running them.
 
 ---
 

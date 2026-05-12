@@ -63,6 +63,8 @@
 | Wallet | Solana Wallet Adapter |
 | AI / automation | Vercel AI SDK · OpenRouter · server modules in `web/` |
 | Liquidity / routes | Jupiter API |
+| Yield protocols | Kamino (kVaults) |
+| Market data | Birdeye (charts) |
 
 ---
 
@@ -87,9 +89,12 @@ Env and RPC: see **Environment variables** in the technical section below. Full 
 
 - [x] PDA vault + owner withdraw + allowlisted agent CPI path
 - [x] Next.js dashboard + Jupiter-backed rebalance
-- [ ] AI chat with confirm-gated tools + allowlist update flow (post-hackathon; hidden in UI for demo)
-- [ ] INSERT_POST_HACKATHON_ITEM_1
-- [ ] INSERT_POST_HACKATHON_ITEM_2
+- [ ] More strategies (preset + custom) and strategy marketplace
+- [ ] Open SDK for third-party agents and strategies (revenue share)
+- [ ] Cron-driven automation: scheduled rebalance / risk checks / auto-exit
+- [ ] AI agent cost optimization (caching, smaller models, structured routing)
+- [ ] Solana Seeker app publication + deeper mobile ↔ vault flows (wallet connect demo: https://youtube.com/shorts/QRY5nAQKfqY)
+- [ ] AI chat with confirm-gated tools + allowlist update flow (post-hackathon; currently hidden in UI for demo)
 
 ---
 

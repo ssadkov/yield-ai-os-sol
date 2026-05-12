@@ -7,7 +7,7 @@
 
 > **Yield AI is an agent-safe execution layer for Solana.** A PDA vault with a **program allowlist** lets AI agents put user capital to work **without ever holding the keys**. **Live on mainnet today**, with a working consumer flow that **earns USDC yield on stock positions without selling them**.
 
-[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](INSERT_DEMO_VIDEO_URL) · [Deck](INSERT_DECK_URL) · [Hackathon submission](INSERT_SUBMISSION_URL)
+[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](https://youtu.be/_a5KCpidm6Y) · [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing) · [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai) · [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl)
 
 ---
 
@@ -15,9 +15,26 @@
 
 ## Hackathon / submission
 
-| Name | Role | Contact |
-|------|------|---------|
-| _INSERT_NAME_ | _INSERT_ROLE_ | _INSERT_TELEGRAM_OR_X_ |
+| Name | Role | Notes |
+|------|------|-------|
+| Sergey Sadkov | Product | ~30k DeFi YouTube; Superteam Kazakhstan |
+| Andrey Aniskov | Core developer | |
+| Alexander Rybakov | Marketing & growth | |
+
+**Mobile (Solana Seeker)** — companion app prototype is ready for Seeker-class demos alongside the web vault.
+
+---
+
+## Business model
+
+- **Performance fee** — 10% on **yield generated** for users (not on principal).
+- **Open SDK** — third-party agents and strategies plug into the same **Safe + program-allowlist** primitive and monetize independently; the protocol can take a **small revenue share** from external agents that route execution through the vault.
+
+---
+
+## Agent layer (one primitive, many surfaces)
+
+The **Stocks Earn Loop** in the live demo (lend collateral → borrow USDC → earn in Kamino) is **one application** of the agent execution layer. The same vault + allowlist pattern extends to **lending, staking, RWAs, and custom strategies** without changing the custody model.
 
 ---
 
@@ -25,7 +42,7 @@
 
 | # | Problem | How Yield AI addresses it |
 |---|---------|---------------------------|
-| 1 | **AI + capital = custody risk** — users fear sending funds to an opaque “agent wallet.” | Funds stay in a **vault PDA**; there is **no private key** for the vault authority. |
+| 1 | **AI + capital = custody risk** — users fear sending funds to an opaque “agent wallet.” | Funds stay in a [**vault PDA**](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl); there is **no private key** for the vault authority. |
 | 2 | Automation needs **on-chain execution**, not chat-only advice. | A designated **agent** pubkey can drive **whitelisted CPIs**; **withdrawals stay owner-only**. |
 | 3 | Open-ended CPIs are dangerous. | **`execute_swap_cpi`** only targets **`allowed_programs`** (max 16), controlled by the owner. |
 | 4 | Users want **yield** without necessarily exiting risk assets (e.g. tokenized equities). | **Mainnet** consumer flow: strategy targets, Jupiter routing, and integrations for **USDC yield** while retaining vault-held positions (see live app and technical section below). |
@@ -36,15 +53,16 @@
 
 - **Native custody model** — PDAs + `invoke_signed` for non-custodial vaults agents can interact with.
 - **Composability** — one vault, many protocols; the allowlist is how automation **safely** opens that surface.
-- **Practical automation** — rebalance and agent-driven steps stay viable for a **consumer** product.
+- **Market depth** — access to RWAs (e.g. tokenized equities) and a large ecosystem of DeFi protocols with deep on-chain liquidity.
+
+**RWA momentum & liquidity** — Solana’s RWAs (e.g. **xStocks**, **OnRe**) plus deep **Kamino** and **Jupiter** liquidity make it a strong fit for **managed-yield retail flows** that keep users in risk assets while harvesting stablecoin yield.
 
 ---
 
 ## What ships today (summary)
 
-- **Anchor vault** — PDA custody, owner withdrawals, allowlisted CPI execution path for the agent.
+- **Anchor vault** — [PDA custody](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl), owner withdrawals, allowlisted CPI execution path for the agent.
 - **Next.js app** — wallet, vault lifecycle, portfolio, rebalance / convert flows ([live app](https://yield-ai-os-sol.vercel.app/)).
-- **AI assistant** — live on-chain context, **explicit confirmation** before execution, `needs_whitelist` when routes need new program IDs.
 - **Jupiter** — server-side quote/build for swaps aligned with the vault CPI model.
 
 ---
@@ -64,8 +82,8 @@
 ## Quick start (demo + local)
 
 ```bash
-git clone INSERT_REPO_GIT_URL
-cd INSERT_REPO_DIR_NAME
+git clone https://github.com/ssadkov/yield-ai-os-sol.git
+cd yield-ai-os-sol
 
 anchor build
 
@@ -82,9 +100,10 @@ Env and RPC: see **Environment variables** in the technical section below. Full 
 
 - [x] PDA vault + owner withdraw + allowlisted agent CPI path
 - [x] Next.js dashboard + Jupiter-backed rebalance
-- [x] AI chat with confirm-gated tools + allowlist update flow
+- [ ] AI chat with confirm-gated tools + allowlist update flow (post-hackathon; hidden in UI for demo)
 - [ ] INSERT_POST_HACKATHON_ITEM_1
 - [ ] INSERT_POST_HACKATHON_ITEM_2
+- [ ] Deeper Solana Seeker ↔ vault integration (mobile prototype exists)
 
 ---
 
@@ -101,7 +120,7 @@ The sections below are the **developer-focused** reference (program instructions
 ## 🚀 What it does today
 
 ### ⛓️ On-chain vault (Solana / Anchor)
-The vault program is the **security boundary**. Funds live in SPL token accounts controlled by a **Program Derived Address (PDA)** tied to the user.
+The vault program is the **security boundary**. Funds live in SPL token accounts controlled by a **Program Derived Address (PDA)** tied to the user. Program + Anchor IDL on Orb: [3Vtz…WEFp5s](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl).
 
 **Instructions**
 - **`initialize(agent, strategy, allowed_programs)`**
@@ -122,6 +141,8 @@ A dashboard to manage the vault and visualize portfolio state.
 - **Yield display**: server-fetched APR/APY for selected yield tokens (where available).
 
 ### 🤖 AI chat (Vercel AI SDK + OpenRouter)
+*Temporarily hidden in the production UI for the hackathon demo; the route and tooling remain in-repo for a post-hackathon release.*
+
 An AI assistant embedded into the UI that is grounded on **live on-chain snapshots** and can propose or trigger actions **only with explicit confirmation**.
 
 - **Context-aware chat**: uses wallet + vault balances, current strategy, and CPI allowlist.
@@ -192,7 +213,7 @@ flowchart LR
 - **Owner-only withdrawals**: `withdraw` and `withdraw_spl` require the `owner` signer.
 - **CPI allowlist**: swaps are executed only via CPI into **explicitly whitelisted program IDs** (`allowed_programs`), reducing the “arbitrary instruction” attack surface.
 - **Agent is not a custodian**: the `agent` can execute swaps (when allowed), but cannot withdraw funds.
-- **Explicit user intent for execution**: chat proposes actions and requires explicit confirmation before running them.
+- **Explicit user intent for execution**: rebalance and swap flows require explicit confirmation before running them.
 
 ---
 

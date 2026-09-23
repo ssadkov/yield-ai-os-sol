@@ -10,7 +10,8 @@ use anchor_spl::token_interface::{
 
 declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
 
-const MAX_ALLOWED_PROGRAMS: usize = 64;
+/// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
+const MAX_ALLOWED_PROGRAMS: usize = 16;
 /// Allocation routes, indexed into `Vault::allocation_bps`. Unused indices are reserved for future protocols.
 pub const MAX_ROUTES: usize = 8;
 pub const ROUTE_KAMINO_USDC: usize = 0;
@@ -309,7 +310,7 @@ pub struct Vault {
     /// Owner's target allocation in basis points, indexed by ROUTE_* constants.
     pub allocation_bps: [u16; MAX_ROUTES],
     pub last_rebalance_ts: i64,
-    #[max_len(64)]
+    #[max_len(16)]
     pub allowed_programs: Vec<Pubkey>,
 }
 

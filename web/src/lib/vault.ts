@@ -70,7 +70,7 @@ export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
 
 /**
  * Known program IDs the vault may CPI into.
- * Max 64 entries on-chain; keep this list merged with existing vault entries
+ * Max 16 entries on-chain in v2 (was 64); keep this list merged with existing vault entries
  * when updating, because set_allowed_programs rewrites the whole list.
  */
 export const DEFAULT_ALLOWED_PROGRAMS: PublicKey[] = [
@@ -119,7 +119,8 @@ export async function initializeVault(
 
   const sig = await program.methods
     // v2: strategy presets are replaced by owner allocation targets (set later via set_allocation).
-    .initialize(AGENT_PUBKEY, Array(8).fill(0), DEFAULT_ALLOWED_PROGRAMS)
+    // v2 allowlist holds at most 16 programs and generic CPI is owner-only; start empty.
+    .initialize(AGENT_PUBKEY, Array(8).fill(0), [])
     .accounts({
       owner,
       usdcMint: USDC_MINT,
@@ -321,8 +322,8 @@ export async function setAllowedPrograms(
   provider: AnchorProvider,
   programs: PublicKey[],
 ) {
-  if (programs.length > 64) {
-    throw new Error("Allowed program list cannot exceed 64 entries");
+  if (programs.length > 16) {
+    throw new Error("Allowed program list cannot exceed 16 entries");
   }
 
   const program = getProgram(provider);

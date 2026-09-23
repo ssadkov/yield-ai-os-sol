@@ -123,6 +123,14 @@ async function run() {
   await expectFailure("non-owner set_allocation", () => (program.methods as any).setAllocation(ZERO_ALLOCATION)
     .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);
 
+  // Allowlist is capped at 16 programs (keeps Safe rent low); TOKEN_PROGRAM_ID stays first for the CPI tests below.
+  const sixteen = [TOKEN_PROGRAM_ID, ...Array.from({ length: 15 }, () => Keypair.generate().publicKey)];
+  const setAllowed = (programs: PublicKey[]) => (program.methods as any).setAllowedPrograms(programs)
+    .accounts({ owner: owner.publicKey, vault, systemProgram: SystemProgram.programId }).signers([owner]).rpc();
+  await expectFailure("allowlist of 17 programs", () => setAllowed([...sixteen, Keypair.generate().publicKey]), /TooManyPrograms/);
+  await setAllowed(sixteen);
+  assert.equal((await (program.account as any).vault.fetch(vault)).allowedPrograms.length, 16);
+
   const transfer = createTransferInstruction(vaultAta, attackerAta, vault, 1_000_000);
   const remaining = [
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },

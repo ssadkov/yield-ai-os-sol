@@ -21,8 +21,8 @@ export const ROUTES = [
 ] as const;
 export const MAX_ROUTES = 8;
 export const ZERO_ALLOCATION = Array(MAX_ROUTES).fill(0) as number[];
-/** 8 discriminator + bump + owner + agent + allocation [u16; 8] + ts + Vec<Pubkey> (max 64). */
-const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 64 * 32;
+/** 8 discriminator + bump + owner + agent + allocation [u16; 8] + ts + Vec<Pubkey> (max 16). */
+const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 16 * 32;
 const TOKEN_ACCOUNT_SIZE = 165;
 /** Base fee plus priority headroom; a wallet below this cannot pay for any transaction. */
 export const MIN_FEE_LAMPORTS = 20_000;

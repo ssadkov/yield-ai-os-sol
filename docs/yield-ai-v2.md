@@ -346,3 +346,10 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 - Совместимость: Safe, созданные до смены раскладки (на devnet: `5KVy…`, `ALaZ…`, `2VP1…`), читаются с мусорным allocation; `owner`/`agent` на прежних местах, поэтому проверки владельца, вывод и `close_safe` работают. UI распознаёт такой Safe (сумма > 10 000) и предлагает сохранить allocation — `set_allocation` на старой раскладке проверен симуляцией на devnet.
 - Web: `/v2/safe` получил карточку Allocation (слайдеры Kamino USDC / ONyc, остаток — idle USDC, сохранение через `set_allocation`). Устаревший ребалансер и чат-агент читают любой Safe как Conservative: в v2 они всё равно не могут исполнять (CPI только владельцу) и будут заменены узкими инструкциями.
 - Индекс Safe (`["vault", owner, id]`) отложен.
+
+## Allowlist 16 и vanity-адрес для mainnet, 2026-09-24
+
+- `MAX_ALLOWED_PROGRAMS` и `#[max_len]` сокращены с 64 до 16. Аккаунт Safe: 661 байт вместо 2 149; rent на devnet 0.00401 SOL вместо 0.01157. Создание Safe с USDC ATA и комиссией ≈ 0.0055 SOL (было ≈ 0.0131). Легаси `initializeVault` передаёт пустой allowlist (в `DEFAULT_ALLOWED_PROGRAMS` 18 программ — больше предела).
+- Тест дополнен: allowlist из 17 программ → `TooManyPrograms`, из 16 — проходит. PASS локально и на devnet: апгрейд `4dy7PDAC2CkSuw1Qtsy8c1iqJeupSXERcSJUAPFLoCZAKH1BhhP87rVMXVuNd8vgxL77LXzXBCikCwgA1kk8wf1w`, slot 503111653, sha256 `6b67d0bd…7276eaad` совпадает со сборкой. Старые Safe на devnet (2 134 байт) продолжают работать: Anchor читает структуру из более длинного буфера, `set_allowed_programs` уменьшает аккаунт через realloc.
+- Vanity program ID для mainnet: **`yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`** (`solana-keygen grind --starts-with yie1:1`, 22 потока, 394 млн ключей за 1 541 с). Keypair только в WSL: `~/.config/solana/yield-v2/vanity/yie1Jjq6….json` (права 600). Для mainnet-сборки нужны `declare_id!` и `Anchor.toml [programs.mainnet]` на этот ID — devnet-сборка остаётся на `8xa1…`.
+- `yie1d…`: на 5 символов ожидаемо ≈58× больше ключей. При скорости ≈255 тыс. ключей/с это порядка суток с большим разбросом; одной ночи может не хватить.

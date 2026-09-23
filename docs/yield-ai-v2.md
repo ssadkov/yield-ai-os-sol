@@ -159,3 +159,12 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 - Комиссии на 2026-09-23: fast 1.3 bps + forward ~0.14 USDC. `maxFee` = bps с округлением вверх + forward ×1.2. При 2 USDC в Safe должно прийти не меньше ~1.83 USDC.
 - `viem@2.47.6` добавлен в прямые зависимости `web` (раньше был только транзитивным).
 - Нужно от пользователя: Base Sepolia USDC (faucet.circle.com) и немного Base Sepolia ETH на газ на EVM-адресе MetaMask. Результат: ожидается.
+
+### MetaMask на Solana mainnet: результат, 2026-09-23 — PASS
+
+- Две первые попытки не прошли. Путь `signTransaction` зависал после Confirm или возвращал `User rejected`. Путь `sendTransaction` адаптера падал с `WalletSendTransactionError`, потому что адаптер выводил chain из URL RPC, а наш прокси `127.0.0.1` превращался в `solana:localnet`. **Для MVP:** при работе через свой прокси или нестандартный RPC вызывать Wallet Standard `solana:signAndSendTransaction` напрямую с явным `chain: "solana:mainnet"`.
+- После исправления в mainnet прошли:
+  - Memo `4SDDGHvKaC7cg63ERqMbdN39pK6aA12QYM9XHadYGxqWc8zpHAVsi9aoD5jQP43iDy8zvX9uoYrdZVfGnqwPUiBj`;
+  - перевод 0.001 SOL на `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2`: `5awv4baieFGU4GViokBS5gX2fw2C6MZEidToUfBaKUti9pz7ZQ1bT3whKtdWoHuBdSSpdfLsYpdkWPssVikVpm84`.
+- Баланс `2twC…pcdj`: 0.004 → 0.002989699 SOL (0.001 перевод + 10 301 lamports комиссий на две транзакции).
+- Вывод: MetaMask Extension подписывает и отправляет Solana-транзакции нашего dapp на mainnet. Owner Safe на MetaMask возможен на mainnet. На devnet MetaMask по-прежнему не работает (три пробы показали Mainnet).

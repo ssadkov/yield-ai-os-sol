@@ -59,6 +59,23 @@ For gate 7, record each size as one complete round trip. Blank cells mean unmeas
 4. Implement a single Kamino USDC kVault path with its own constrained agent action and an owner recovery path. Reconcile shares and USDC on every step.
 5. Add the allocation slider and secondary-market ONyc route only after executable sell quotes and a full exit test. Display actual balances and costs; slider percentages are targets, not guaranteed final holdings.
 
+### Contract roadmap: account lifecycle (added 2026-09-23)
+
+The old mainnet program `3Vtz…` has no way to reclaim rent except through the generic CPI, and cannot release excess PDA lamports or close a Safe at all. v2 must ship these as dedicated owner-only instructions before mainnet:
+
+- `close_empty_token_account`: owner-only. Requires `amount == 0` and the account owner to be the Safe PDA; supports SPL Token and Token-2022. Rent goes to the **owner**, never to the caller or agent.
+- `withdraw_excess_lamports`: owner-only. Returns PDA lamports above the rent-exempt minimum to the owner. It replaces the uncommitted `refund_excess_lamports` draft in the main checkout, which let the agent collect lamports.
+- `close_safe`: owner-only. Allowed only when the Safe owns no token accounts and has no open protocol positions (checked off-chain in the UI and enforced on-chain by requiring zero token accounts passed in). Closes the Safe PDA and returns all lamports to the owner.
+- Each instruction is signed by the owner alone and can be batched with others, so one MetaMask `signAndSendTransaction` covers a full cleanup.
+- Upgrade authority: deploy under a hot key, then transfer it to a Squads multisig before the first external deposit (see *Upgrade authority* below).
+
+### Upgrade authority and multisig
+
+- A program's upgrade authority can be reassigned after deploy with `solana program set-upgrade-authority <PROGRAM> --new-upgrade-authority <SQUADS_VAULT> --skip-new-upgrade-authority-signer-check`; a Squads vault is a PDA and cannot co-sign. After that, upgrades go through Squads proposals (buffer upload by any key, then `Upgrade` executed by the multisig).
+- The fee payer or deployer key used for the initial deploy has no ongoing rights; only the upgrade authority matters. The program keypair (the ID) is also irrelevant after deploy.
+- v2 has no global admin: authority is per Safe (the owner). If a global config is added later (pause, fees, allowed protocol list), store its admin as a `Pubkey` in a config PDA with a `set_admin` instruction, so it can also point at a Squads vault.
+- Option for the end state: `--final` makes the program immutable. This is irreversible and removes the ability to patch bugs, so it is not for the MVP.
+
 ## Test commands and transaction boundary
 
 `npm.cmd --prefix client run v2-security` runs transactions on a **local validator only** and requires a local RPC and a freshly generated `target/idl/yield_vault.json`. The script generates disposable payer and test-user keypairs in memory and uses local-validator airdrops. A devnet deployment or transaction must first be simulated and its recipient, amount, fee payer and cluster reviewed before a wallet signs it.

@@ -5,6 +5,7 @@ const UPSTREAM = process.env.V2_MAINNET_RPC_URL || "https://api.mainnet-beta.sol
 const ALLOWED = new Set([
   "getGenesisHash", "getLatestBlockhash", "getBalance", "getFeeForMessage",
   "simulateTransaction", "sendTransaction", "getSignatureStatuses", "getBlockHeight",
+  "getAccountInfo", "getTokenAccountsByOwner",
 ]);
 
 export async function POST(request: Request) {

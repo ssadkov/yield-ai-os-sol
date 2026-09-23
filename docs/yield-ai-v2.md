@@ -374,3 +374,25 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 **Devnet.** Kamino на devnet нет, поэтому там только регрессия. Программа расширена до 630 000 байт (`solana program extend`, ≈1.0 devnet SOL rent), апгрейд `22E1mFYi1JKgFZG2gwamVYMBaP1qzHuJU8oo18SAR5GAjiZ4wqF8NBcZEm47uFoBFCPRxD74BAQxVCf4rm3B9Kyo`, slot 503123371, sha256 `0c36559f…eb6fb3f2` совпадает со сборкой (435 944 байт). `v2-security` PASS.
 
 **Для mainnet-деплоя:** бинарник 436 КБ; max-len брать ≈650 000 (≈4.5 SOL rent) или деплоить с запасом и расширять по мере роста.
+
+## Performance fee: 5% с реализованной прибыли, 2026-09-24
+
+**Модель.** Как на Aptos (5% с дохода), но взимается ончейн в момент выхода из маршрута. Пула и долей нет, поэтому комиссия считается по каждому Safe отдельно.
+
+**Контракт.**
+- `Config` PDA `["config"]`: `admin`, `treasury` (кошелёк, чей USDC ATA получает комиссию), `performance_fee_bps`. Жёсткий потолок `MAX_PERFORMANCE_FEE_BPS = 2 000` (20%) — admin не может поднять выше.
+- `init_config(treasury, fee_bps)` — только upgrade authority программы: `program_data` = PDA загрузчика от ID программы, authority читается из байтов ProgramData (без `Account<ProgramData>`: bincode добавлял ≈58 КБ к бинарнику). Защищает от перехвата admin сразу после деплоя. `set_config(admin, treasury, fee_bps)` — только текущий admin (передача на Squads — `set_config` с новым admin).
+- `Vault.route_principal: [u64; 8]` (добавлено в конец структуры, смещения прежних полей не меняются) — cost basis владельца по маршрутам.
+- `kamino_deposit`: principal += фактически ушедший из Safe USDC (баланс до − после CPI).
+- `kamino_withdraw` (новые аккаунты: `config`, `treasury_usdc_ata`, `token_program`): `principal_out = principal × shares / shares_before`, прибыль = полученный USDC − `principal_out`, комиссия = прибыль × fee_bps. Убыток — без комиссии. Комиссия переводится PDA Safe только на токен-счёт, чей владелец = `config.treasury` и mint = USDC Safe (`InvalidTreasury`). Событие `RouteExit {vault, route, received, principal_out, fee}` для учёта и UI. `shares > баланс` → `InsufficientShares`.
+- `execute_protocol_cpi` / `execute_swap_cpi` запрещают программу kVault (`UseDedicatedInstruction`): иначе владелец мог бы обойти комиссию и сбить учёт principal. Выход владельца из Kamino остаётся через `kamino_withdraw`.
+
+**Проверки.**
+- Rust-юнит-тесты `realize_exit` (полный выход с прибылью, убыток, частичный выход пропорционально, позиция без cost basis, нулевая ставка) — 6/6.
+- `v2-security` PASS локально и на devnet: `init_config` посторонним → `Unauthorized` (атакующий пополнен SOL, чтобы отказ был именно по authority), комиссия > 20% → `FeeTooHigh`, `set_config` не-админом → отказ, generic CPI в kVault → `UseDedicatedInstruction`.
+- Форк mainnet PASS: principal после депозита = 60 000 000; после полного выхода principal = 0, казна получила 0 (круг −0.001005 USDC); вывод > shares Safe → `InsufficientShares`.
+- **Не проверено сквозным тестом:** реальный перевод комиссии в казну при прибыли — на форке за время теста доход не начисляется. Покрыт юнит-тестом расчёта; путь перевода и проверки казны выполнятся впервые при первой прибыльной позиции — проверить на mainnet малой суммой.
+
+**Devnet.** Апгрейд `5x4n9pnmfj2o2HpPehZnbfjkFyq6cQW6gSqhfQ2YdxqwH1ThihYvJk7VdihM7DL79BxA3Ev1svY341225EJW1eU6`, slot 503133118, sha256 `df559b9c…0988ef043` совпадает со сборкой. Config `5EjWRU9zFsSH6QavNVB7KpoqrYDHrt7w53Kk8XR5RX1`: admin и treasury `8xwj…`, fee 500 bps.
+
+**Размер.** Бинарник 481 832 байт. Для mainnet: max-len ≈ 560 000 (≈3.9 SOL rent) или больше с запасом; на `8xwj…` 5.17 SOL.

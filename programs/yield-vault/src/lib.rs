@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::bpf_loader_upgradeable;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use anchor_spl::token_interface::{
@@ -17,6 +18,22 @@ pub const MAX_ROUTES: usize = 8;
 pub const ROUTE_KAMINO_USDC: usize = 0;
 pub const ROUTE_ONYC: usize = 1;
 const BPS_DENOMINATOR: u32 = 10_000;
+/// Hard cap on the protocol performance fee, whatever the admin configures.
+pub const MAX_PERFORMANCE_FEE_BPS: u16 = 2_000;
+
+/// Split a route exit into the principal it returns and the protocol fee on the gain.
+/// `principal` is the owner's tracked cost basis for the route, `shares_out` of `shares_before`
+/// are redeemed and `received` USDC came back. Losses pay no fee.
+pub fn realize_exit(principal: u64, shares_out: u64, shares_before: u64, received: u64, fee_bps: u16) -> (u64, u64) {
+    let principal_out = if shares_before == 0 || shares_out >= shares_before {
+        principal
+    } else {
+        (u128::from(principal) * u128::from(shares_out) / u128::from(shares_before)) as u64
+    };
+    let gain = received.saturating_sub(principal_out);
+    let fee = (u128::from(gain) * u128::from(fee_bps) / u128::from(BPS_DENOMINATOR)) as u64;
+    (principal_out, fee)
+}
 
 /// Kamino kVault program and the only kVault the agent may use (Kamino USDC, mainnet).
 const KAMINO_KVAULT_PROGRAM: Pubkey = pubkey!("KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd");
@@ -40,6 +57,19 @@ fn validate_allocation(allocation_bps: &[u16; MAX_ROUTES]) -> Result<()> {
     let total: u32 = allocation_bps.iter().map(|bps| u32::from(*bps)).sum();
     require!(total <= BPS_DENOMINATOR, ErrorCode::AllocationTooHigh);
     Ok(())
+}
+
+/// Upgrade authority stored in this program's ProgramData account. Parsed by hand instead of
+/// `Account<ProgramData>`, which pulls in bincode and adds ~100 KB to the binary.
+/// Layout: u32 enum tag (3 = ProgramData) | u64 slot | u8 Option tag | [u8; 32] authority.
+fn upgrade_authority(program_data: &AccountInfo) -> Result<Option<Pubkey>> {
+    require_keys_eq!(*program_data.owner, bpf_loader_upgradeable::ID, ErrorCode::Unauthorized);
+    let data = program_data.try_borrow_data()?;
+    require!(data.len() >= 45 && data[0..4] == [3, 0, 0, 0], ErrorCode::Unauthorized);
+    Ok(match data[12] {
+        1 => Some(Pubkey::new_from_array(data[13..45].try_into().unwrap())),
+        _ => None,
+    })
 }
 
 /// Owner, or the configured agent (the default key means "no agent").
@@ -143,6 +173,32 @@ pub mod yield_vault {
     pub fn set_allocation(ctx: Context<SetAllocation>, allocation_bps: [u16; MAX_ROUTES]) -> Result<()> {
         validate_allocation(&allocation_bps)?;
         ctx.accounts.vault.allocation_bps = allocation_bps;
+        Ok(())
+    }
+
+    /// One-time protocol config. Only the program's upgrade authority can create it, so nobody can
+    /// front-run the deploy and become admin.
+    pub fn init_config(ctx: Context<InitConfig>, treasury: Pubkey, performance_fee_bps: u16) -> Result<()> {
+        require!(performance_fee_bps <= MAX_PERFORMANCE_FEE_BPS, ErrorCode::FeeTooHigh);
+        require!(
+            upgrade_authority(&ctx.accounts.program_data)? == Some(ctx.accounts.admin.key()),
+            ErrorCode::Unauthorized
+        );
+        let config = &mut ctx.accounts.config;
+        config.admin = ctx.accounts.admin.key();
+        config.treasury = treasury;
+        config.performance_fee_bps = performance_fee_bps;
+        config.bump = ctx.bumps.config;
+        Ok(())
+    }
+
+    /// Admin updates the treasury, the fee (capped) or hands admin over (e.g. to a Squads vault).
+    pub fn set_config(ctx: Context<SetConfig>, admin: Pubkey, treasury: Pubkey, performance_fee_bps: u16) -> Result<()> {
+        require!(performance_fee_bps <= MAX_PERFORMANCE_FEE_BPS, ErrorCode::FeeTooHigh);
+        let config = &mut ctx.accounts.config;
+        config.admin = admin;
+        config.treasury = treasury;
+        config.performance_fee_bps = performance_fee_bps;
         Ok(())
     }
 
@@ -271,6 +327,8 @@ pub mod yield_vault {
             vault.allowed_programs.iter().any(|p| *p == program_id),
             ErrorCode::ProgramNotWhitelisted
         );
+        // Routes with fee and principal accounting must go through their dedicated instructions.
+        require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
         let vault_key = vault.key();
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
@@ -310,6 +368,8 @@ pub mod yield_vault {
             vault.allowed_programs.iter().any(|p| *p == program_id),
             ErrorCode::ProgramNotWhitelisted
         );
+        // Routes with fee and principal accounting must go through their dedicated instructions.
+        require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
         let vault_key = vault.key();
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
@@ -359,7 +419,12 @@ pub mod yield_vault {
         data.extend_from_slice(&amount.to_le_bytes());
         invoke_kvault(vault, rem, data, KV_DEPOSIT_FIXED_ACCOUNTS,
             KV_DEPOSIT_USER_TOKEN_ATA, KV_DEPOSIT_USER_SHARES_ATA)?;
-        ctx.accounts.vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        // Cost basis = what actually left the Safe, not the requested amount.
+        let idle_after = safe_token_balance(&rem[1 + KV_DEPOSIT_USER_TOKEN_ATA], &ctx.accounts.vault.key())?;
+        let deposited = idle.saturating_sub(idle_after);
+        let vault = &mut ctx.accounts.vault;
+        vault.route_principal[ROUTE_KAMINO_USDC] = vault.route_principal[ROUTE_KAMINO_USDC].saturating_add(deposited);
+        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         Ok(())
     }
 
@@ -367,23 +432,64 @@ pub mod yield_vault {
     /// `from_reserve = false` uses withdraw_from_available; `true` uses the full withdraw that may
     /// pull liquidity from a lending reserve. USDC always lands in the Safe's own token account.
     pub fn kamino_withdraw<'info>(
-        ctx: Context<'_, '_, '_, 'info, KaminoAction<'info>>,
+        ctx: Context<'_, '_, '_, 'info, KaminoWithdraw<'info>>,
         shares: u64,
         from_reserve: bool,
     ) -> Result<()> {
         require!(shares > 0, ErrorCode::ZeroAmount);
-        let vault = &ctx.accounts.vault;
-        require_owner_or_agent(vault, &ctx.accounts.authority.key())?;
+        let vault_key = ctx.accounts.vault.key();
+        require_owner_or_agent(&ctx.accounts.vault, &ctx.accounts.authority.key())?;
         let (discriminator, fixed) = if from_reserve {
             (KVAULT_WITHDRAW, KV_WITHDRAW_FULL_FIXED_ACCOUNTS)
         } else {
             (KVAULT_WITHDRAW_FROM_AVAILABLE, KV_WITHDRAW_AVAILABLE_FIXED_ACCOUNTS)
         };
+        let rem = ctx.remaining_accounts;
+        require!(rem.len() > fixed, ErrorCode::InvalidKaminoAccounts);
+        let safe_usdc = &rem[1 + KV_WITHDRAW_USER_TOKEN_ATA];
+        let shares_before = safe_token_balance(&rem[1 + KV_WITHDRAW_USER_SHARES_ATA], &vault_key)?;
+        require!(shares <= shares_before, ErrorCode::InsufficientShares);
+        let usdc_before = safe_token_balance(safe_usdc, &vault_key)?;
+
         let mut data = discriminator.to_vec();
         data.extend_from_slice(&shares.to_le_bytes());
-        invoke_kvault(vault, ctx.remaining_accounts, data, fixed,
+        invoke_kvault(&ctx.accounts.vault, rem, data, fixed,
             KV_WITHDRAW_USER_TOKEN_ATA, KV_WITHDRAW_USER_SHARES_ATA)?;
-        ctx.accounts.vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+
+        let received = safe_token_balance(safe_usdc, &vault_key)?.saturating_sub(usdc_before);
+        let principal = ctx.accounts.vault.route_principal[ROUTE_KAMINO_USDC];
+        let (principal_out, fee) = realize_exit(principal, shares, shares_before, received,
+            ctx.accounts.config.performance_fee_bps);
+
+        if fee > 0 {
+            // Fee goes only to the configured treasury's USDC account, signed by the Safe PDA.
+            require_keys_eq!(*safe_usdc.owner, anchor_spl::token::ID, ErrorCode::NotSafeTokenAccount);
+            let usdc_mint = {
+                let data = safe_usdc.try_borrow_data()?;
+                InterfaceTokenAccount::try_deserialize(&mut &data[..])?.mint
+            };
+            let treasury = &ctx.accounts.treasury_usdc_ata;
+            require_keys_eq!(treasury.owner, ctx.accounts.config.treasury, ErrorCode::InvalidTreasury);
+            require_keys_eq!(treasury.mint, usdc_mint, ErrorCode::InvalidTreasury);
+            let owner_key = ctx.accounts.vault.owner;
+            let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[ctx.accounts.vault.bump]];
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: safe_usdc.clone(),
+                        to: treasury.to_account_info(),
+                        authority: ctx.accounts.vault.to_account_info(),
+                    },
+                    &[seeds],
+                ),
+                fee,
+            )?;
+        }
+        let vault = &mut ctx.accounts.vault;
+        vault.route_principal[ROUTE_KAMINO_USDC] = principal.saturating_sub(principal_out);
+        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        emit!(RouteExit { vault: vault_key, route: ROUTE_KAMINO_USDC as u8, received, principal_out, fee });
         Ok(())
     }
 
@@ -438,6 +544,28 @@ pub struct Vault {
     pub last_rebalance_ts: i64,
     #[max_len(16)]
     pub allowed_programs: Vec<Pubkey>,
+    /// Owner's cost basis per route (USDC base units), used to charge fees only on gains.
+    /// Appended last so earlier field offsets stay stable.
+    pub route_principal: [u64; MAX_ROUTES],
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct Config {
+    pub admin: Pubkey,
+    /// Wallet whose USDC token account receives performance fees.
+    pub treasury: Pubkey,
+    pub performance_fee_bps: u16,
+    pub bump: u8,
+}
+
+#[event]
+pub struct RouteExit {
+    pub vault: Pubkey,
+    pub route: u8,
+    pub received: u64,
+    pub principal_out: u64,
+    pub fee: u64,
 }
 
 #[derive(Accounts)]
@@ -688,6 +816,54 @@ pub struct KaminoAction<'info> {
 }
 
 #[derive(Accounts)]
+pub struct KaminoWithdraw<'info> {
+    /// Owner or agent; checked in the handler.
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", vault.owner.as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"config"], bump = config.bump)]
+    pub config: Account<'info, Config>,
+    /// Treasury USDC account; owner and mint are checked in the handler when a fee is due.
+    #[account(mut)]
+    pub treasury_usdc_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct InitConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + Config::INIT_SPACE,
+        seeds = [b"config"],
+        bump
+    )]
+    pub config: Account<'info, Config>,
+    /// CHECK: this program's ProgramData (address fixed by seeds); the handler requires its
+    /// upgrade authority to be the signing admin.
+    #[account(
+        seeds = [crate::ID.as_ref()],
+        bump,
+        seeds::program = bpf_loader_upgradeable::ID,
+    )]
+    pub program_data: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetConfig<'info> {
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+}
+
+#[derive(Accounts)]
 pub struct CloseEmptyTokenAccount<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -761,4 +937,45 @@ pub enum ErrorCode {
     RouteDisabled,
     #[msg("Amount exceeds the owner's allocation for this route")]
     AllocationExceeded,
+    #[msg("Performance fee above the hard cap")]
+    FeeTooHigh,
+    #[msg("Treasury token account does not match the config")]
+    InvalidTreasury,
+    #[msg("Not enough shares in the Safe")]
+    InsufficientShares,
+    #[msg("This protocol must be used through its dedicated instruction")]
+    UseDedicatedInstruction,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_exit_with_gain_pays_fee_on_gain_only() {
+        // 60 USDC in, 63 USDC out, 5% fee -> 0.15 USDC fee, all principal returned.
+        assert_eq!(realize_exit(60_000_000, 500, 500, 63_000_000, 500), (60_000_000, 150_000));
+    }
+
+    #[test]
+    fn loss_pays_no_fee() {
+        assert_eq!(realize_exit(60_000_000, 500, 500, 59_998_995, 500), (60_000_000, 0));
+    }
+
+    #[test]
+    fn partial_exit_uses_proportional_principal() {
+        // Redeem a quarter of the shares: principal out 15; received 16 -> gain 1 -> fee 0.05 at 5%.
+        assert_eq!(realize_exit(60_000_000, 25, 100, 16_000_000, 500), (15_000_000, 50_000));
+    }
+
+    #[test]
+    fn untracked_principal_counts_everything_as_gain() {
+        // Positions opened outside kamino_deposit have no cost basis; generic CPI to kVault is blocked.
+        assert_eq!(realize_exit(0, 10, 10, 1_000_000, 500), (0, 50_000));
+    }
+
+    #[test]
+    fn zero_fee_config() {
+        assert_eq!(realize_exit(1, 1, 1, 2, 0), (1, 0));
+    }
 }

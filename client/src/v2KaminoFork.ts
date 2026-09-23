@@ -27,6 +27,7 @@ const USDC_KVAULT = new PublicKey("91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy"
 const idl = JSON.parse(readFileSync(join(here, "..", "..", "target", "idl", "yield_vault.json"), "utf8")) as Idl;
 const PROGRAM_ID = new PublicKey((idl as { address: string }).address);
 const OWNER_USDC = BigInt(100_000_000); // 100 USDC
+const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 type ApiIx = { programAddress: string; data: string; accounts: { address: string; role: string }[] };
 
@@ -105,7 +106,9 @@ async function run() {
   if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(rpc)) throw new Error("fork test runs only against localhost");
   const connection = new Connection(rpc, "confirmed");
   const owner = loadOrCreate("owner"), agent = loadOrCreate("agent"), attacker = loadOrCreate("attacker");
-  for (const kp of [owner, agent, attacker]) {
+  const treasury = loadOrCreate("treasury");
+  const admin = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(process.env.V2_ADMIN_KEYPAIR ?? "/tmp/yield-v2-admin.json", "utf8"))));
+  for (const kp of [owner, agent, attacker, admin]) {
     await connection.confirmTransaction(await connection.requestAirdrop(kp.publicKey, 2_000_000_000), "confirmed");
   }
   const provider = new anchor.AnchorProvider(connection, new Wallet(agent), { commitment: "confirmed" });
@@ -126,6 +129,16 @@ async function run() {
     ...ix.accounts.map((a, i) => ({ pubkey: replace[i] ?? new PublicKey(a.address), isSigner: false, isWritable: a.role.includes("WRITABLE") })),
   ];
   const cu = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+
+  // Protocol config: 5% performance fee to the treasury (admin = program upgrade authority).
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+  const [programData] = PublicKey.findProgramAddressSync([PROGRAM_ID.toBuffer()], BPF_LOADER_UPGRADEABLE);
+  await methods.initConfig(treasury.publicKey, 500)
+    .accounts({ admin: admin.publicKey, config, programData, systemProgram: SystemProgram.programId })
+    .signers([admin]).rpc();
+  const treasuryUsdc = getAssociatedTokenAddressSync(USDC, treasury.publicKey);
+  await sendAndConfirmTransaction(connection, new Transaction().add(
+    createAssociatedTokenAccountIdempotentInstruction(agent.publicKey, treasuryUsdc, treasury.publicKey, USDC)), [agent]);
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
   await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [])
@@ -157,15 +170,20 @@ async function run() {
   console.log(`  deposit 60 USDC -> Safe shares ${shares}, idle USDC ${idle}`);
   assert(shares > BigInt(0));
   assert.equal(idle, BigInt(40_000_000));
+  const principalAfterDeposit = BigInt((await (program.account as any).vault.fetch(safe)).routePrincipal[0].toString());
+  console.log(`  Kamino principal tracked: ${principalAfterDeposit}`);
+  assert.equal(principalAfterDeposit, BigInt(60_000_000));
 
   const agentWithdraw = (amount: bigint, replace: Record<number, PublicKey> = {}) => methods.kaminoWithdraw(new BN(amount.toString()), false)
-    .accounts({ authority: agent.publicKey, vault: safe }).remainingAccounts(remaining(kvWithdraw, replace))
+    .accounts({ authority: agent.publicKey, vault: safe, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+    .remainingAccounts(remaining(kvWithdraw, replace))
     .preInstructions([cu]).signers([agent]).rpc();
   const attackerUsdc = getAssociatedTokenAddressSync(USDC, attacker.publicKey);
   await sendAndConfirmTransaction(connection, new Transaction().add(
     createAssociatedTokenAccountIdempotentInstruction(attacker.publicKey, attackerUsdc, attacker.publicKey, USDC)), [attacker]);
   await expectFailure("withdraw USDC to attacker", () => agentWithdraw(shares, { 5: attackerUsdc }), /NotSafeTokenAccount/);
 
+  await expectFailure("withdraw more shares than the Safe holds", () => agentWithdraw(shares + BigInt(1)), /InsufficientShares/);
   await agentWithdraw(shares);
   const after = (await getAccount(connection, safeUsdc)).amount;
   console.log(`  withdraw all shares -> Safe USDC ${after} (deposited 60_000_000)`);
@@ -173,6 +191,11 @@ async function run() {
   // kVault rounds shares in its own favour; one 60 USDC round trip on the fork lost 0.001005 USDC.
   console.log(`  round-trip cost: ${Number(OWNER_USDC - after) / 1e6} USDC`);
   assert(after >= OWNER_USDC - BigInt(10_000), "round trip lost more than 0.01 USDC");
+  const principalAfterExit = BigInt((await (program.account as any).vault.fetch(safe)).routePrincipal[0].toString());
+  const treasuryFee = (await getAccount(connection, treasuryUsdc)).amount;
+  console.log(`  after full exit: principal ${principalAfterExit}, treasury fee ${treasuryFee} (loss -> no fee)`);
+  assert.equal(principalAfterExit, BigInt(0));
+  assert.equal(treasuryFee, BigInt(0));
 
   await methods.withdraw(new BN(after.toString()))
     .accounts({ owner: owner.publicKey, vault: safe, usdcMint: USDC, ownerUsdcAta: ownerUsdc, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID })

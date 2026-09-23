@@ -33,6 +33,8 @@ if (!onDevnet && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(rpc))
 }
 
 const ZERO_ALLOCATION = Array(8).fill(0);
+const KAMINO_KVAULT_PROGRAM = new PublicKey("KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd");
+const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 const owner = Keypair.generate();
 const agent = Keypair.generate();
 const replacementAgent = Keypair.generate();
@@ -41,6 +43,8 @@ const payer = onDevnet
   ? Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(
     (process.env.V2_PAYER_KEYPAIR ?? "").replace(/^~/, homedir()), "utf8"))))
   : Keypair.generate();
+const admin = onDevnet ? payer : Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(
+  process.env.V2_ADMIN_KEYPAIR ?? "/tmp/yield-v2-admin.json", "utf8"))));
 const connection = new Connection(rpc, "confirmed");
 const provider = new anchor.AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
 anchor.setProvider(provider);
@@ -91,12 +95,39 @@ async function run() {
     const before = await connection.getBalance(payer.publicKey, "confirmed");
     console.log(`devnet payer ${payer.publicKey.toBase58()} balance ${before / 1e9} SOL`);
     console.log(`fund tx ${await fund([owner.publicKey], 30_000_000)}`);
+    // Funded so a rejected init_config fails on the authority check, not on rent.
+    await fund([attacker.publicKey], 2_000_000);
   } else {
     const payerAirdrop = await connection.requestAirdrop(payer.publicKey, 3_000_000_000);
     await connection.confirmTransaction(payerAirdrop, "confirmed");
     const airdrop = await connection.requestAirdrop(owner.publicKey, 2_000_000_000);
     await connection.confirmTransaction(airdrop, "confirmed");
   }
+  if (!onDevnet) {
+    await connection.confirmTransaction(await connection.requestAirdrop(admin.publicKey, 1_000_000_000), "confirmed");
+    // Funded so a rejected init_config fails on the authority check, not on rent.
+    await connection.confirmTransaction(await connection.requestAirdrop(attacker.publicKey, 1_000_000_000), "confirmed");
+  }
+  // --- Protocol config: only the upgrade authority can create it; fee capped at 20%; admin-only updates.
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], program.programId);
+  const [programData] = PublicKey.findProgramAddressSync([program.programId.toBuffer()], BPF_LOADER_UPGRADEABLE);
+  const initConfig = (signer: Keypair, feeBps: number) => (program.methods as any).initConfig(signer.publicKey, feeBps)
+    .accounts({ admin: signer.publicKey, config, programData, systemProgram: SystemProgram.programId })
+    .signers([signer]).rpc();
+  if (!(await connection.getAccountInfo(config))) {
+    await expectFailure("init_config by non-authority", () => initConfig(attacker, 500), /Unauthorized/);
+    await expectFailure("init_config fee above cap", () => initConfig(admin, 2_001), /FeeTooHigh/);
+    await initConfig(admin, 500);
+  }
+  const setConfig = (signer: Keypair, feeBps: number) => (program.methods as any).setConfig(admin.publicKey, admin.publicKey, feeBps)
+    .accounts({ admin: signer.publicKey, config }).signers([signer]).rpc();
+  await expectFailure("set_config by non-admin", () => setConfig(attacker, 500), /ConstraintHasOne|has_one|2001/);
+  await expectFailure("set_config fee above cap", () => setConfig(admin, 2_001), /FeeTooHigh/);
+  await setConfig(admin, 500);
+  const configState = await (program.account as any).config.fetch(config);
+  assert.equal(configState.performanceFeeBps, 500);
+  assert.equal((configState.admin as PublicKey).toBase58(), admin.publicKey.toBase58());
+
   const mint = await createMint(connection, payer, payer.publicKey, null, 6);
   const ownerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, owner.publicKey)).address;
   const attackerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, attacker.publicKey)).address;
@@ -124,12 +155,16 @@ async function run() {
     .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);
 
   // Allowlist is capped at 16 programs (keeps Safe rent low); TOKEN_PROGRAM_ID stays first for the CPI tests below.
-  const sixteen = [TOKEN_PROGRAM_ID, ...Array.from({ length: 15 }, () => Keypair.generate().publicKey)];
+  const sixteen = [TOKEN_PROGRAM_ID, KAMINO_KVAULT_PROGRAM, ...Array.from({ length: 14 }, () => Keypair.generate().publicKey)];
   const setAllowed = (programs: PublicKey[]) => (program.methods as any).setAllowedPrograms(programs)
     .accounts({ owner: owner.publicKey, vault, systemProgram: SystemProgram.programId }).signers([owner]).rpc();
   await expectFailure("allowlist of 17 programs", () => setAllowed([...sixteen, Keypair.generate().publicKey]), /TooManyPrograms/);
   await setAllowed(sixteen);
   assert.equal((await (program.account as any).vault.fetch(vault)).allowedPrograms.length, 16);
+  await expectFailure("generic CPI into Kamino kVault", () => program.methods.executeProtocolCpi(Buffer.from([0]))
+    .accounts({ authority: owner.publicKey, vault })
+    .remainingAccounts([{ pubkey: KAMINO_KVAULT_PROGRAM, isSigner: false, isWritable: false }])
+    .signers([owner]).rpc(), /UseDedicatedInstruction/);
 
   const transfer = createTransferInstruction(vaultAta, attackerAta, vault, 1_000_000);
   const remaining = [
@@ -242,10 +277,12 @@ async function run() {
   if (onDevnet) {
     await refund(owner);
     await refund(sponsored);
+    await refund(attacker);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
   console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
-    "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation and sponsored create_safe_for succeeded");
+    "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
+    "config access control and the Kamino generic-CPI block succeeded");
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });

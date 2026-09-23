@@ -714,6 +714,147 @@
       ]
     },
     {
+      "name": "init_config",
+      "docs": [
+        "One-time protocol config. Only the program's upgrade authority can create it, so nobody can",
+        "front-run the deploy and become admin."
+      ],
+      "discriminator": [
+        23,
+        235,
+        115,
+        232,
+        168,
+        96,
+        1,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "upgrade authority to be the signing admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  62,
+                  17,
+                  254,
+                  51,
+                  43,
+                  183,
+                  91,
+                  105,
+                  60,
+                  189,
+                  61,
+                  117,
+                  60,
+                  56,
+                  146,
+                  36,
+                  32,
+                  186,
+                  119,
+                  96,
+                  202,
+                  63,
+                  53,
+                  75,
+                  231,
+                  186,
+                  255,
+                  207,
+                  139,
+                  120,
+                  92
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                2,
+                168,
+                246,
+                145,
+                78,
+                136,
+                161,
+                176,
+                226,
+                16,
+                21,
+                62,
+                247,
+                99,
+                174,
+                43,
+                0,
+                194,
+                185,
+                61,
+                22,
+                193,
+                36,
+                210,
+                192,
+                83,
+                122,
+                16,
+                4,
+                128,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        },
+        {
+          "name": "performance_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "discriminator": [
         175,
@@ -984,6 +1125,35 @@
               }
             ]
           }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_usdc_ata",
+          "docs": [
+            "Treasury USDC account; owner and mint are checked in the handler when a fee is due."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
       "args": [
@@ -1164,6 +1334,64 @@
           "type": {
             "vec": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "set_config",
+      "docs": [
+        "Admin updates the treasury, the fee (capped) or hands admin over (e.g. to a Squads vault)."
+      ],
+      "discriminator": [
+        108,
+        158,
+        154,
+        175,
+        212,
+        98,
+        52,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        },
+        {
+          "name": "performance_fee_bps",
+          "type": "u16"
         }
       ]
     },
@@ -1559,6 +1787,19 @@
   ],
   "accounts": [
     {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
       "name": "Vault",
       "discriminator": [
         211,
@@ -1569,6 +1810,21 @@
         152,
         117,
         119
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "RouteExit",
+      "discriminator": [
+        225,
+        41,
+        83,
+        107,
+        248,
+        67,
+        189,
+        142
       ]
     }
   ],
@@ -1637,9 +1893,84 @@
       "code": 6012,
       "name": "AllocationExceeded",
       "msg": "Amount exceeds the owner's allocation for this route"
+    },
+    {
+      "code": 6013,
+      "name": "FeeTooHigh",
+      "msg": "Performance fee above the hard cap"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidTreasury",
+      "msg": "Treasury token account does not match the config"
+    },
+    {
+      "code": 6015,
+      "name": "InsufficientShares",
+      "msg": "Not enough shares in the Safe"
+    },
+    {
+      "code": 6016,
+      "name": "UseDedicatedInstruction",
+      "msg": "This protocol must be used through its dedicated instruction"
     }
   ],
   "types": [
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury",
+            "docs": [
+              "Wallet whose USDC token account receives performance fees."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "performance_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RouteExit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "route",
+            "type": "u8"
+          },
+          {
+            "name": "received",
+            "type": "u64"
+          },
+          {
+            "name": "principal_out",
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          }
+        ]
+      }
+    },
     {
       "name": "Vault",
       "type": {
@@ -1677,6 +2008,19 @@
             "name": "allowed_programs",
             "type": {
               "vec": "pubkey"
+            }
+          },
+          {
+            "name": "route_principal",
+            "docs": [
+              "Owner's cost basis per route (USDC base units), used to charge fees only on gains.",
+              "Appended last so earlier field offsets stay stable."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
             }
           }
         ]

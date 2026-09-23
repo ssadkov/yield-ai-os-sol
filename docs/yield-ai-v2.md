@@ -179,3 +179,11 @@ Dev-сервер нужно запускать из `web/node_modules` само�
   - `/api/v2/mainnet-rpc` публично доступен (белый список методов, upstream — публичный mainnet RPC);
   - `/v2/lab` и `/v2/cctp` на prod отдают 404, потому что им нужен devnet RPC.
 - Откат: `vercel promote yield-ai-os-96pxvp1ty-edbiz.vercel.app` (прежний prod-деплой) или обычный push в `main`.
+
+### MetaMask Mobile, 2026-09-23 — PASS через встроенный браузер
+
+- iOS, встроенный браузер MetaMask, `yield-ai-os-sol.vercel.app/v2/mainnet-probe`. MetaMask есть в Select Wallet, Solana-аккаунт `EfkWSg4bpCq4oKguJ3Z7k2RHdVe1jt587yWr1CmZ7Dtb` (другой аккаунт, не `2twC…`).
+- **B (Wallet Standard `signAndSendTransaction`, `chain: solana:mainnet`)**: memo v0 подтверждён, finalized, `jx5tJDXh5Lp7cAggC2pk3sjSV57HEzqdX9rSzrM5JbE9kxzBz4vepfcubgeoACEUGBbE3M28TWhtwPa8NZEnYvK`.
+- **A (`signTransaction`, отправляет страница)**: завис на «Waiting for wallet», как и на desktop.
+- В Chrome на телефоне MetaMask в модалке не появляется. Для мобильного входа нужна deeplink-кнопка «Open in MetaMask» (`https://metamask.app.link/dapp/<host>/<path>`).
+- **Ограничение для архитектуры:** с MetaMask рабочий путь только `signAndSendTransaction`. Транзакции, где нужна вторая подпись (серверный fee payer, co-sign агентом, частичная подпись), с MetaMask не проходят, пока не доказано обратное. Все owner-действия Safe нужно проектировать так, чтобы единственным подписантом и плательщиком был владелец.

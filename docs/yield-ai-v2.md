@@ -168,3 +168,14 @@ Dev-сервер нужно запускать из `web/node_modules` само�
   - перевод 0.001 SOL на `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2`: `5awv4baieFGU4GViokBS5gX2fw2C6MZEidToUfBaKUti9pz7ZQ1bT3whKtdWoHuBdSSpdfLsYpdkWPssVikVpm84`.
 - Баланс `2twC…pcdj`: 0.004 → 0.002989699 SOL (0.001 перевод + 10 301 lamports комиссий на две транзакции).
 - Вывод: MetaMask Extension подписывает и отправляет Solana-транзакции нашего dapp на mainnet. Owner Safe на MetaMask возможен на mainnet. На devnet MetaMask по-прежнему не работает (три пробы показали Mainnet).
+
+## Vercel prod для мобильной пробы, 2026-09-23
+
+- Preview (`yield-ai-os-4ua0y809v-edbiz.vercel.app`) закрыт Vercel Authentication, поэтому с телефона не открывается.
+- По решению пользователя ветка `codex/yield-ai-v2` выкачена в production проекта `edbiz/yield-ai-os-sol` через CLI: деплой `yield-ai-os-oifytj5p9-edbiz.vercel.app`, алиас `yield-ai-os-sol.vercel.app`. Пользователей у продукта нет.
+- Build env для этого деплоя: `NEXT_PUBLIC_V2_LAB_ENABLED=1`, `NEXT_PUBLIC_V2_PROGRAM_ID=8xa1…z3D5`. Остальные prod-переменные не менялись, настройки проекта тоже.
+- Последствия:
+  - основное приложение на prod собрано с v2 IDL, чей program ID есть только на devnet, поэтому старые mainnet-функции Safe на prod не работают;
+  - `/api/v2/mainnet-rpc` публично доступен (белый список методов, upstream — публичный mainnet RPC);
+  - `/v2/lab` и `/v2/cctp` на prod отдают 404, потому что им нужен devnet RPC.
+- Откат: `vercel promote yield-ai-os-96pxvp1ty-edbiz.vercel.app` (прежний prod-деплой) или обычный push в `main`.

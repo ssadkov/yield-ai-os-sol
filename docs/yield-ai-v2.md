@@ -187,3 +187,5 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 - **A (`signTransaction`, отправляет страница)**: завис на «Waiting for wallet», как и на desktop.
 - В Chrome на телефоне MetaMask в модалке не появляется. Для мобильного входа нужна deeplink-кнопка «Open in MetaMask» (`https://metamask.app.link/dapp/<host>/<path>`).
 - **Ограничение для архитектуры:** с MetaMask рабочий путь только `signAndSendTransaction`. Транзакции, где нужна вторая подпись (серверный fee payer, co-sign агентом, частичная подпись), с MetaMask не проходят, пока не доказано обратное. Все owner-действия Safe нужно проектировать так, чтобы единственным подписантом и плательщиком был владелец.
+
+- 2026-09-23: prod откачен на `yield-ai-os-96pxvp1ty-edbiz.vercel.app` (`vercel promote`). Сборка v2 на prod ломала депозиты в старые Safe (`Attempt to load a program that does not exist`: IDL указывал на `8xa1…`, которой нет в mainnet), а владельцам старых Safe нужно вывести средства перед закрытием `3Vtz…`. Мобильная проба MetaMask к этому моменту уже прошла. **Урок:** не выкатывать v2 на тот же prod-алиас, пока в старой программе есть средства; для v2 нужен отдельный Vercel-проект или домен.

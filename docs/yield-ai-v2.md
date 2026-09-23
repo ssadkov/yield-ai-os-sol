@@ -264,3 +264,7 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 - `solana program close 3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s --bypass-warning` → +2.53469976 SOL;
 - `8xwj…`: 2.615605898 → 5.169212938 SOL (сходится с точностью до 10 000 lamports комиссий двух транзакций).
 - `solana program show` → «has been closed». Program ID `3Vtz…` больше не используется. Оставшиеся в Safe активы и rent PDA необратимо заблокированы.
+
+### Prod = v2 (devnet), 2026-09-23
+
+Старая программа закрыта, конфликта больше нет, поэтому v2 выкачена на тот же алиас `yield-ai-os-sol.vercel.app` (деплой `yield-ai-os-g1e0cd0jg-edbiz.vercel.app`). Build env: `NEXT_PUBLIC_V2_LAB_ENABLED=1`, `NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com`, devnet USDC `4zMMC9…`, `NEXT_PUBLIC_V2_PROGRAM_ID=8xa1…`. Страницы `/`, `/v2/lab`, `/v2/cctp`, `/v2/mainnet-probe` отвечают 200. Переключение на mainnet — после деплоя программы по roadmap. Дальнейший план — миграция в основной Yield AI (там уже подключён Phantom).

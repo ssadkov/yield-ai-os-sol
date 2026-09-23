@@ -57,10 +57,22 @@ async function expectFailure(label: string, action: () => Promise<unknown>, expe
   assert.match(String(failure), expected, `${label}: failed for an unexpected reason`);
 }
 
+// The public devnet RPC load-balances nodes; a fresh blockhash is sometimes unknown to the simulating node.
+async function sendWithRetry(tx: Transaction, signers: Keypair[]) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await sendAndConfirmTransaction(connection, tx, signers, { commitment: "confirmed" });
+    } catch (error) {
+      if (attempt >= 4 || !/Blockhash not found/.test(String(error))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+}
+
 async function fund(to: PublicKey[], lamports: number) {
   const tx = new Transaction().add(...to.map((toPubkey) =>
     SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey, lamports })));
-  return sendAndConfirmTransaction(connection, tx, [payer], { commitment: "confirmed" });
+  return sendWithRetry(tx, [payer]);
 }
 
 async function refund(from: Keypair) {
@@ -68,7 +80,7 @@ async function refund(from: Keypair) {
   if (balance <= 5_000) return;
   const tx = new Transaction().add(SystemProgram.transfer({
     fromPubkey: from.publicKey, toPubkey: payer.publicKey, lamports: balance - 5_000 }));
-  await sendAndConfirmTransaction(connection, tx, [from], { commitment: "confirmed" });
+  await sendWithRetry(tx, [from]);
 }
 
 async function run() {
@@ -175,7 +187,7 @@ async function run() {
   assert.equal(await connection.getBalance(owner.publicKey, "confirmed"), ownerBeforeClose + ataRent);
 
   const donation = new Transaction().add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: vault, lamports: 10_000_000 }));
-  await sendAndConfirmTransaction(connection, donation, [payer], { commitment: "confirmed" });
+  await sendWithRetry(donation, [payer]);
   await expectFailure("non-owner withdraw_excess_lamports", () => withdrawExcess(attacker), notOwner);
   await withdrawExcess(owner);
   const vaultInfo = (await connection.getAccountInfo(vault))!;

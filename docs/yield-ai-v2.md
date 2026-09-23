@@ -269,3 +269,71 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 ### Prod = v2 (devnet), 2026-09-23
 
 Старая программа закрыта, конфликта больше нет, поэтому v2 выкачена на тот же алиас `yield-ai-os-sol.vercel.app` (деплой `yield-ai-os-g1e0cd0jg-edbiz.vercel.app`). Build env: `NEXT_PUBLIC_V2_LAB_ENABLED=1`, `NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com`, devnet USDC `4zMMC9…`, `NEXT_PUBLIC_V2_PROGRAM_ID=8xa1…`. Страницы `/`, `/v2/lab`, `/v2/cctp`, `/v2/mainnet-probe` отвечают 200. Переключение на mainnet — после деплоя программы по roadmap. Дальнейший план — миграция в основной Yield AI (там уже подключён Phantom).
+
+## Архитектура Safe v2 (состояние на 2026-09-23)
+
+### Компоненты
+
+```
+ Solana-кошелёк владельца (Phantom / Solflare / MetaMask-Solana)
+        │  одна подпись, владелец = единственный signer и fee payer
+        ▼
+ Web (Next.js, /v2/safe) ── собирает инструкции, симулирует, отправляет через
+        │                   Wallet Standard signAndSendTransaction с явным chain
+        ▼
+ Программа yield_vault v2 (8xa1…, upgrade authority 8xwj… → Squads)
+        │
+        ├─ Safe PDA = ["vault", owner]   (account Vault: owner, agent, strategy, allowlist)
+        ├─ ATA Safe для каждого mint     (authority = Safe PDA; USDC ATA создаётся при initialize)
+        └─ протокольные позиции от имени Safe PDA (Kamino shares, ONyc — в будущем)
+
+ EVM-кошелёк (MetaMask-EVM, позже любой EIP-6963) ── CCTP depositForBurnWithHook
+        └─ Circle Forwarding Service минтит USDC прямо в USDC ATA Safe (без нашего bridge-контракта)
+```
+
+### Инварианты
+
+1. **Вывести средства из Safe может только владелец.** Все инструкции, которые двигают токены или lamports наружу (`withdraw`, `withdraw_spl`, `execute_*_cpi`, `close_empty_token_account`, `withdraw_excess_lamports`, `close_safe`), требуют подписи `owner` и проверяют `has_one = owner` или seeds `["vault", signer]`. Получатель rent и lamports — всегда владелец.
+2. **Агент сейчас ничего не может.** `agent` хранится, но ни одна инструкция его не принимает. Будущие действия агента — отдельные узкие инструкции (например, `kamino_deposit` / `kamino_withdraw`): фиксированная программа и дискриминатор, счета назначения принадлежат Safe, лимиты сумм, проверка балансов после. Generic CPI агенту не возвращаем.
+3. **Любой может пополнить Safe.** Перевод в ATA Safe или lamports на PDA не требуют разрешения; именно так работает CCTP forwarding. Учёт ведётся по фактическим балансам счетов в сети, а не по счётчикам в контракте.
+4. **Потерять доступ нельзя, даже закрыв Safe.** PDA детерминирован от владельца, а `initialize` переиспользует существующий USDC ATA. Повторная инициализация возвращает контроль над всеми оставшимися ATA и позициями.
+5. **Одна транзакция — один подписант.** MetaMask поддерживает только `signAndSendTransaction`, а `signTransaction` зависает, поэтому схемы с fee payer со стороны сервера или co-sign агентом с MetaMask не работают. Всё, что делает владелец, укладывается в одну его подпись; действия из нескольких шагов пакуются в одну транзакцию.
+
+### Инструкции по ролям
+
+| Роль | Инструкции |
+|---|---|
+| Владелец | `initialize`, `deposit`, `deposit_spl`, `withdraw`, `withdraw_spl`, `set_agent`, `set_allowed_programs`, `execute_protocol_cpi`, `execute_swap_cpi`, `close_empty_token_account`, `withdraw_excess_lamports`, `close_safe` |
+| Агент | нет (до узких инструкций Kamino/ONyc) |
+| Любой | перевести токены или SOL в Safe (CCTP forwarding, обычный перевод) |
+
+### Поток пользователя (MVP)
+
+1. Подключение Solana-кошелька → UI выводит Safe PDA → `Create Safe` (≈0.0037 SOL rent Safe + 0.002 SOL USDC ATA; платит владелец, rent возвращается при `close_safe`).
+2. Пополнение: USDC с Solana-кошелька (`deposit`) или USDC с EVM через CCTP прямо в ATA Safe.
+3. Размещение (следующий этап): Kamino USDC / ONyc по слайдеру, выполняется агентом через узкие инструкции или владельцем через CPI.
+4. Выход: вывод всех holdings, затем «Close empty accounts» и «Close Safe» — всё возвращается владельцу.
+
+### Кошельки
+
+| Кошелёк | Devnet | Mainnet | Способ |
+|---|---|---|---|
+| Phantom / Solflare | да | да | Wallet Standard `signAndSendTransaction` |
+| MetaMask Extension (Solana) | **нет** (всегда показывает Mainnet) | да, проверено 2026-09-23 | `signAndSendTransaction` + `chain: solana:mainnet` |
+| MetaMask Mobile | нет | да, во встроенном браузере MetaMask | то же; из Chrome на телефоне нужна deeplink-кнопка |
+| Rabby и другие EVM-only | — | только EVM-сторона (CCTP) | нет Solana-аккаунта, Safe создать не может |
+
+### EVM-кошельки в будущем: что закладывать в контракт
+
+**Вариант A (сейчас и рекомендуемый для MVP): EVM — только источник денег.** Владелец Safe — Solana-ключ; у пользователей MetaMask он есть в том же аккаунте. EVM-кошелёк подписывает CCTP burn, USDC приходит прямо в ATA Safe. Связь `0x` ↔ Solana-адреса при необходимости подтверждается двумя подписями одного сообщения (EIP-191 + ed25519) и хранится вне сети. **Изменений в контракте не нужно.** Любой EVM-кошелёк (Rabby, Coinbase и т.д.) подключается выбором через EIP-6963 на странице CCTP.
+
+**Вариант B (позже, если нужны пользователи только с EVM): Safe, которым владеет EVM-адрес.** Отдельное пространство PDA `["vault_evm", eth_address20]` и отдельный набор инструкций, авторизуемых secp256k1-подписью (EIP-712, domain = программа + cluster, nonce в аккаунте) через нативную программу `Secp256k1SigVerify` и introspection sysvar инструкций. Такой пользователь не держит SOL, поэтому транзакции отправляет relayer (fee payer). Это значит: спонсорство комиссий, защита relayer от злоупотреблений и отдельный аудит. **Существующие Safe это не затрагивает** — B добавляется новыми инструкциями и новым типом аккаунта через апгрейд, миграция не нужна. Резервировать поля в `Vault` сейчас незачем.
+
+**Вариант C: кросс-чейн сообщения (Wormhole / LayerZero).** Действия авторизуются на EVM-стороне и доставляются в программу сообщением. Тяжелее B, зависит от внешней инфраструктуры. Не рассматриваем.
+
+**Что стоит решить до mainnet (дёшево сейчас, дорого потом):** спонсируемое создание Safe — инструкция `create_safe_for(owner)`, где rent платит relayer, а подпись владельца не нужна (PDA всё равно привязан к owner). Она убирает требование «иметь SOL, чтобы создать Safe» для пользователей, пришедших с EVM через CCTP, и совместима с MetaMask (владелец ничего не подписывает). Открытый вопрос: кому возвращать rent при `close_safe` — владельцу (проще, relayer теряет ~0.006 SOL на Safe) или плательщику (нужно хранить `rent_payer` в `Vault`). Решение за пользователем.
+
+### Конфигурация web
+
+- `NEXT_PUBLIC_PROGRAM_ID` в переменных prod-проекта Vercel всё ещё указывает на закрытую `3Vtz…`; сборки v2 переопределяют её через `--build-env NEXT_PUBLIC_PROGRAM_ID=8xa1…`. Переменную в проекте стоит обновить (настройка проекта — решает владелец).
+- Prod `yield-ai-os-sol.vercel.app` = v2 на devnet; `/v2/safe` — основной UI Safe.

@@ -61,13 +61,20 @@ For gate 7, record each size as one complete round trip. Blank cells mean unmeas
 
 ### Contract roadmap: account lifecycle (added 2026-09-23)
 
-The old mainnet program `3Vtz…` has no way to reclaim rent except through the generic CPI, and cannot release excess PDA lamports or close a Safe at all. v2 must ship these as dedicated owner-only instructions before mainnet:
+The old mainnet program `3Vtz…` (closed 2026-09-23) had no way to reclaim rent except through the generic CPI, and could not release excess PDA lamports or close a Safe. **Implemented in v2 on 2026-09-23** as owner-only instructions:
 
-- `close_empty_token_account`: owner-only. Requires `amount == 0` and the account owner to be the Safe PDA; supports SPL Token and Token-2022. Rent goes to the **owner**, never to the caller or agent.
-- `withdraw_excess_lamports`: owner-only. Returns PDA lamports above the rent-exempt minimum to the owner. It replaces the uncommitted `refund_excess_lamports` draft in the main checkout, which let the agent collect lamports.
-- `close_safe`: owner-only. Allowed only when the Safe owns no token accounts and has no open protocol positions (checked off-chain in the UI and enforced on-chain by requiring zero token accounts passed in). Closes the Safe PDA and returns all lamports to the owner.
-- Each instruction is signed by the owner alone and can be batched with others, so one MetaMask `signAndSendTransaction` covers a full cleanup.
-- Upgrade authority: deploy under a hot key, then transfer it to a Squads multisig before the first external deposit (see *Upgrade authority* below).
+- `close_empty_token_account`: `has_one = owner`, `token::authority = vault`, `token::token_program = token_program`, `amount == 0`; SPL Token and Token-2022. Rent goes to the **owner**, never to the caller or agent.
+- `withdraw_excess_lamports`: debits Safe PDA lamports above `Rent::minimum_balance(data_len)` directly (the PDA is program-owned) and credits the owner; fails with `NoExcessLamports` when there is nothing to move. Replaces the uncommitted `refund_excess_lamports` draft in the main checkout, which let the agent collect lamports.
+- `close_safe`: Anchor `close = owner`. The program cannot enumerate token accounts, so it does not claim the Safe is empty; the UI must close or empty ATAs first. Leftovers remain recoverable because the PDA is `["vault", owner]` and `initialize` now uses `init_if_needed` for the Safe USDC ATA: re-initializing restores control over the same accounts. The test proves this with 0.8 test-USDC left in the ATA through close → re-init → withdraw.
+- Each instruction is signed by the owner alone and can be batched, so one MetaMask `signAndSendTransaction` covers a full cleanup.
+- Local validator: `v2-security` PASS on 2026-09-23 (all of the above plus non-owner rejections). Devnet upgrade pending: needs ~2 devnet SOL for the upgrade buffer (payer had 1.70; faucet rate-limited).
+
+### Roadmap: mainnet (target ~2026-09-30)
+
+1. Deploy v2 to mainnet under a new program ID from `8xwj…` (≈2.7 SOL rent for the current 387 KB binary with ~10% headroom; payer holds 5.17 SOL).
+2. Before the first external deposit: transfer upgrade authority to a Squads multisig (`solana program set-upgrade-authority … --skip-new-upgrade-authority-signer-check`).
+3. Point the prod web build at the mainnet program; MetaMask mainnet cycle with $1 USDC (create Safe, deposit, full withdraw, close ATAs and Safe).
+4. CCTP Base → Safe on mainnet with ~$2.
 
 ### Upgrade authority and multisig
 

@@ -4,8 +4,8 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use anchor_spl::token_interface::{
-    self, Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount, TokenInterface,
-    TransferChecked,
+    self, CloseAccount, Mint as InterfaceMint, TokenAccount as InterfaceTokenAccount,
+    TokenInterface, TransferChecked,
 };
 
 declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
@@ -225,6 +225,45 @@ pub mod yield_vault {
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         Ok(())
     }
+
+    /// Owner-only: close a zero-balance SPL Token / Token-2022 account owned by the Safe PDA.
+    /// Rent always goes to the owner.
+    pub fn close_empty_token_account(ctx: Context<CloseEmptyTokenAccount>) -> Result<()> {
+        require!(ctx.accounts.token_account.amount == 0, ErrorCode::TokenAccountNotEmpty);
+        let vault = &ctx.accounts.vault;
+        let owner_key = ctx.accounts.owner.key();
+        let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
+        let signer: &[&[&[u8]]] = &[seeds];
+        token_interface::close_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account: ctx.accounts.token_account.to_account_info(),
+                destination: ctx.accounts.owner.to_account_info(),
+                authority: ctx.accounts.vault.to_account_info(),
+            },
+            signer,
+        ))
+    }
+
+    /// Owner-only: move Safe PDA lamports above its rent-exempt minimum to the owner.
+    pub fn withdraw_excess_lamports(ctx: Context<WithdrawExcessLamports>) -> Result<()> {
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let minimum = Rent::get()?.minimum_balance(vault_info.data_len());
+        let excess = vault_info.lamports().saturating_sub(minimum);
+        require!(excess > 0, ErrorCode::NoExcessLamports);
+        // The Safe PDA is owned by this program, so it can be debited directly.
+        vault_info.sub_lamports(excess)?;
+        ctx.accounts.owner.to_account_info().add_lamports(excess)?;
+        Ok(())
+    }
+
+    /// Owner-only: close the Safe account and return all its lamports to the owner.
+    /// Token accounts cannot be enumerated on-chain; the client must close or empty them first.
+    /// Anything left behind stays recoverable: the PDA is derived from the owner, and
+    /// `initialize` accepts an existing USDC ATA, so re-initializing restores control.
+    pub fn close_safe(_ctx: Context<CloseSafe>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
@@ -259,8 +298,9 @@ pub struct Initialize<'info> {
     )]
     pub vault: Account<'info, Vault>,
     pub usdc_mint: Account<'info, Mint>,
+    // init_if_needed: after close_safe the ATA may still exist; re-initializing must reuse it.
     #[account(
-        init,
+        init_if_needed,
         payer = owner,
         associated_token::mint = usdc_mint,
         associated_token::authority = vault,
@@ -442,6 +482,52 @@ pub struct ExecuteProtocol<'info> {
     pub vault: Account<'info, Vault>,
 }
 
+#[derive(Accounts)]
+pub struct CloseEmptyTokenAccount<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(
+        mut,
+        token::authority = vault,
+        token::token_program = token_program,
+    )]
+    pub token_account: InterfaceAccount<'info, InterfaceTokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawExcessLamports<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+}
+
+#[derive(Accounts)]
+pub struct CloseSafe<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        close = owner,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Unauthorized")]
@@ -454,4 +540,8 @@ pub enum ErrorCode {
     TooManyPrograms,
     #[msg("Amount must be greater than zero")]
     ZeroAmount,
+    #[msg("Token account still holds tokens")]
+    TokenAccountNotEmpty,
+    #[msg("Safe holds no lamports above its rent-exempt minimum")]
+    NoExcessLamports,
 }

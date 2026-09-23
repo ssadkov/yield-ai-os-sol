@@ -135,18 +135,63 @@ async function run() {
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
   assert.equal((await getAccount(connection, ownerAta)).amount, 200_000n);
 
+  // --- Account lifecycle: close_empty_token_account, close_safe + re-initialize, withdraw_excess_lamports.
+  const methods = program.methods as any;
+  const closeAta = (signer: Keypair) => methods.closeEmptyTokenAccount()
+    .accounts({ owner: signer.publicKey, vault, tokenAccount: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
+    .signers([signer]).rpc();
+  const closeSafe = (signer: Keypair) => methods.closeSafe()
+    .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
+  const withdrawExcess = (signer: Keypair) => methods.withdrawExcessLamports()
+    .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
+  const notOwner = /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/;
+
+  await expectFailure("close non-empty token account", () => closeAta(owner), /TokenAccountNotEmpty/);
+  await expectFailure("non-owner close_safe", () => closeSafe(attacker), notOwner);
+
+  // Close the Safe while its ATA still holds 800_000: the tokens must stay recoverable.
+  await closeSafe(owner);
+  assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
+  assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
+  await program.methods.initialize(agent.publicKey, { conservative: {} }, [TOKEN_PROGRAM_ID])
+    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
+      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId })
+    .signers([owner]).rpc();
+
   await program.methods.withdraw(new BN(800_000))
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, ownerUsdcAta: ownerAta,
       vaultUsdcAta: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([owner]).rpc();
   assert.equal((await getAccount(connection, vaultAta)).amount, 0n);
   assert.equal((await getAccount(connection, ownerAta)).amount, 1_000_000n);
+
+  await expectFailure("non-owner close_empty_token_account", () => closeAta(attacker), notOwner);
+  const ataRent = (await connection.getAccountInfo(vaultAta))!.lamports;
+  const ownerBeforeClose = await connection.getBalance(owner.publicKey, "confirmed");
+  await closeAta(owner);
+  assert.equal(await connection.getAccountInfo(vaultAta), null, "vault ATA still exists after close");
+  // The provider wallet pays fees, so the owner's balance grows by exactly the ATA rent.
+  assert.equal(await connection.getBalance(owner.publicKey, "confirmed"), ownerBeforeClose + ataRent);
+
+  const donation = new Transaction().add(SystemProgram.transfer({ fromPubkey: payer.publicKey, toPubkey: vault, lamports: 10_000_000 }));
+  await sendAndConfirmTransaction(connection, donation, [payer], { commitment: "confirmed" });
+  await expectFailure("non-owner withdraw_excess_lamports", () => withdrawExcess(attacker), notOwner);
+  await withdrawExcess(owner);
+  const vaultInfo = (await connection.getAccountInfo(vault))!;
+  assert.equal(vaultInfo.lamports, await connection.getMinimumBalanceForRentExemption(vaultInfo.data.length));
+  await expectFailure("withdraw_excess_lamports with nothing to withdraw", () => withdrawExcess(owner), /NoExcessLamports/);
+
+  await closeSafe(owner);
+  assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after final close_safe");
+
   console.log(`owner ${owner.publicKey.toBase58()} vault ${vault.toBase58()} mint ${mint.toBase58()}`);
   if (onDevnet) {
     await refund(owner);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
-  console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery and full withdrawal succeeded");
+  console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
+    "empty-ATA close, excess-lamport withdrawal and final close_safe succeeded");
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });

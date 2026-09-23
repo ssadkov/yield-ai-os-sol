@@ -18,9 +18,84 @@ pub const ROUTE_KAMINO_USDC: usize = 0;
 pub const ROUTE_ONYC: usize = 1;
 const BPS_DENOMINATOR: u32 = 10_000;
 
+/// Kamino kVault program and the only kVault the agent may use (Kamino USDC, mainnet).
+const KAMINO_KVAULT_PROGRAM: Pubkey = pubkey!("KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd");
+const KAMINO_USDC_KVAULT: Pubkey = pubkey!("91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy");
+/// Anchor discriminators of the kVault instructions (sha256("global:<name>")[..8]).
+const KVAULT_DEPOSIT: [u8; 8] = [242, 35, 198, 137, 82, 225, 242, 182];
+const KVAULT_WITHDRAW: [u8; 8] = [183, 18, 70, 156, 148, 109, 161, 34];
+const KVAULT_WITHDRAW_FROM_AVAILABLE: [u8; 8] = [19, 131, 112, 155, 170, 220, 34, 57];
+/// Account positions inside the kVault instruction (after the program account in remaining_accounts).
+const KV_USER: usize = 0;
+const KV_VAULT_STATE: usize = 1;
+const KV_DEPOSIT_USER_TOKEN_ATA: usize = 6;
+const KV_DEPOSIT_USER_SHARES_ATA: usize = 7;
+const KV_DEPOSIT_FIXED_ACCOUNTS: usize = 13;
+const KV_WITHDRAW_USER_TOKEN_ATA: usize = 5;
+const KV_WITHDRAW_USER_SHARES_ATA: usize = 7;
+const KV_WITHDRAW_AVAILABLE_FIXED_ACCOUNTS: usize = 14;
+const KV_WITHDRAW_FULL_FIXED_ACCOUNTS: usize = 25;
+
 fn validate_allocation(allocation_bps: &[u16; MAX_ROUTES]) -> Result<()> {
     let total: u32 = allocation_bps.iter().map(|bps| u32::from(*bps)).sum();
     require!(total <= BPS_DENOMINATOR, ErrorCode::AllocationTooHigh);
+    Ok(())
+}
+
+/// Owner, or the configured agent (the default key means "no agent").
+fn require_owner_or_agent(vault: &Vault, authority: &Pubkey) -> Result<()> {
+    let is_agent = vault.agent != Pubkey::default() && *authority == vault.agent;
+    require!(*authority == vault.owner || is_agent, ErrorCode::Unauthorized);
+    Ok(())
+}
+
+/// The account must be an SPL Token / Token-2022 account whose authority is the Safe PDA.
+/// Returns its balance. This is what keeps agent actions inside the Safe.
+fn safe_token_balance(info: &AccountInfo, safe: &Pubkey) -> Result<u64> {
+    require!(
+        *info.owner == anchor_spl::token::ID || *info.owner == anchor_spl::token_2022::ID,
+        ErrorCode::NotSafeTokenAccount
+    );
+    let data = info.try_borrow_data()?;
+    let account = InterfaceTokenAccount::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(ErrorCode::NotSafeTokenAccount))?;
+    require_keys_eq!(account.owner, *safe, ErrorCode::NotSafeTokenAccount);
+    Ok(account.amount)
+}
+
+/// Checks shared by every kVault call, then invokes it with the Safe PDA as signer.
+/// `rem` = [kVault program, ...kVault instruction accounts in IDL order, ...remaining accounts].
+fn invoke_kvault(
+    vault: &Account<Vault>,
+    rem: &[AccountInfo],
+    data: Vec<u8>,
+    fixed_accounts: usize,
+    user_token_ata: usize,
+    user_shares_ata: usize,
+) -> Result<()> {
+    require!(rem.len() > fixed_accounts, ErrorCode::InvalidKaminoAccounts);
+    require_keys_eq!(rem[0].key(), KAMINO_KVAULT_PROGRAM, ErrorCode::InvalidKaminoAccounts);
+    let inner = &rem[1..];
+    let vault_key = vault.key();
+    require_keys_eq!(inner[KV_USER].key(), vault_key, ErrorCode::InvalidKaminoAccounts);
+    require_keys_eq!(inner[KV_VAULT_STATE].key(), KAMINO_USDC_KVAULT, ErrorCode::KaminoVaultNotAllowed);
+    safe_token_balance(&inner[user_token_ata], &vault_key)?;
+    safe_token_balance(&inner[user_shares_ata], &vault_key)?;
+
+    let metas: Vec<AccountMeta> = inner
+        .iter()
+        .map(|a| {
+            let is_signer = a.key() == vault_key || a.is_signer;
+            if a.is_writable {
+                AccountMeta::new(a.key(), is_signer)
+            } else {
+                AccountMeta::new_readonly(a.key(), is_signer)
+            }
+        })
+        .collect();
+    let ix = Instruction { program_id: KAMINO_KVAULT_PROGRAM, accounts: metas, data };
+    let seeds: &[&[u8]] = &[b"vault", vault.owner.as_ref(), &[vault.bump]];
+    invoke_signed(&ix, rem, &[seeds])?;
     Ok(())
 }
 
@@ -258,6 +333,57 @@ pub mod yield_vault {
         let signer: &[&[&[u8]]] = &[seeds];
         invoke_signed(&ix, rem, signer)?;
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        Ok(())
+    }
+
+    /// Owner or agent: move `amount` USDC from the Safe into the Kamino USDC kVault.
+    /// Funds can only travel between the Safe's own token accounts and that kVault, and a single
+    /// deposit may not exceed the owner's Kamino target share of the Safe's idle USDC.
+    pub fn kamino_deposit<'info>(
+        ctx: Context<'_, '_, '_, 'info, KaminoAction<'info>>,
+        amount: u64,
+    ) -> Result<()> {
+        require!(amount > 0, ErrorCode::ZeroAmount);
+        let vault = &ctx.accounts.vault;
+        require_owner_or_agent(vault, &ctx.accounts.authority.key())?;
+        let target_bps = vault.allocation_bps[ROUTE_KAMINO_USDC];
+        require!(target_bps > 0, ErrorCode::RouteDisabled);
+
+        let rem = ctx.remaining_accounts;
+        require!(rem.len() > KV_DEPOSIT_FIXED_ACCOUNTS, ErrorCode::InvalidKaminoAccounts);
+        let idle = safe_token_balance(&rem[1 + KV_DEPOSIT_USER_TOKEN_ATA], &vault.key())?;
+        let cap = (u128::from(idle) * u128::from(target_bps) / u128::from(BPS_DENOMINATOR)) as u64;
+        require!(amount <= cap, ErrorCode::AllocationExceeded);
+
+        let mut data = KVAULT_DEPOSIT.to_vec();
+        data.extend_from_slice(&amount.to_le_bytes());
+        invoke_kvault(vault, rem, data, KV_DEPOSIT_FIXED_ACCOUNTS,
+            KV_DEPOSIT_USER_TOKEN_ATA, KV_DEPOSIT_USER_SHARES_ATA)?;
+        ctx.accounts.vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        Ok(())
+    }
+
+    /// Owner or agent: redeem `shares` from the Kamino USDC kVault back into the Safe.
+    /// `from_reserve = false` uses withdraw_from_available; `true` uses the full withdraw that may
+    /// pull liquidity from a lending reserve. USDC always lands in the Safe's own token account.
+    pub fn kamino_withdraw<'info>(
+        ctx: Context<'_, '_, '_, 'info, KaminoAction<'info>>,
+        shares: u64,
+        from_reserve: bool,
+    ) -> Result<()> {
+        require!(shares > 0, ErrorCode::ZeroAmount);
+        let vault = &ctx.accounts.vault;
+        require_owner_or_agent(vault, &ctx.accounts.authority.key())?;
+        let (discriminator, fixed) = if from_reserve {
+            (KVAULT_WITHDRAW, KV_WITHDRAW_FULL_FIXED_ACCOUNTS)
+        } else {
+            (KVAULT_WITHDRAW_FROM_AVAILABLE, KV_WITHDRAW_AVAILABLE_FIXED_ACCOUNTS)
+        };
+        let mut data = discriminator.to_vec();
+        data.extend_from_slice(&shares.to_le_bytes());
+        invoke_kvault(vault, ctx.remaining_accounts, data, fixed,
+            KV_WITHDRAW_USER_TOKEN_ATA, KV_WITHDRAW_USER_SHARES_ATA)?;
+        ctx.accounts.vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         Ok(())
     }
 
@@ -550,6 +676,18 @@ pub struct ExecuteProtocol<'info> {
 }
 
 #[derive(Accounts)]
+pub struct KaminoAction<'info> {
+    /// Owner or agent; checked in the handler.
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", vault.owner.as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Account<'info, Vault>,
+}
+
+#[derive(Accounts)]
 pub struct CloseEmptyTokenAccount<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
@@ -613,4 +751,14 @@ pub enum ErrorCode {
     NoExcessLamports,
     #[msg("Allocation exceeds 100% (10_000 bps)")]
     AllocationTooHigh,
+    #[msg("Kamino accounts do not match the expected kVault instruction layout")]
+    InvalidKaminoAccounts,
+    #[msg("Only the Kamino USDC kVault is allowed")]
+    KaminoVaultNotAllowed,
+    #[msg("Token account is not owned by this Safe")]
+    NotSafeTokenAccount,
+    #[msg("Owner allocation for this route is zero")]
+    RouteDisabled,
+    #[msg("Amount exceeds the owner's allocation for this route")]
+    AllocationExceeded,
 }

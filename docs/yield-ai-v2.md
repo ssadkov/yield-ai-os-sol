@@ -353,3 +353,24 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 - Тест дополнен: allowlist из 17 программ → `TooManyPrograms`, из 16 — проходит. PASS локально и на devnet: апгрейд `4dy7PDAC2CkSuw1Qtsy8c1iqJeupSXERcSJUAPFLoCZAKH1BhhP87rVMXVuNd8vgxL77LXzXBCikCwgA1kk8wf1w`, slot 503111653, sha256 `6b67d0bd…7276eaad` совпадает со сборкой. Старые Safe на devnet (2 134 байт) продолжают работать: Anchor читает структуру из более длинного буфера, `set_allowed_programs` уменьшает аккаунт через realloc.
 - Vanity program ID для mainnet: **`yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`** (`solana-keygen grind --starts-with yie1:1`, 22 потока, 394 млн ключей за 1 541 с). Keypair только в WSL: `~/.config/solana/yield-v2/vanity/yie1Jjq6….json` (права 600). Для mainnet-сборки нужны `declare_id!` и `Anchor.toml [programs.mainnet]` на этот ID — devnet-сборка остаётся на `8xa1…`.
 - `yie1d…`: на 5 символов ожидаемо ≈58× больше ключей. При скорости ≈255 тыс. ключей/с это порядка суток с большим разбросом; одной ночи может не хватить.
+
+## Kamino USDC route: узкие инструкции агента, 2026-09-24
+
+**Контракт.** `kamino_deposit(amount)` и `kamino_withdraw(shares, from_reserve)` — вызывает владелец или агент (`agent ≠ default`). Контракт сам собирает данные CPI (дискриминатор + сумма), поэтому вызвать другую инструкцию kVault нельзя. Проверки:
+- программа — только kVault `KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd`, `vault_state` — только Kamino USDC kVault `91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy`;
+- `user` в инструкции kVault — PDA Safe (подпись через `invoke_signed`);
+- `user_token_ata` и `user_shares_ata` должны быть токен-счетами SPL / Token-2022, чей authority — PDA Safe (`NotSafeTokenAccount`). Деньги ходят только между счетами Safe и kVault: вывести наружу агент не может;
+- депозит: `allocation_bps[ROUTE_KAMINO_USDC] > 0` (`RouteDisabled`) и `amount ≤ свободный USDC Safe × bps / 10 000` (`AllocationExceeded`);
+- вывод: `from_reserve = false` → `withdraw_from_available` (14 счетов + remaining), `true` → полный `withdraw` с группой счетов резерва (25 + remaining). Позиции счетов сверены с on-chain IDL kVault.
+
+**Ограничение (известное).** Лимит считается от свободного USDC за один вызов: серия депозитов может постепенно превысить цель (60% от 100, затем 60% от остатка и т.д.). Кражу это не открывает (деньги остаются в Safe/kVault, владелец выводит в любой момент), но точное соблюдение доли требует оценки позиции в kVault ончейн (shares × AUM / supply) — следующий шаг.
+
+**Тест на форке mainnet** (`client/src/v2KaminoFork.ts`, `solana-test-validator` с клонами программ kVault/klend и 12 аккаунтов USDC kVault из mainnet; USDC владельцу — подготовленный токен-аккаунт через `--account`). PASS 2026-09-24:
+- депозит 60.000001 USDC при цели 60% от 100 → `AllocationExceeded`;
+- shares на счёт атакующего → `NotSafeTokenAccount`; вызов посторонним → `Unauthorized`; вывод USDC на счёт атакующего → `NotSafeTokenAccount`;
+- агент вносит 60 USDC → 56 785 434 shares в Safe, 40 USDC свободно; агент выводит все shares → 99.998995 USDC в Safe; **стоимость круга 0.001005 USDC** (округление shares в пользу kVault); владелец забирает всё.
+- Не проверено: полный `withdraw` из резерва (`from_reserve = true`) — на форке хватило свободной ликвидности; Kamino farms (награды) не подключены.
+
+**Devnet.** Kamino на devnet нет, поэтому там только регрессия. Программа расширена до 630 000 байт (`solana program extend`, ≈1.0 devnet SOL rent), апгрейд `22E1mFYi1JKgFZG2gwamVYMBaP1qzHuJU8oo18SAR5GAjiZ4wqF8NBcZEm47uFoBFCPRxD74BAQxVCf4rm3B9Kyo`, slot 503123371, sha256 `0c36559f…eb6fb3f2` совпадает со сборкой (435 944 байт). `v2-security` PASS.
+
+**Для mainnet-деплоя:** бинарник 436 КБ; max-len брать ≈650 000 (≈4.5 SOL rent) или деплоить с запасом и расширять по мере роста.

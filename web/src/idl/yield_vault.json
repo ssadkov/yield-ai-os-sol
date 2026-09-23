@@ -882,6 +882,122 @@
       ]
     },
     {
+      "name": "kamino_deposit",
+      "docs": [
+        "Owner or agent: move `amount` USDC from the Safe into the Kamino USDC kVault.",
+        "Funds can only travel between the Safe's own token accounts and that kVault, and a single",
+        "deposit may not exceed the owner's Kamino target share of the Safe's idle USDC."
+      ],
+      "discriminator": [
+        237,
+        8,
+        188,
+        187,
+        115,
+        99,
+        49,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Owner or agent; checked in the handler."
+          ],
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.owner",
+                "account": "Vault"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "kamino_withdraw",
+      "docs": [
+        "Owner or agent: redeem `shares` from the Kamino USDC kVault back into the Safe.",
+        "`from_reserve = false` uses withdraw_from_available; `true` uses the full withdraw that may",
+        "pull liquidity from a lending reserve. USDC always lands in the Safe's own token account."
+      ],
+      "discriminator": [
+        199,
+        101,
+        41,
+        45,
+        213,
+        98,
+        224,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Owner or agent; checked in the handler."
+          ],
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.owner",
+                "account": "Vault"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "shares",
+          "type": "u64"
+        },
+        {
+          "name": "from_reserve",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "set_agent",
       "docs": [
         "The owner may rotate or revoke the agent. Pubkey::default() revokes it.",
@@ -1496,6 +1612,31 @@
       "code": 6007,
       "name": "AllocationTooHigh",
       "msg": "Allocation exceeds 100% (10_000 bps)"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidKaminoAccounts",
+      "msg": "Kamino accounts do not match the expected kVault instruction layout"
+    },
+    {
+      "code": 6009,
+      "name": "KaminoVaultNotAllowed",
+      "msg": "Only the Kamino USDC kVault is allowed"
+    },
+    {
+      "code": 6010,
+      "name": "NotSafeTokenAccount",
+      "msg": "Token account is not owned by this Safe"
+    },
+    {
+      "code": 6011,
+      "name": "RouteDisabled",
+      "msg": "Owner allocation for this route is zero"
+    },
+    {
+      "code": 6012,
+      "name": "AllocationExceeded",
+      "msg": "Amount exceeds the owner's allocation for this route"
     }
   ],
   "types": [

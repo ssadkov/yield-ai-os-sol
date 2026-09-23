@@ -8,7 +8,7 @@ use anchor_spl::token_interface::{
     TransferChecked,
 };
 
-declare_id!("3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s");
+declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
 
 const MAX_ALLOWED_PROGRAMS: usize = 64;
 
@@ -46,6 +46,13 @@ pub mod yield_vault {
         );
         let vault = &mut ctx.accounts.vault;
         vault.allowed_programs = allowed_programs;
+        Ok(())
+    }
+
+    /// The owner may rotate or revoke the agent. Pubkey::default() revokes it.
+    /// Agent execution remains disabled for generic CPI instructions in v2.
+    pub fn set_agent(ctx: Context<SetAgent>, agent: Pubkey) -> Result<()> {
+        ctx.accounts.vault.agent = agent;
         Ok(())
     }
 
@@ -141,16 +148,12 @@ pub mod yield_vault {
         Ok(())
     }
 
-    /// CPI into a whitelisted program. Pass remaining accounts as:
+    /// Owner-only CPI into a whitelisted program. Pass remaining accounts as:
     /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
     /// The vault PDA may sign as authority via seeds `[b"vault", owner.key(), bump]`.
     pub fn execute_swap_cpi(ctx: Context<ExecuteSwap>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
-        require!(
-            ctx.accounts.authority.key() == vault.agent
-                || ctx.accounts.authority.key() == vault.owner,
-            ErrorCode::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();
@@ -184,16 +187,12 @@ pub mod yield_vault {
         Ok(())
     }
 
-    /// Generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:
+    /// Owner-only generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:
     /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
     /// The vault PDA may sign as authority via seeds `[b"vault", owner.key(), bump]`.
     pub fn execute_protocol_cpi(ctx: Context<ExecuteProtocol>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
-        require!(
-            ctx.accounts.authority.key() == vault.agent
-                || ctx.accounts.authority.key() == vault.owner,
-            ErrorCode::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();
@@ -287,6 +286,18 @@ pub struct SetAllowedPrograms<'info> {
     )]
     pub vault: Account<'info, Vault>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetAgent<'info> {
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
 }
 
 #[derive(Accounts)]

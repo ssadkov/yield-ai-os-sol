@@ -1,5 +1,5 @@
 {
-  "address": "3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s",
+  "address": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
   "metadata": {
     "name": "yield_vault",
     "version": "0.1.0",
@@ -342,7 +342,7 @@
     {
       "name": "execute_protocol_cpi",
       "docs": [
-        "Generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:",
+        "Owner-only generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:",
         "`[program_id_account, ...accounts matching Instruction.accounts order for that program]`.",
         "The vault PDA may sign as authority via seeds `[b\"vault\", owner.key(), bump]`."
       ],
@@ -396,7 +396,7 @@
     {
       "name": "execute_swap_cpi",
       "docs": [
-        "CPI into a whitelisted program. Pass remaining accounts as:",
+        "Owner-only CPI into a whitelisted program. Pass remaining accounts as:",
         "`[program_id_account, ...accounts matching Instruction.accounts order for that program]`.",
         "The vault PDA may sign as authority via seeds `[b\"vault\", owner.key(), bump]`."
       ],
@@ -611,6 +611,60 @@
           "type": {
             "vec": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "set_agent",
+      "docs": [
+        "The owner may rotate or revoke the agent. Pubkey::default() revokes it.",
+        "Agent execution remains disabled for generic CPI instructions in v2."
+      ],
+      "discriminator": [
+        154,
+        74,
+        121,
+        91,
+        137,
+        19,
+        101,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "agent",
+          "type": "pubkey"
         }
       ]
     },

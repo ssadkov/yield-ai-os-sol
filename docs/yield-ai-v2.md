@@ -249,3 +249,11 @@ Dev-сервер нужно запускать из `web/node_modules` само�
   - #663 в `CgEe…`: пустая.
 - Прочие Safe с остатками: `4nby…` (owner `9XL5…`, 0.335 USDC), `8nWM…` (owner `A3sV…`, 0.3 USDC + пыль xStock), `Cjh6…` (owner `5KJv…`, пыль). Владельцы пока не опознаны.
 - При закрытии программы необратимо теряется: всё, что осталось в Safe и позициях, плюс rent самих Safe и лишние lamports на их PDA (~0.1 SOL суммарно). Возвращается 2.5347 SOL (programdata) + 0.0189 SOL (IDL).
+
+### Старая программа закрыта, 2026-09-23
+
+Владелец решил бросить остатки (Safe `4nby…`, `8nWM…`, `Cjh6…`, позиции #838 и #664 — все адреса его). Закрытие выполнил пользователь скриптом из WSL (у агента вызов заблокирован разрешениями Claude Code):
+- `anchor idl close` → IDL `51LXn67sW97ERPCAoNhKFdgz1jfSavYHuasLHt4rYQ5R` закрыт, +0.01891728 SOL;
+- `solana program close 3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s --bypass-warning` → +2.53469976 SOL;
+- `8xwj…`: 2.615605898 → 5.169212938 SOL (сходится с точностью до 10 000 lamports комиссий двух транзакций).
+- `solana program show` → «has been closed». Program ID `3Vtz…` больше не используется. Оставшиеся в Safe активы и rent PDA необратимо заблокированы.

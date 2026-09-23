@@ -295,7 +295,7 @@ function amountToBigInt(amount: number | string | BN): bigint {
   return BigInt(amount);
 }
 
-async function resolveTransferHookAccounts(args: {
+export async function resolveTransferHookAccounts(args: {
   connection: Connection;
   source: PublicKey;
   mint: PublicKey;

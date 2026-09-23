@@ -3,9 +3,11 @@ import { PublicKey } from "@solana/web3.js";
 export const RPC_URL =
   process.env.NEXT_PUBLIC_RPC_URL || "https://api.mainnet-beta.solana.com";
 
+// v2 program (the old 3Vtz… mainnet program was closed on 2026-09-23). Must match idl/yield_vault.json.
 export const PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_PROGRAM_ID ||
-    "3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s"
+    process.env.NEXT_PUBLIC_V2_PROGRAM_ID ||
+    "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5"
 );
 
 export const USDC_MINT = new PublicKey(

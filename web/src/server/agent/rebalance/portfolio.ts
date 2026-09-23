@@ -65,11 +65,10 @@ export async function readVaultAccount(
 
   offset += 32; // agent (skip)
 
-  const strategyIdx = data.readUInt8(offset);
-  offset += 1;
-  const strategyMap: StrategyName[] = ["Conservative", "Balanced", "Aggressive"];
-  const strategy = strategyMap[strategyIdx];
-  if (!strategy) throw new Error(`Unknown strategy index: ${strategyIdx}`);
+  // v2 replaced the strategy byte with allocation_bps: [u16; 8]. The legacy rebalancer
+  // cannot execute in v2 (generic CPI is owner-only), so it treats every Safe as Conservative.
+  offset += 16;
+  const strategy: StrategyName = "Conservative";
 
   offset += 8; // last_rebalance_ts: i64 (skip)
 

@@ -11,6 +11,17 @@ use anchor_spl::token_interface::{
 declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
 
 const MAX_ALLOWED_PROGRAMS: usize = 64;
+/// Allocation routes, indexed into `Vault::allocation_bps`. Unused indices are reserved for future protocols.
+pub const MAX_ROUTES: usize = 8;
+pub const ROUTE_KAMINO_USDC: usize = 0;
+pub const ROUTE_ONYC: usize = 1;
+const BPS_DENOMINATOR: u32 = 10_000;
+
+fn validate_allocation(allocation_bps: &[u16; MAX_ROUTES]) -> Result<()> {
+    let total: u32 = allocation_bps.iter().map(|bps| u32::from(*bps)).sum();
+    require!(total <= BPS_DENOMINATOR, ErrorCode::AllocationTooHigh);
+    Ok(())
+}
 
 #[program]
 pub mod yield_vault {
@@ -19,20 +30,43 @@ pub mod yield_vault {
     pub fn initialize(
         ctx: Context<Initialize>,
         agent: Pubkey,
-        strategy: Strategy,
+        allocation_bps: [u16; MAX_ROUTES],
         allowed_programs: Vec<Pubkey>,
     ) -> Result<()> {
         require!(
             allowed_programs.len() <= MAX_ALLOWED_PROGRAMS,
             ErrorCode::TooManyPrograms
         );
+        validate_allocation(&allocation_bps)?;
         let vault = &mut ctx.accounts.vault;
         vault.bump = ctx.bumps.vault;
         vault.owner = ctx.accounts.owner.key();
         vault.agent = agent;
-        vault.strategy = strategy;
+        vault.allocation_bps = allocation_bps;
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         vault.allowed_programs = allowed_programs;
+        Ok(())
+    }
+
+    /// Sponsored creation: any payer creates the Safe for `owner` without the owner's signature, so a
+    /// user arriving via CCTP needs no SOL. Only safe defaults are allowed (no agent, no CPI allowlist,
+    /// zero allocation); the owner configures the rest. `close_safe` returns the rent to the owner.
+    pub fn create_safe_for(ctx: Context<CreateSafeFor>, owner: Pubkey) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        vault.bump = ctx.bumps.vault;
+        vault.owner = owner;
+        vault.agent = Pubkey::default();
+        vault.allocation_bps = [0; MAX_ROUTES];
+        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        vault.allowed_programs = Vec::new();
+        Ok(())
+    }
+
+    /// Owner sets target allocation per route in basis points (sum <= 10_000, the rest stays idle USDC).
+    /// Future agent instructions must respect these targets.
+    pub fn set_allocation(ctx: Context<SetAllocation>, allocation_bps: [u16; MAX_ROUTES]) -> Result<()> {
+        validate_allocation(&allocation_bps)?;
+        ctx.accounts.vault.allocation_bps = allocation_bps;
         Ok(())
     }
 
@@ -266,20 +300,14 @@ pub mod yield_vault {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, InitSpace)]
-pub enum Strategy {
-    Conservative,
-    Balanced,
-    Growth,
-}
-
 #[account]
 #[derive(InitSpace)]
 pub struct Vault {
     pub bump: u8,
     pub owner: Pubkey,
     pub agent: Pubkey,
-    pub strategy: Strategy,
+    /// Owner's target allocation in basis points, indexed by ROUTE_* constants.
+    pub allocation_bps: [u16; MAX_ROUTES],
     pub last_rebalance_ts: i64,
     #[max_len(64)]
     pub allowed_programs: Vec<Pubkey>,
@@ -309,6 +337,44 @@ pub struct Initialize<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(owner: Pubkey)]
+pub struct CreateSafeFor<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + Vault::INIT_SPACE,
+        seeds = [b"vault", owner.as_ref()],
+        bump
+    )]
+    pub vault: Account<'info, Vault>,
+    pub usdc_mint: Account<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = vault,
+    )]
+    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetAllocation<'info> {
+    pub owner: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
 }
 
 #[derive(Accounts)]
@@ -544,4 +610,6 @@ pub enum ErrorCode {
     TokenAccountNotEmpty,
     #[msg("Safe holds no lamports above its rent-exempt minimum")]
     NoExcessLamports,
+    #[msg("Allocation exceeds 100% (10_000 bps)")]
+    AllocationTooHigh,
 }

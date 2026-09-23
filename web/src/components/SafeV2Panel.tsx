@@ -5,12 +5,12 @@ import dynamic from "next/dynamic";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL, PublicKey, type TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw } from "lucide-react";
+import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
-  ixInitialize, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
-  type SafeState, type SafeToken,
+  ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  MAX_ROUTES, ROUTES, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
@@ -40,6 +40,8 @@ export function SafeV2Panel() {
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  /** Draft targets in percent, indexed like ROUTES. */
+  const [allocationDraft, setAllocationDraft] = useState<number[]>(ROUTES.map(() => 0));
   const [log, setLog] = useState<string[]>([]);
   useEffect(() => setMounted(true), []);
 
@@ -53,6 +55,25 @@ export function SafeV2Panel() {
   }, [connection, publicKey]);
 
   useEffect(() => { void refresh().catch((error) => setLog([`Read failed: ${String(error)}`])); }, [refresh]);
+  useEffect(() => {
+    if (safe?.allocationBps) setAllocationDraft(ROUTES.map((route) => safe.allocationBps![route.index] / 100));
+  }, [safe]);
+
+  const allocatedPercent = allocationDraft.reduce((sum, value) => sum + value, 0);
+  const allocationChanged = !safe?.allocationBps
+    || ROUTES.some((route, i) => safe.allocationBps![route.index] !== Math.round(allocationDraft[i] * 100));
+
+  function setRoutePercent(i: number, value: number) {
+    // Keep the total at or below 100%: the rest stays idle USDC.
+    const others = allocationDraft.reduce((sum, v, j) => (j === i ? sum : sum + v), 0);
+    setAllocationDraft((prev) => prev.map((v, j) => (j === i ? Math.min(value, 100 - others) : v)));
+  }
+
+  function allocationBps() {
+    const bps = Array(MAX_ROUTES).fill(0) as number[];
+    ROUTES.forEach((route, i) => { bps[route.index] = Math.round(allocationDraft[i] * 100); });
+    return bps;
+  }
 
   const cluster = genesis === MAINNET_GENESIS ? "Mainnet" : genesis === DEVNET_GENESIS ? "Devnet" : "…";
   const isMetaMask = wallet?.adapter.name.toLowerCase() === "metamask";
@@ -143,6 +164,22 @@ export function SafeV2Panel() {
             <ArrowDownToLine className="h-4 w-4" /> Deposit
           </button>
         </div>
+      </section>}
+
+      {safe?.exists && <section className={card}>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><SlidersHorizontal className="h-4 w-4" /> Allocation</h2>
+        <p className="text-muted-foreground">Your target split, stored in the Safe. The agent may only allocate within these limits once the Kamino and ONyc routes ship; today nothing is moved automatically.</p>
+        {!safe.allocationBps && <p className="text-amber-200">This Safe was created before allocation targets existed; saving will initialise them.</p>}
+        {ROUTES.map((route, i) => <label key={route.key} className="block space-y-1">
+          <span className="flex justify-between"><span>{route.label}</span><span className="tabular-nums">{allocationDraft[i]}%</span></span>
+          <input type="range" min={0} max={100} step={5} className="w-full accent-primary" value={allocationDraft[i]}
+            onChange={(e) => setRoutePercent(i, Number(e.target.value))} />
+        </label>)}
+        <p className="text-muted-foreground">Idle USDC: <span className="tabular-nums">{100 - allocatedPercent}%</span></p>
+        <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={!!busy || !allocationChanged || metaMaskBlocked}
+          onClick={() => void run("Save allocation", async () => [await ixSetAllocation(connection, publicKey, allocationBps())])}>
+          Save allocation
+        </button>
       </section>}
 
       {safe && (safe.exists || safe.tokens.length > 0) && <section className={card}>

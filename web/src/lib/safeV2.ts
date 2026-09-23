@@ -14,6 +14,13 @@ import { deriveVaultPda, resolveTransferHookAccounts } from "./vault";
 
 export const DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
 export const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+/** Allocation routes (indices into Vault.allocation_bps); must match ROUTE_* in the program. */
+export const ROUTES = [
+  { index: 0, key: "kaminoUsdc", label: "Kamino USDC" },
+  { index: 1, key: "onyc", label: "ONyc" },
+] as const;
+export const MAX_ROUTES = 8;
+export const ZERO_ALLOCATION = Array(MAX_ROUTES).fill(0) as number[];
 
 export type SafeToken = {
   pubkey: PublicKey;
@@ -29,6 +36,8 @@ export type SafeState = {
   vault: PublicKey;
   exists: boolean;
   agent: PublicKey | null;
+  /** Target bps per route; null when the account predates the allocation layout (sum > 10_000). */
+  allocationBps: number[] | null;
   lamports: number;
   rentMinimum: number;
   excessLamports: number;
@@ -63,13 +72,14 @@ export async function readSafe(connection: Connection, owner: PublicKey): Promis
       });
     }
   }
-  if (!info) return { vault, exists: false, agent: null, lamports: 0, rentMinimum: 0, excessLamports: 0, tokens };
+  if (!info) return { vault, exists: false, agent: null, allocationBps: null, lamports: 0, rentMinimum: 0, excessLamports: 0, tokens };
   const rentMinimum = await connection.getMinimumBalanceForRentExemption(info.data.length);
-  // Vault layout: 8 discriminator + 1 bump + 32 owner + 32 agent.
-  const agent = new PublicKey(info.data.subarray(41, 73));
+  const decoded = program(connection, owner).coder.accounts.decode("vault", info.data) as { agent: PublicKey; allocationBps: number[] };
+  // A Safe created before the allocation layout decodes garbage here; set_allocation rewrites it.
+  const allocationValid = decoded.allocationBps.reduce((sum, bps) => sum + bps, 0) <= 10_000;
   return {
-    vault, exists: true, agent, lamports: info.lamports, rentMinimum,
-    excessLamports: Math.max(0, info.lamports - rentMinimum), tokens,
+    vault, exists: true, agent: decoded.agent, allocationBps: allocationValid ? decoded.allocationBps : null,
+    lamports: info.lamports, rentMinimum, excessLamports: Math.max(0, info.lamports - rentMinimum), tokens,
   };
 }
 
@@ -77,7 +87,7 @@ export async function ixInitialize(connection: Connection, owner: PublicKey) {
   const [vault] = deriveVaultPda(owner);
   // No agent and no CPI allowlist: every agent action will get its own constrained instruction.
   return program(connection, owner).methods
-    .initialize(PublicKey.default, { conservative: {} }, [])
+    .initialize(PublicKey.default, ZERO_ALLOCATION, [])
     .accountsPartial({
       owner, vault, usdcMint: USDC_MINT,
       vaultUsdcAta: getAssociatedTokenAddressSync(USDC_MINT, vault, true),
@@ -128,6 +138,12 @@ export async function ixWithdraw(connection: Connection, owner: PublicKey, token
     })
     .remainingAccounts(hookAccounts)
     .instruction();
+}
+
+export async function ixSetAllocation(connection: Connection, owner: PublicKey, allocationBps: number[]) {
+  const [vault] = deriveVaultPda(owner);
+  return program(connection, owner).methods.setAllocation(allocationBps)
+    .accountsPartial({ owner, vault }).instruction();
 }
 
 export async function ixCloseEmptyTokenAccount(connection: Connection, owner: PublicKey, token: SafeToken) {

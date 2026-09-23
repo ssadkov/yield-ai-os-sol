@@ -337,3 +337,12 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 
 - `NEXT_PUBLIC_PROGRAM_ID` в переменных prod-проекта Vercel всё ещё указывает на закрытую `3Vtz…`; сборки v2 переопределяют её через `--build-env NEXT_PUBLIC_PROGRAM_ID=8xa1…`. Переменную в проекте стоит обновить (настройка проекта — решает владелец).
 - Prod `yield-ai-os-sol.vercel.app` = v2 на devnet; `/v2/safe` — основной UI Safe.
+
+## Allocation в контракте и спонсируемое создание Safe, 2026-09-23
+
+- `strategy` (enum, задавался только при `initialize`, нигде не проверялся) заменён на `allocation_bps: [u16; 8]`: целевые доли владельца по маршрутам (`ROUTE_KAMINO_USDC = 0`, `ROUTE_ONYC = 1`, остальные зарезервированы), сумма ≤ 10 000, остаток — свободный USDC. `initialize(agent, allocation_bps, allowed_programs)` и `set_allocation(allocation_bps)` проверяют сумму (`AllocationTooHigh`); `set_allocation` — только владелец. Будущие инструкции агента обязаны укладываться в эти доли — это граница безопасности агента, а не просто настройка UI.
+- `create_safe_for(owner)`: любой плательщик создаёт Safe для `owner` без его подписи; только безопасные значения по умолчанию (агента нет, allowlist пуст, allocation нулевой). Повторное создание невозможно (`init`). Rent при `close_safe` уходит **владельцу** (решение пользователя: проще, relayer теряет ~0.006 SOL на Safe).
+- Тест `v2-security` дополнен: allocation (запись, >100% отклоняется, посторонний отклоняется), `create_safe_for` (поля по умолчанию, двойное создание отклоняется, весь rent — владельцу без SOL). **PASS локально и на devnet** 2026-09-23. Devnet-апгрейд `uDbuYNj3Gucah4DWzvm2RFSVoDdiaZCVAAy7c8TA685KdKXKazauhvCNjpyZXaJU6xHTvdFvqgWMLASBsXzPFDT`, slot 503030770, sha256 `9d0ca7a6…e8fa1f8d` совпадает с локальной сборкой; бинарник 405 888 байт при max-len 430 000 — для mainnet брать max-len с запасом (≈600 000).
+- Совместимость: Safe, созданные до смены раскладки (на devnet: `5KVy…`, `ALaZ…`, `2VP1…`), читаются с мусорным allocation; `owner`/`agent` на прежних местах, поэтому проверки владельца, вывод и `close_safe` работают. UI распознаёт такой Safe (сумма > 10 000) и предлагает сохранить allocation — `set_allocation` на старой раскладке проверен симуляцией на devnet.
+- Web: `/v2/safe` получил карточку Allocation (слайдеры Kamino USDC / ONyc, остаток — idle USDC, сохранение через `set_allocation`). Устаревший ребалансер и чат-агент читают любой Safe как Conservative: в v2 они всё равно не могут исполнять (CPI только владельцу) и будут заменены узкими инструкциями.
+- Индекс Safe (`["vault", owner, id]`) отложен.

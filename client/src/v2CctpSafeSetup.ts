@@ -41,7 +41,7 @@ async function run() {
       console.log(`fund tx ${await sendAndConfirmTransaction(connection, fund, [payer])}`);
     }
     // Agent revoked (default key): the CCTP test only needs owner deposit/withdraw.
-    const sig = await program.methods.initialize(PublicKey.default, { conservative: {} }, [])
+    const sig = await program.methods.initialize(PublicKey.default, Array(8).fill(0), [])
       .accounts({ owner: owner.publicKey, vault, usdcMint: DEVNET_USDC, vaultUsdcAta: vaultAta,
         tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId })

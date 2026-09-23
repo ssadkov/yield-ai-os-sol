@@ -32,6 +32,7 @@ if (!onDevnet && !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(rpc))
   throw new Error("v2-security runs only against a local validator unless V2_CLUSTER=devnet");
 }
 
+const ZERO_ALLOCATION = Array(8).fill(0);
 const owner = Keypair.generate();
 const agent = Keypair.generate();
 const replacementAgent = Keypair.generate();
@@ -103,7 +104,7 @@ async function run() {
   const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), owner.publicKey.toBuffer()], program.programId);
   const vaultAta = getAssociatedTokenAddressSync(mint, vault, true);
 
-  await program.methods.initialize(agent.publicKey, { conservative: {} }, [TOKEN_PROGRAM_ID])
+  await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
@@ -112,6 +113,15 @@ async function run() {
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, ownerUsdcAta: ownerAta,
       vaultUsdcAta: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([owner]).rpc();
+
+  // Owner allocation targets: enforced sum <= 10_000 bps, owner-only.
+  const allocation = [6_000, 3_000, 0, 0, 0, 0, 0, 0];
+  await (program.methods as any).setAllocation(allocation).accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc();
+  assert.deepEqual((await (program.account as any).vault.fetch(vault)).allocationBps, allocation);
+  await expectFailure("allocation above 100%", () => (program.methods as any).setAllocation([6_000, 4_001, 0, 0, 0, 0, 0, 0])
+    .accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc(), /AllocationTooHigh/);
+  await expectFailure("non-owner set_allocation", () => (program.methods as any).setAllocation(ZERO_ALLOCATION)
+    .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);
 
   const transfer = createTransferInstruction(vaultAta, attackerAta, vault, 1_000_000);
   const remaining = [
@@ -165,7 +175,7 @@ async function run() {
   await closeSafe(owner);
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
-  await program.methods.initialize(agent.publicKey, { conservative: {} }, [TOKEN_PROGRAM_ID])
+  await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
@@ -197,13 +207,37 @@ async function run() {
   await closeSafe(owner);
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after final close_safe");
 
+  // Sponsored creation: payer creates a Safe for an owner holding no SOL; only safe defaults are set.
+  const sponsored = Keypair.generate();
+  const [sponsoredVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), sponsored.publicKey.toBuffer()], program.programId);
+  const sponsoredAta = getAssociatedTokenAddressSync(mint, sponsoredVault, true);
+  const createFor = () => methods.createSafeFor(sponsored.publicKey)
+    .accounts({ payer: payer.publicKey, vault: sponsoredVault, usdcMint: mint, vaultUsdcAta: sponsoredAta,
+      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
+    .rpc();
+  await createFor();
+  const created = await (program.account as any).vault.fetch(sponsoredVault);
+  assert.equal((created.owner as PublicKey).toBase58(), sponsored.publicKey.toBase58());
+  assert.equal((created.agent as PublicKey).toBase58(), PublicKey.default.toBase58());
+  assert.deepEqual(created.allocationBps, ZERO_ALLOCATION);
+  assert.equal(created.allowedPrograms.length, 0);
+  await expectFailure("create_safe_for twice", createFor, /already in use|0x0/);
+  const sponsoredRent = (await connection.getAccountInfo(sponsoredVault))!.lamports + (await connection.getAccountInfo(sponsoredAta))!.lamports;
+  await methods.closeEmptyTokenAccount()
+    .accounts({ owner: sponsored.publicKey, vault: sponsoredVault, tokenAccount: sponsoredAta, tokenProgram: TOKEN_PROGRAM_ID })
+    .signers([sponsored]).rpc();
+  await methods.closeSafe().accounts({ owner: sponsored.publicKey, vault: sponsoredVault }).signers([sponsored]).rpc();
+  // All rent of a sponsored Safe goes to its owner, not to the sponsor.
+  assert.equal(await connection.getBalance(sponsored.publicKey, "confirmed"), sponsoredRent);
+
   console.log(`owner ${owner.publicKey.toBase58()} vault ${vault.toBase58()} mint ${mint.toBase58()}`);
   if (onDevnet) {
     await refund(owner);
+    await refund(sponsored);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
   console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
-    "empty-ATA close, excess-lamport withdrawal and final close_safe succeeded");
+    "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation and sponsored create_safe_for succeeded");
 }
 
 run().catch((error) => { console.error(error); process.exitCode = 1; });

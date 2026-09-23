@@ -21,6 +21,40 @@ export const ROUTES = [
 ] as const;
 export const MAX_ROUTES = 8;
 export const ZERO_ALLOCATION = Array(MAX_ROUTES).fill(0) as number[];
+/** 8 discriminator + bump + owner + agent + allocation [u16; 8] + ts + Vec<Pubkey> (max 64). */
+const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 64 * 32;
+const TOKEN_ACCOUNT_SIZE = 165;
+/** Base fee plus priority headroom; a wallet below this cannot pay for any transaction. */
+export const MIN_FEE_LAMPORTS = 20_000;
+
+/** SOL the owner needs to create a Safe: rent for the Safe account and its USDC ATA, plus fees. */
+export async function safeCreationCostLamports(connection: Connection) {
+  const [vaultRent, ataRent] = await Promise.all([
+    connection.getMinimumBalanceForRentExemption(VAULT_ACCOUNT_SIZE),
+    connection.getMinimumBalanceForRentExemption(TOKEN_ACCOUNT_SIZE),
+  ]);
+  return vaultRent + ataRent + MIN_FEE_LAMPORTS;
+}
+
+/** Turn raw simulation failures into something a user can act on. */
+function explainSimulationError(err: unknown, logs: string[], chain: string) {
+  const raw = JSON.stringify(err);
+  const cluster = chain === "solana:devnet" ? "Solana Devnet" : "Solana";
+  const faucet = chain === "solana:devnet" ? " Get free devnet SOL at https://faucet.solana.com." : "";
+  if (raw.includes("AccountNotFound") || raw.includes("InsufficientFundsForFee")) {
+    return `Your wallet has no SOL on ${cluster} to pay the network fee (about 0.00001 SOL).${faucet}`;
+  }
+  if (raw.includes("InsufficientFundsForRent") || logs.some((line) => /insufficient lamports|insufficient funds for rent/i.test(line))) {
+    return `Not enough SOL on ${cluster} to pay the one-time account rent for this action. Top up your wallet and retry.${faucet}`;
+  }
+  const anchorMessage = logs.map((line) => /Error Message: (.*?)\.?$/.exec(line)?.[1]).find(Boolean);
+  if (anchorMessage) return `The program rejected this action: ${anchorMessage}.`;
+  if (logs.some((line) => /Error: insufficient funds/.test(line))) {
+    return "The Safe or your wallet does not hold enough tokens for this amount.";
+  }
+  const detail = logs.filter((line) => /Error|failed/.test(line)).slice(-3).join("\n");
+  return `Simulation failed: ${raw}${detail ? `\n${detail}` : ""}`;
+}
 
 export type SafeToken = {
   pubkey: PublicKey;
@@ -193,10 +227,7 @@ export async function sendOwnerTransaction(args: {
     instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...args.instructions],
   }).compileToV0Message());
   const sim = await connection.simulateTransaction(tx, { sigVerify: false });
-  if (sim.value.err) {
-    const logs = (sim.value.logs ?? []).filter((line) => /Error|failed|AnchorError/.test(line)).slice(-4).join("\n");
-    throw new Error(`simulation failed: ${JSON.stringify(sim.value.err)}${logs ? `\n${logs}` : ""}`);
-  }
+  if (sim.value.err) throw new Error(explainSimulationError(sim.value.err, sim.value.logs ?? [], chain));
   say(`Simulation ok (${sim.value.unitsConsumed ?? "?"} CU, ${chain}). Waiting for wallet...`);
 
   let signature: string;

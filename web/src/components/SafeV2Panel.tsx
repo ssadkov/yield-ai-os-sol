@@ -10,7 +10,7 @@ import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
   ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
-  MAX_ROUTES, ROUTES, type SafeState, type SafeToken,
+  safeCreationCostLamports, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTES, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
@@ -37,6 +37,8 @@ export function SafeV2Panel() {
   const [genesis, setGenesis] = useState<string | null>(null);
   const [safe, setSafe] = useState<SafeState | null>(null);
   const [walletUsdc, setWalletUsdc] = useState<bigint | null>(null);
+  const [walletSol, setWalletSol] = useState<number | null>(null);
+  const [creationCost, setCreationCost] = useState<number | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -49,6 +51,8 @@ export function SafeV2Panel() {
     if (!publicKey) { setSafe(null); return; }
     setGenesis(await connection.getGenesisHash());
     setSafe(await readSafe(connection, publicKey));
+    setWalletSol(await connection.getBalance(publicKey, "confirmed"));
+    setCreationCost(await safeCreationCostLamports(connection));
     const ata = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
     const balance = await connection.getTokenAccountBalance(ata, "confirmed").catch(() => null);
     setWalletUsdc(balance ? BigInt(balance.value.amount) : BigInt(0));
@@ -78,6 +82,9 @@ export function SafeV2Panel() {
   const cluster = genesis === MAINNET_GENESIS ? "Mainnet" : genesis === DEVNET_GENESIS ? "Devnet" : "…";
   const isMetaMask = wallet?.adapter.name.toLowerCase() === "metamask";
   const metaMaskBlocked = isMetaMask && cluster === "Devnet";
+  const noFeeSol = walletSol !== null && walletSol < MIN_FEE_LAMPORTS;
+  const cannotCreate = walletSol !== null && creationCost !== null && walletSol < creationCost;
+  const sol = (lamports: number) => (lamports / LAMPORTS_PER_SOL).toFixed(4);
   const emptyTokens = safe?.tokens.filter((token) => token.amount === BigInt(0)) ?? [];
   const heldTokens = safe?.tokens.filter((token) => token.amount > BigInt(0)) ?? [];
 
@@ -133,6 +140,11 @@ export function SafeV2Panel() {
       MetaMask cannot sign Solana Devnet transactions. Use Phantom or Solflare here; MetaMask works once the Safe is on Mainnet.
     </p>}
 
+    {mounted && publicKey && noFeeSol && <p className="rounded-md border border-amber-500/60 bg-amber-500/10 p-3 text-amber-200">
+      Your wallet has no SOL on {cluster === "…" ? "this network" : `Solana ${cluster}`}. Every action needs a small SOL fee (about 0.00001 SOL){safe && !safe.exists && creationCost ? `; creating the Safe needs about ${sol(creationCost)} SOL of refundable rent` : ""}.
+      {cluster === "Devnet" && <> Get free devnet SOL at <a className="underline" href="https://faucet.solana.com" target="_blank" rel="noreferrer">faucet.solana.com</a>.</>}
+    </p>}
+
     {!mounted || !publicKey ? <section className={card}><p>Connect a Solana wallet to open your Safe.</p></section> : <>
       <section className={card}>
         <div className="flex items-center justify-between">
@@ -141,14 +153,18 @@ export function SafeV2Panel() {
         </div>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 break-all">
           <dt className="text-muted-foreground">Owner</dt><dd>{publicKey.toBase58()}</dd>
+          <dt className="text-muted-foreground">Wallet SOL</dt><dd>{walletSol === null ? "…" : `${sol(walletSol)} SOL`}</dd>
           <dt className="text-muted-foreground">Safe address</dt><dd>{safe?.vault.toBase58() ?? "…"}</dd>
           <dt className="text-muted-foreground">Status</dt><dd>{safe ? safe.exists ? "Active" : "Not created" : "…"}</dd>
           {safe?.exists && <><dt className="text-muted-foreground">Agent</dt><dd>{!safe.agent || safe.agent.equals(PublicKey.default) ? "None (owner-only)" : safe.agent.toBase58()}</dd></>}
         </dl>
         {safe && !safe.exists && <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
-          disabled={!!busy || metaMaskBlocked} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
+          disabled={!!busy || metaMaskBlocked || cannotCreate} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
           <ShieldCheck className="h-4 w-4" /> Create Safe
         </button>}
+        {safe && !safe.exists && creationCost !== null && <p className="text-muted-foreground">
+          Creating the Safe costs about {sol(creationCost)} SOL of rent, refunded when you close it.{cannotCreate ? ` Your wallet has ${sol(walletSol ?? 0)} SOL.` : ""}
+        </p>}
         {safe && !safe.exists && safe.tokens.length > 0 && <p className="text-amber-200">This address already owns token accounts from a previous Safe. Creating the Safe again restores access to them.</p>}
       </section>
 

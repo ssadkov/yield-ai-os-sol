@@ -38,6 +38,9 @@ pub fn realize_exit(principal: u64, shares_out: u64, shares_before: u64, receive
 /// Kamino kVault program and the only kVault the agent may use (Kamino USDC, mainnet).
 const KAMINO_KVAULT_PROGRAM: Pubkey = pubkey!("KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd");
 const KAMINO_USDC_KVAULT: Pubkey = pubkey!("91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy");
+/// Shares of that kVault. They may only enter or leave the Safe through kamino_deposit/withdraw,
+/// otherwise the cost basis (and the fee on gains) could be bypassed or inflated.
+const KAMINO_USDC_KVAULT_SHARES: Pubkey = pubkey!("B9t9wg8r39Lxm2D9Gmqn2rJ5pVQQwjtGBfSsHAXSEnVe");
 /// Anchor discriminators of the kVault instructions (sha256("global:<name>")[..8]).
 const KVAULT_DEPOSIT: [u8; 8] = [242, 35, 198, 137, 82, 225, 242, 182];
 const KVAULT_WITHDRAW: [u8; 8] = [183, 18, 70, 156, 148, 109, 161, 34];
@@ -70,6 +73,12 @@ fn upgrade_authority(program_data: &AccountInfo) -> Result<Option<Pubkey>> {
         1 => Some(Pubkey::new_from_array(data[13..45].try_into().unwrap())),
         _ => None,
     })
+}
+
+/// The Safe's canonical shares account for the Kamino USDC kVault. kVault shares must live here so
+/// that no other instruction can move them past the fee accounting.
+fn kamino_shares_ata(safe: &Pubkey) -> Pubkey {
+    anchor_spl::associated_token::get_associated_token_address(safe, &KAMINO_USDC_KVAULT_SHARES)
 }
 
 /// Owner, or the configured agent (the default key means "no agent").
@@ -111,6 +120,7 @@ fn invoke_kvault(
     require_keys_eq!(inner[KV_VAULT_STATE].key(), KAMINO_USDC_KVAULT, ErrorCode::KaminoVaultNotAllowed);
     safe_token_balance(&inner[user_token_ata], &vault_key)?;
     safe_token_balance(&inner[user_shares_ata], &vault_key)?;
+    require_keys_eq!(inner[user_shares_ata].key(), kamino_shares_ata(&vault_key), ErrorCode::InvalidKaminoAccounts);
 
     let metas: Vec<AccountMeta> = inner
         .iter()
@@ -223,6 +233,7 @@ pub mod yield_vault {
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -244,6 +255,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -264,6 +276,7 @@ pub mod yield_vault {
     /// Owner pulls USDC from the vault ATA. Authority on the vault token account is the vault PDA (`invoke_signed`).
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
         let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
@@ -292,6 +305,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
         let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
@@ -330,6 +344,8 @@ pub mod yield_vault {
         // Routes with fee and principal accounting must go through their dedicated instructions.
         require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
         let vault_key = vault.key();
+        let shares_ata = kamino_shares_ata(&vault_key);
+        require!(!rem.iter().any(|a| a.key() == shares_ata), ErrorCode::UseDedicatedInstruction);
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
             .map(|a| {
@@ -371,6 +387,8 @@ pub mod yield_vault {
         // Routes with fee and principal accounting must go through their dedicated instructions.
         require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
         let vault_key = vault.key();
+        let shares_ata = kamino_shares_ata(&vault_key);
+        require!(!rem.iter().any(|a| a.key() == shares_ata), ErrorCode::UseDedicatedInstruction);
         let account_metas: Vec<AccountMeta> = rem[1..]
             .iter()
             .map(|a| {

@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { LAMPORTS_PER_SOL, PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import { LAMPORTS_PER_SOL, PublicKey, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, SlidersHorizontal, TrendingUp } from "lucide-react";
 import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
   ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
-  safeCreationCostLamports, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTES, type SafeState, type SafeToken,
+  safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
+  KAMINO_SHARES_MINT, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTE_KAMINO_USDC, ROUTES,
+  type KaminoMetrics, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
@@ -39,6 +41,7 @@ export function SafeV2Panel() {
   const [walletUsdc, setWalletUsdc] = useState<bigint | null>(null);
   const [walletSol, setWalletSol] = useState<number | null>(null);
   const [creationCost, setCreationCost] = useState<number | null>(null);
+  const [kaminoMetrics, setKaminoMetrics] = useState<KaminoMetrics | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -53,6 +56,7 @@ export function SafeV2Panel() {
     setSafe(await readSafe(connection, publicKey));
     setWalletSol(await connection.getBalance(publicKey, "confirmed"));
     setCreationCost(await safeCreationCostLamports(connection));
+    setKaminoMetrics(await fetchKaminoMetrics().catch(() => null));
     const ata = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
     const balance = await connection.getTokenAccountBalance(ata, "confirmed").catch(() => null);
     setWalletUsdc(balance ? BigInt(balance.value.amount) : BigInt(0));
@@ -85,18 +89,43 @@ export function SafeV2Panel() {
   const noFeeSol = walletSol !== null && walletSol < MIN_FEE_LAMPORTS;
   const cannotCreate = walletSol !== null && creationCost !== null && walletSol < creationCost;
   const sol = (lamports: number) => (lamports / LAMPORTS_PER_SOL).toFixed(4);
-  const emptyTokens = safe?.tokens.filter((token) => token.amount === BigInt(0)) ?? [];
-  const heldTokens = safe?.tokens.filter((token) => token.amount > BigInt(0)) ?? [];
+  // Kamino USDC position: shares live in the Safe; value = shares x tokensPerShare (both 6 decimals).
+  const isMainnet = cluster === "Mainnet";
+  const kaminoShares = safe?.tokens.find((token) => token.mint.equals(KAMINO_SHARES_MINT))?.amount ?? BigInt(0);
+  const kaminoValue = kaminoMetrics ? Number(kaminoShares) / 1e6 * kaminoMetrics.tokensPerShare : null;
+  const kaminoPrincipal = safe?.routePrincipal[ROUTE_KAMINO_USDC] ?? BigInt(0);
+  const idleUsdc = safe?.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
+  const kaminoBps = safe?.allocationBps?.[ROUTE_KAMINO_USDC] ?? 0;
+  // The program caps one deposit at idle x target; Kamino's minimum deposit is 0.001 USDC.
+  const kaminoPut = idleUsdc * BigInt(kaminoBps) / BigInt(10_000);
+  const canKaminoDeposit = isMainnet && kaminoPut >= BigInt(1_000);
+  const usd = (raw: bigint) => (Number(raw) / 1e6).toFixed(2);
 
-  async function run(label: string, build: () => Promise<TransactionInstruction[]>) {
+  async function buildKaminoDeposit() {
+    if (!publicKey) return [];
+    const kamino = await fetchKaminoAccounts("deposit", publicKey, (Number(kaminoPut) / 1e6).toString());
+    return { instructions: await ixKaminoDeposit(connection, publicKey, kaminoPut, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
+  }
+  async function buildKaminoWithdrawAll() {
+    if (!publicKey) return [];
+    const kamino = await fetchKaminoAccounts("withdraw", publicKey, (kaminoValue ?? 0).toFixed(6));
+    return { instructions: await ixKaminoWithdraw(connection, publicKey, kaminoShares, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
+  }
+
+  const emptyTokens = safe?.tokens.filter((token) => token.amount === BigInt(0)) ?? [];
+  const heldTokens = safe?.tokens.filter((token) => token.amount > BigInt(0) && !token.mint.equals(KAMINO_SHARES_MINT)) ?? [];
+
+  type Built = TransactionInstruction[] | { instructions: TransactionInstruction[]; lookupTables: AddressLookupTableAccount[] };
+  async function run(label: string, build: () => Promise<Built>) {
     if (!publicKey || !wallet) return;
     setBusy(label);
     const lines = [`${label}…`];
     setLog([...lines]);
     const say = (line: string) => { lines.push(line); setLog([...lines]); };
     try {
-      const instructions = await build();
-      const signature = await sendOwnerTransaction({ connection, adapter: wallet.adapter, owner: publicKey, instructions, onStatus: say });
+      const built = await build();
+      const { instructions, lookupTables } = Array.isArray(built) ? { instructions: built, lookupTables: [] } : built;
+      const signature = await sendOwnerTransaction({ connection, adapter: wallet.adapter, owner: publicKey, instructions, lookupTables, onStatus: say });
       say(`Confirmed: ${explorerTx(signature, genesis)}`);
       await refresh();
     } catch (error) {
@@ -196,6 +225,32 @@ export function SafeV2Panel() {
           onClick={() => void run("Save allocation", async () => [await ixSetAllocation(connection, publicKey, allocationBps())])}>
           Save allocation
         </button>
+      </section>}
+
+      {safe?.exists && <section className={card}>
+        <h2 className="flex items-center gap-2 text-lg font-semibold"><TrendingUp className="h-4 w-4" /> Kamino USDC</h2>
+        <p className="text-muted-foreground">
+          Lending yield via the Kamino USDC vault{kaminoMetrics ? ` · APY ${(kaminoMetrics.apy * 100).toFixed(2)}%` : ""}.
+          USDC only moves between your Safe and Kamino; a 5% fee applies to realized gains only.
+        </p>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+          <dt className="text-muted-foreground">Position</dt>
+          <dd>{kaminoShares > BigInt(0) ? `${kaminoValue?.toFixed(2) ?? "…"} USDC (${usd(kaminoShares)} shares)` : "None"}</dd>
+          <dt className="text-muted-foreground">Invested</dt><dd>{usd(kaminoPrincipal)} USDC</dd>
+          <dt className="text-muted-foreground">Target</dt><dd>{kaminoBps / 100}% of idle USDC</dd>
+        </dl>
+        {!isMainnet && <p className="text-amber-200">Kamino runs on Solana Mainnet only; these actions are disabled on {cluster}.</p>}
+        {isMainnet && kaminoBps === 0 && <p className="text-muted-foreground">Set a Kamino share in Allocation to enable deposits.</p>}
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={!!busy || !canKaminoDeposit}
+            onClick={() => void run(`Put ${usd(kaminoPut)} USDC into Kamino`, buildKaminoDeposit)}>
+            <ArrowDownToLine className="h-4 w-4" /> Put {usd(kaminoPut)} USDC to work
+          </button>
+          <button type="button" className={`${button} border border-border hover:bg-accent`} disabled={!!busy || !isMainnet || kaminoShares === BigInt(0)}
+            onClick={() => void run("Withdraw all from Kamino", buildKaminoWithdrawAll)}>
+            <ArrowUpFromLine className="h-4 w-4" /> Withdraw all from Kamino
+          </button>
+        </div>
       </section>}
 
       {safe && (safe.exists || safe.tokens.length > 0) && <section className={card}>

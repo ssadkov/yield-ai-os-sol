@@ -12,7 +12,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ACCOUNT_SIZE, AccountLayout, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAccount,
+  ACCOUNT_SIZE, AccountLayout, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, createTransferInstruction, getAccount,
   getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction,
 } from "@solana/spl-token";
 import {
@@ -141,7 +141,7 @@ async function run() {
     createAssociatedTokenAccountIdempotentInstruction(agent.publicKey, treasuryUsdc, treasury.publicKey, USDC)), [agent]);
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
-  await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [])
+  await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
     .accounts({ owner: owner.publicKey, vault: safe, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -170,6 +170,24 @@ async function run() {
   console.log(`  deposit 60 USDC -> Safe shares ${shares}, idle USDC ${idle}`);
   assert(shares > BigInt(0));
   assert.equal(idle, BigInt(40_000_000));
+  // The owner must not be able to move kVault shares past the fee accounting.
+  const ownerShares = getAssociatedTokenAddressSync(sharesMint, owner.publicKey);
+  await sendAndConfirmTransaction(connection, new Transaction().add(
+    createAssociatedTokenAccountIdempotentInstruction(owner.publicKey, ownerShares, owner.publicKey, sharesMint)), [owner]);
+  await expectFailure("owner withdraw_spl of kVault shares", () => methods.withdrawSpl(new BN(1))
+    .accounts({ owner: owner.publicKey, vault: safe, mint: sharesMint, ownerTokenAta: ownerShares, vaultTokenAta: safeShares,
+      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
+    .signers([owner]).rpc(), /UseDedicatedInstruction/);
+  await expectFailure("owner withdraw with shares as usdc_mint", () => methods.withdraw(new BN(1))
+    .accounts({ owner: owner.publicKey, vault: safe, usdcMint: sharesMint, ownerUsdcAta: ownerShares, vaultUsdcAta: safeShares, tokenProgram: TOKEN_PROGRAM_ID })
+    .signers([owner]).rpc(), /UseDedicatedInstruction/);
+  const sharesTransfer = createTransferInstruction(safeShares, ownerShares, safe, 1);
+  await expectFailure("owner generic CPI moving kVault shares", () => methods.executeProtocolCpi(Buffer.from(sharesTransfer.data))
+    .accounts({ authority: owner.publicKey, vault: safe })
+    .remainingAccounts([{ pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ...sharesTransfer.keys.map((k) => ({ ...k, isSigner: false }))])
+    .signers([owner]).rpc(), /UseDedicatedInstruction/);
+
   const principalAfterDeposit = BigInt((await (program.account as any).vault.fetch(safe)).routePrincipal[0].toString());
   console.log(`  Kamino principal tracked: ${principalAfterDeposit}`);
   assert.equal(principalAfterDeposit, BigInt(60_000_000));

@@ -396,3 +396,20 @@ Dev-сервер нужно запускать из `web/node_modules` само�
 **Devnet.** Апгрейд `5x4n9pnmfj2o2HpPehZnbfjkFyq6cQW6gSqhfQ2YdxqwH1ThihYvJk7VdihM7DL79BxA3Ev1svY341225EJW1eU6`, slot 503133118, sha256 `df559b9c…0988ef043` совпадает со сборкой. Config `5EjWRU9zFsSH6QavNVB7KpoqrYDHrt7w53Kk8XR5RX1`: admin и treasury `8xwj…`, fee 500 bps.
 
 **Размер.** Бинарник 481 832 байт. Для mainnet: max-len ≈ 560 000 (≈3.9 SOL rent) или больше с запасом; на `8xwj…` 5.17 SOL.
+
+## UI: Kamino USDC из /v2/safe, 2026-09-24
+
+**Что добавлено.**
+- `GET /api/v2/kamino?op=metrics` — APY, `tokensPerShare`, `tokensAvailable` USDC kVault; `op=deposit|withdraw&owner=&amount=` — счета kVault-инструкции от Kamino API для PDA Safe этого владельца (проверяются программа, `user` = Safe, `vault_state` = USDC kVault; неверный owner/amount → 400). Данные инструкции контракт собирает сам, отсюда берутся только счета и lookup tables.
+- `safeV2.ts`: `ixKaminoDeposit` (идемпотентное создание ATA shares Safe за счёт владельца + `kamino_deposit`), `ixKaminoWithdraw` (идемпотентное создание USDC ATA казны + `kamino_withdraw`; вариант вывода — по дискриминатору от API), `loadLookupTables`, `routePrincipal` в `readSafe`; отправка поддерживает lookup tables.
+- Карточка **Kamino USDC**: позиция (shares × tokensPerShare), вложено (principal), цель, APY; «Put X USDC to work» (X = свободный USDC × доля Kamino, минимум 0.001) и «Withdraw all from Kamino». Всё — одна подпись владельца. Вне mainnet кнопки неактивны с пояснением. Shares скрыты из Holdings.
+
+**Контракт: закрыты обходы комиссии.** Shares USDC kVault (`B9t9…`) не проходят через `deposit`, `withdraw`, `deposit_spl`, `withdraw_spl` (`UseDedicatedInstruction`); универсальный CPI отклоняется, если среди его счетов есть канонический ATA shares Safe; `kamino_*` требуют именно этот канонический ATA. Бинарник 488 056 байт.
+
+**Проверки (2026-09-24).**
+- Форк mainnet, `v2KaminoFork.ts`: плюс три попытки обхода владельцем (`withdraw_spl` shares, `withdraw` с mint shares, CPI-перевод shares) — все отклонены; остальное без изменений. PASS.
+- Форк mainnet, `web/scripts/kamino-ui-fork.ts` — **те же сборщики, что вызывает страница**, только подпись владельца: create Safe → allocation 60% → deposit 100 → Kamino deposit 60 (56 781 421 shares, principal 60) → withdraw all (shares 0, principal 0, 99.998995 USDC). Транзакции 833 и 966 байт — укладываются в лимит и без lookup table. PASS.
+- `/api/v2/kamino` на локальном dev-сервере: metrics, deposit (17 счетов + LUT `6nfiQm8U…`), отказы на неверные owner/amount. PASS.
+- Devnet: апгрейд `4p4rDWGXNQ2x6SLLYgrp56KdTbqB5pAfQofoLMPhorj2ECnxc6HZtUgbssmsbxYgGEWqZrh8xUeu1uBofbwnGJQ3`, sha256 `1734104b…98ba7b83` совпадает; `v2-security` PASS.
+
+**Блокер перед реальными пользователями: вывод из резерва.** У USDC kVault `tokensAvailable` ≈ 0.001 USDC — почти всё вложено в резервы klend. Kamino ktx API для любой суммы отдаёт `withdraw_from_available` (18 счетов). На форке вывод прошёл только потому, что свободной ликвидностью были наши же 60 USDC, ещё не вложенные кранком `invest`. В mainnet после `invest` вывод, вероятно, потребует полный `withdraw` с группой счетов резерва (+ refresh резерва) — путь `from_reserve = true` в контракте есть, но не проверен, и API его не возвращает. Нужно: (1) выяснить через Kamino SDK/доки, как строится вывод для держателя после `invest`; (2) проверить на mainnet с $1: депозит → дождаться `invest` → вывод. Средства при неудаче не теряются (остаются в Kamino, повторный вывод возможен), но выход может быть недоступен до решения.

@@ -1,11 +1,12 @@
 import { AnchorProvider, BN, Program, type Idl } from "@coral-xyz/anchor";
 import type { WalletAdapter } from "@solana/wallet-adapter-base";
 import {
-  ComputeBudgetProgram, Connection, PublicKey, SystemProgram, TransactionInstruction,
+  AddressLookupTableAccount, ComputeBudgetProgram, Connection, PublicKey, SystemProgram, TransactionInstruction,
   TransactionMessage, VersionedTransaction,
 } from "@solana/web3.js";
 import {
-  ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync,
+  ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import bs58 from "bs58";
 import idlJson from "@/idl/yield_vault.json";
@@ -56,6 +57,24 @@ function explainSimulationError(err: unknown, logs: string[], chain: string) {
   return `Simulation failed: ${raw}${detail ? `\n${detail}` : ""}`;
 }
 
+/** Kamino USDC kVault (mainnet only). Must match the constants in the program. */
+export const KAMINO_KVAULT_PROGRAM = new PublicKey("KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd");
+export const KAMINO_USDC_KVAULT = new PublicKey("91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy");
+export const KAMINO_SHARES_MINT = new PublicKey("B9t9wg8r39Lxm2D9Gmqn2rJ5pVQQwjtGBfSsHAXSEnVe");
+export const ROUTE_KAMINO_USDC = 0;
+/** kVault full withdraw (may pull liquidity from a lending reserve); anything else is withdraw_from_available. */
+const KVAULT_WITHDRAW_FROM_RESERVE = "b712469c946da122";
+
+/** Account list of a kVault deposit/withdraw for a Safe, as returned by /api/v2/kamino. */
+export type KaminoAccounts = {
+  safe: string;
+  discriminator: string;
+  accounts: { address: string; writable: boolean }[];
+  lookupTables: string[];
+};
+
+export type KaminoMetrics = { apy: number; tokensPerShare: number; tokensAvailable: number };
+
 export type SafeToken = {
   pubkey: PublicKey;
   mint: PublicKey;
@@ -72,6 +91,8 @@ export type SafeState = {
   agent: PublicKey | null;
   /** Target bps per route; null when the account predates the allocation layout (sum > 10_000). */
   allocationBps: number[] | null;
+  /** Owner cost basis per route in USDC base units (fees are charged only above it). */
+  routePrincipal: bigint[];
   lamports: number;
   rentMinimum: number;
   excessLamports: number;
@@ -106,13 +127,15 @@ export async function readSafe(connection: Connection, owner: PublicKey): Promis
       });
     }
   }
-  if (!info) return { vault, exists: false, agent: null, allocationBps: null, lamports: 0, rentMinimum: 0, excessLamports: 0, tokens };
+  if (!info) return { vault, exists: false, agent: null, allocationBps: null, routePrincipal: [], lamports: 0, rentMinimum: 0, excessLamports: 0, tokens };
   const rentMinimum = await connection.getMinimumBalanceForRentExemption(info.data.length);
-  const decoded = program(connection, owner).coder.accounts.decode("vault", info.data) as { agent: PublicKey; allocationBps: number[] };
+  const decoded = program(connection, owner).coder.accounts.decode("vault", info.data) as
+    { agent: PublicKey; allocationBps: number[]; routePrincipal: BN[] };
   // A Safe created before the allocation layout decodes garbage here; set_allocation rewrites it.
   const allocationValid = decoded.allocationBps.reduce((sum, bps) => sum + bps, 0) <= 10_000;
   return {
     vault, exists: true, agent: decoded.agent, allocationBps: allocationValid ? decoded.allocationBps : null,
+    routePrincipal: decoded.routePrincipal.map((value) => BigInt(value.toString())),
     lamports: info.lamports, rentMinimum, excessLamports: Math.max(0, info.lamports - rentMinimum), tokens,
   };
 }
@@ -199,6 +222,63 @@ export async function ixCloseSafe(connection: Connection, owner: PublicKey) {
     .accountsPartial({ owner, vault }).instruction();
 }
 
+/** Kamino accounts for this Safe from our server proxy (the Kamino API builds them for the Safe PDA). */
+export async function fetchKaminoAccounts(action: "deposit" | "withdraw", owner: PublicKey, uiAmount: string): Promise<KaminoAccounts> {
+  const res = await fetch(`/api/v2/kamino?op=${action}&owner=${owner.toBase58()}&amount=${encodeURIComponent(uiAmount)}`);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? `Kamino ${action} accounts failed (${res.status})`);
+  return body as KaminoAccounts;
+}
+
+export async function fetchKaminoMetrics(): Promise<KaminoMetrics> {
+  const res = await fetch("/api/v2/kamino?op=metrics");
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? "Kamino metrics failed");
+  return body as KaminoMetrics;
+}
+
+function kaminoRemaining(kamino: KaminoAccounts) {
+  return [
+    { pubkey: KAMINO_KVAULT_PROGRAM, isSigner: false, isWritable: false },
+    // The Safe PDA cannot sign the outer transaction; the program signs for it via invoke_signed.
+    ...kamino.accounts.map((a) => ({ pubkey: new PublicKey(a.address), isSigner: false, isWritable: a.writable })),
+  ];
+}
+
+/** Owner moves `amount` USDC from the Safe into Kamino. Creates the Safe's shares account if missing (owner pays). */
+export async function ixKaminoDeposit(connection: Connection, owner: PublicKey, amount: bigint, kamino: KaminoAccounts) {
+  const [vault] = deriveVaultPda(owner);
+  const safeShares = getAssociatedTokenAddressSync(KAMINO_SHARES_MINT, vault, true);
+  return [
+    createAssociatedTokenAccountIdempotentInstruction(owner, safeShares, vault, KAMINO_SHARES_MINT),
+    await program(connection, owner).methods.kaminoDeposit(new BN(amount.toString()))
+      .accountsPartial({ authority: owner, vault })
+      .remainingAccounts(kaminoRemaining(kamino))
+      .instruction(),
+  ];
+}
+
+/** Owner redeems `shares` back into the Safe; the performance fee on any gain goes to the configured treasury. */
+export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey, shares: bigint, kamino: KaminoAccounts) {
+  const [vault] = deriveVaultPda(owner);
+  const prog = program(connection, owner);
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
+  const configState = await (prog.account as unknown as Record<string, { fetch(a: PublicKey): Promise<{ treasury: PublicKey }> }>)["config"].fetch(config);
+  const treasuryUsdc = getAssociatedTokenAddressSync(USDC_MINT, configState.treasury, true);
+  return [
+    createAssociatedTokenAccountIdempotentInstruction(owner, treasuryUsdc, configState.treasury, USDC_MINT),
+    await prog.methods.kaminoWithdraw(new BN(shares.toString()), kamino.discriminator === KVAULT_WITHDRAW_FROM_RESERVE)
+      .accountsPartial({ authority: owner, vault, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+      .remainingAccounts(kaminoRemaining(kamino))
+      .instruction(),
+  ];
+}
+
+export async function loadLookupTables(connection: Connection, addresses: string[]) {
+  const tables = await Promise.all(addresses.map((address) => connection.getAddressLookupTable(new PublicKey(address))));
+  return tables.map((t) => t.value).filter((t): t is AddressLookupTableAccount => t !== null);
+}
+
 type StandardSignAndSend = {
   signAndSendTransaction: (...inputs: { account: unknown; transaction: Uint8Array; chain: string }[]) =>
     Promise<{ signature: Uint8Array }[]>;
@@ -214,6 +294,7 @@ export async function sendOwnerTransaction(args: {
   adapter: WalletAdapter;
   owner: PublicKey;
   instructions: TransactionInstruction[];
+  lookupTables?: AddressLookupTableAccount[];
   onStatus?: (line: string) => void;
 }): Promise<string> {
   const { connection, adapter, owner } = args;
@@ -224,8 +305,8 @@ export async function sendOwnerTransaction(args: {
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   const tx = new VersionedTransaction(new TransactionMessage({
     payerKey: owner, recentBlockhash: blockhash,
-    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...args.instructions],
-  }).compileToV0Message());
+    instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: args.lookupTables?.length ? 1_000_000 : 400_000 }), ...args.instructions],
+  }).compileToV0Message(args.lookupTables));
   const sim = await connection.simulateTransaction(tx, { sigVerify: false });
   if (sim.value.err) throw new Error(explainSimulationError(sim.value.err, sim.value.logs ?? [], chain));
   say(`Simulation ok (${sim.value.unitsConsumed ?? "?"} CU, ${chain}). Waiting for wallet...`);

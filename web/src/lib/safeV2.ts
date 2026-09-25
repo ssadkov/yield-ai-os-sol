@@ -324,6 +324,9 @@ export async function sendOwnerTransaction(args: {
   const genesis = await connection.getGenesisHash();
   const chain = genesis === MAINNET_GENESIS ? "solana:mainnet" : genesis === DEVNET_GENESIS ? "solana:devnet" : null;
   if (!chain) throw new Error(`unsupported cluster (genesis ${genesis})`);
+  if (chain === "solana:mainnet" && USDC_MINT.toBase58() !== "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") {
+    throw new Error("Mainnet USDC mint is misconfigured; transaction blocked");
+  }
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   const tx = new VersionedTransaction(new TransactionMessage({
     payerKey: owner, recentBlockhash: blockhash,

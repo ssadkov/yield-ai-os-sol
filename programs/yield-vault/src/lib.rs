@@ -9,7 +9,7 @@ use anchor_spl::token_interface::{
     TokenInterface, TransferChecked,
 };
 
-declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
+declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
 
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;

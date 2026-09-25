@@ -15,7 +15,7 @@ yield_vault = "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5"
 yield_vault = "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5"
 
 [programs.mainnet]
-yield_vault = "3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s"
+yield_vault = "yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih"
 
 [registry]
 url = "https://api.apr.dev"

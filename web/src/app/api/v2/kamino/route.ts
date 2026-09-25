@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { PublicKey } from "@solana/web3.js";
-import { address, createNoopSigner, createSolanaRpc } from "@solana/kit";
+import { address, createDefaultRpcTransport, createNoopSigner, createSolanaRpcFromTransport } from "@solana/kit";
 import { KaminoManager, KaminoVault, getCurrentLedgerInstant } from "@kamino-finance/klend-sdk";
 import Decimal from "decimal.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { deriveVaultPda } from "@/lib/vault";
+import { V2_MAINNET_RPC_URL, v2MainnetRpcHeaders } from "@/lib/v2MainnetRpc.server";
 
 const KAMINO_API = "https://api.kamino.finance";
-const MAINNET_RPC = process.env.V2_MAINNET_RPC_URL || "https://api.mainnet-beta.solana.com";
 const KVAULT_PROGRAM = "KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd";
 const USDC_KVAULT = "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -19,7 +19,10 @@ const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
 type ApiIx = { programAddress: string; data: string; accounts: { address: string; role: string }[] };
 
 async function withdrawPlan(safe: PublicKey, shares: bigint) {
-  const rpc = createSolanaRpc(MAINNET_RPC);
+  const rpc = createSolanaRpcFromTransport(createDefaultRpcTransport({
+    url: V2_MAINNET_RPC_URL,
+    headers: v2MainnetRpcHeaders(),
+  }));
   const vault = new KaminoVault(rpc, address(USDC_KVAULT), 400);
   const state = await vault.getState();
   if (state.tokenMint !== USDC_MINT || state.sharesMint !== SHARES_MINT) throw new Error("unexpected vault mints");

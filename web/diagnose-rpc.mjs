@@ -1,7 +1,14 @@
+// Compare a private Helius RPC with the public mainnet RPC.
+// Usage: HELIUS_RPC_URL="https://mainnet.helius-rpc.com/?api-key=..." node web/diagnose-rpc.mjs
+
+/** Hide query-string secrets (api-key=...) when printing an RPC URL. */
+function redact(url) {
+  return url.replace(/([?&][^=]*key=)[^&]+/gi, "$1***");
+}
 
 async function diagnoseRPC(name, url) {
   console.log(`\n--- Diagnosing ${name} ---`);
-  console.log(`URL: ${url}`);
+  console.log(`URL: ${redact(url)}`);
   try {
     const start = Date.now();
     const response = await fetch(url, {
@@ -28,7 +35,11 @@ async function diagnoseRPC(name, url) {
 }
 
 async function run() {
-  const heliusUrl = "https://mainnet.helius-rpc.com/?api-key=29798653-2d13-4d8a-96ad-df70b015e234";
+  const heliusUrl = process.env.HELIUS_RPC_URL;
+  if (!heliusUrl) {
+    console.error("HELIUS_RPC_URL is not set. Example: HELIUS_RPC_URL=\"https://mainnet.helius-rpc.com/?api-key=<key>\" node web/diagnose-rpc.mjs");
+    process.exit(1);
+  }
   const publicUrl = "https://api.mainnet-beta.solana.com";
 
   await diagnoseRPC("Helius", heliusUrl);

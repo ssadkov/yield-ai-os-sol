@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 
 const EXECUTE_SWAP_CPI_DISCRIMINATOR = Uint8Array.from([237, 131, 174, 182, 85, 20, 137, 90]);
 const EXECUTE_PROTOCOL_CPI_DISCRIMINATOR = Uint8Array.from([255, 29, 92, 60, 105, 188, 32, 11]);
+const REFUND_EXCESS_LAMPORTS_DISCRIMINATOR = Uint8Array.from([231, 234, 134, 166, 239, 242, 165, 39]);
 
 export function encodeExecuteSwapCpiData(innerIxData: Uint8Array): Buffer {
   return encodeCpiData(EXECUTE_SWAP_CPI_DISCRIMINATOR, innerIxData);
@@ -9,6 +10,14 @@ export function encodeExecuteSwapCpiData(innerIxData: Uint8Array): Buffer {
 
 export function encodeExecuteProtocolCpiData(innerIxData: Uint8Array): Buffer {
   return encodeCpiData(EXECUTE_PROTOCOL_CPI_DISCRIMINATOR, innerIxData);
+}
+
+export function encodeRefundExcessLamportsData(maxAmount: bigint, reserveLamports: bigint): Buffer {
+  const out = Buffer.alloc(24);
+  Buffer.from(REFUND_EXCESS_LAMPORTS_DISCRIMINATOR).copy(out, 0);
+  out.writeBigUInt64LE(maxAmount, 8);
+  out.writeBigUInt64LE(reserveLamports, 16);
+  return out;
 }
 
 function encodeCpiData(discriminator: Uint8Array, innerIxData: Uint8Array): Buffer {

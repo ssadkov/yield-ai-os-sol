@@ -546,6 +546,46 @@ pub mod yield_vault {
         Ok(())
     }
 
+    /// Return SOL that the caller temporarily funded into the vault PDA for protocol setup rent.
+    /// Unlike `withdraw_excess_lamports` (owner-only, drains all excess), this variant lets
+    /// either the agent or the owner refund a capped amount while keeping a safety reserve.
+    /// The frontend encodes this with a distinct Anchor discriminator.
+    pub fn refund_excess_lamports(
+        ctx: Context<RefundExcessLamports>,
+        max_amount: u64,
+        reserve_lamports: u64,
+    ) -> Result<()> {
+        let vault = &ctx.accounts.vault;
+        require!(
+            ctx.accounts.authority.key() == vault.agent
+                || ctx.accounts.authority.key() == vault.owner,
+            ErrorCode::Unauthorized
+        );
+
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let authority_info = ctx.accounts.authority.to_account_info();
+        let current_vault_lamports = vault_info.lamports();
+        let current_authority_lamports = authority_info.lamports();
+        let min_vault_lamports = Rent::get()?
+            .minimum_balance(vault_info.data_len())
+            .saturating_add(reserve_lamports);
+        let refundable = current_vault_lamports.saturating_sub(min_vault_lamports);
+        let amount = refundable.min(max_amount);
+
+        if amount == 0 {
+            return Ok(());
+        }
+
+        **vault_info.try_borrow_mut_lamports()? = current_vault_lamports
+            .checked_sub(amount)
+            .ok_or(ErrorCode::LamportsUnderflow)?;
+        **authority_info.try_borrow_mut_lamports()? = current_authority_lamports
+            .checked_add(amount)
+            .ok_or(ErrorCode::LamportsOverflow)?;
+
+        Ok(())
+    }
+
     /// Owner-only: close the Safe account and return all its lamports to the owner.
     /// Token accounts cannot be enumerated on-chain; the client must close or empty them first.
     /// Anything left behind stays recoverable: the PDA is derived from the owner, and
@@ -931,6 +971,18 @@ pub struct CloseSafe<'info> {
     pub vault: Account<'info, Vault>,
 }
 
+#[derive(Accounts)]
+pub struct RefundExcessLamports<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [b"vault", vault.owner.as_ref()],
+        bump = vault.bump,
+    )]
+    pub vault: Account<'info, Vault>,
+}
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Unauthorized")]
@@ -967,6 +1019,10 @@ pub enum ErrorCode {
     InsufficientShares,
     #[msg("This protocol must be used through its dedicated instruction")]
     UseDedicatedInstruction,
+    #[msg("Lamports underflow")]
+    LamportsUnderflow,
+    #[msg("Lamports overflow")]
+    LamportsOverflow,
 }
 
 #[cfg(test)]

@@ -10,7 +10,8 @@ import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
   ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
-  safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
+  safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, fetchKaminoWithdrawalPlan,
+  ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
   KAMINO_SHARES_MINT, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTE_KAMINO_USDC, ROUTES,
   type KaminoMetrics, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
@@ -92,7 +93,8 @@ export function SafeV2Panel() {
   // Kamino USDC position: shares live in the Safe; value = shares x tokensPerShare (both 6 decimals).
   const isMainnet = cluster === "Mainnet";
   const kaminoShares = safe?.tokens.find((token) => token.mint.equals(KAMINO_SHARES_MINT))?.amount ?? BigInt(0);
-  const kaminoValue = kaminoMetrics ? Number(kaminoShares) / 1e6 * kaminoMetrics.tokensPerShare : null;
+  const kaminoEstimate = kaminoMetrics ? Number(kaminoShares) / 1e6 * kaminoMetrics.tokensPerShare : null;
+  const kaminoValue = kaminoEstimate !== null && Number.isFinite(kaminoEstimate) ? kaminoEstimate : null;
   const kaminoPrincipal = safe?.routePrincipal[ROUTE_KAMINO_USDC] ?? BigInt(0);
   const idleUsdc = safe?.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
   const kaminoBps = safe?.allocationBps?.[ROUTE_KAMINO_USDC] ?? 0;
@@ -100,20 +102,28 @@ export function SafeV2Panel() {
   const kaminoPut = idleUsdc * BigInt(kaminoBps) / BigInt(10_000);
   const canKaminoDeposit = isMainnet && kaminoPut >= BigInt(1_000);
   const usd = (raw: bigint) => (Number(raw) / 1e6).toFixed(2);
+  const safeValue = kaminoShares > BigInt(0) && kaminoValue === null
+    ? null : Number(idleUsdc) / 1e6 + (kaminoValue ?? 0);
+  const showLabControls = process.env.NEXT_PUBLIC_V2_LAB_CONTROLS === "1";
 
   async function buildKaminoDeposit() {
     if (!publicKey) return [];
-    const kamino = await fetchKaminoAccounts("deposit", publicKey, (Number(kaminoPut) / 1e6).toString());
+    const kamino = await fetchKaminoAccounts(publicKey, (Number(kaminoPut) / 1e6).toString());
     return { instructions: await ixKaminoDeposit(connection, publicKey, kaminoPut, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
   }
   async function buildKaminoWithdrawAll() {
     if (!publicKey) return [];
-    const kamino = await fetchKaminoAccounts("withdraw", publicKey, (kaminoValue ?? 0).toFixed(6));
-    return { instructions: await ixKaminoWithdraw(connection, publicKey, kaminoShares, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
+    const plan = await fetchKaminoWithdrawalPlan(publicKey, kaminoShares);
+    return { instructions: await ixKaminoWithdraw(connection, publicKey, plan), lookupTables: await loadLookupTables(connection, plan.lookupTables) };
   }
 
   const emptyTokens = safe?.tokens.filter((token) => token.amount === BigInt(0)) ?? [];
   const heldTokens = safe?.tokens.filter((token) => token.amount > BigInt(0) && !token.mint.equals(KAMINO_SHARES_MINT)) ?? [];
+  const otherHeldTokens = heldTokens.filter((token) => !token.isUsdc);
+  const hasUnwithdrawnAssets = heldTokens.length > 0 || kaminoShares > BigInt(0);
+  const canFullExit = !!safe?.exists && otherHeldTokens.length === 0
+    && (idleUsdc > BigInt(0) || kaminoShares > BigInt(0))
+    && (kaminoShares === BigInt(0) || isMainnet);
 
   type Built = TransactionInstruction[] | { instructions: TransactionInstruction[]; lookupTables: AddressLookupTableAccount[] };
   async function run(label: string, build: () => Promise<Built>) {
@@ -131,6 +141,44 @@ export function SafeV2Panel() {
     } catch (error) {
       say(`Failed or cancelled: ${error instanceof Error ? error.message : String(error)}`);
     } finally { setBusy(null); }
+  }
+
+  async function runFullExit() {
+    if (!publicKey || !wallet) return;
+    setBusy("Full withdrawal");
+    const lines = ["Full withdrawal…"];
+    setLog([...lines]);
+    const say = (line: string) => { lines.push(line); setLog([...lines]); };
+    try {
+      let current = await readSafe(connection, publicKey);
+      if (current.tokens.some((token) => token.amount > BigInt(0) && !token.isUsdc && !token.mint.equals(KAMINO_SHARES_MINT))) {
+        throw new Error("Other Safe assets must be withdrawn separately");
+      }
+      let shares = current.tokens.find((token) => token.mint.equals(KAMINO_SHARES_MINT))?.amount ?? BigInt(0);
+      for (let step = 0; shares > BigInt(0); step++) {
+        if (!isMainnet) throw new Error("Kamino withdrawal requires Solana Mainnet");
+        if (step >= 8) throw new Error("Kamino needs more than eight withdrawal steps; retry after refreshing the Safe");
+        const plan = await fetchKaminoWithdrawalPlan(publicKey, shares);
+        const instructions = await ixKaminoWithdraw(connection, publicKey, { ...plan, withdrawals: [plan.withdrawals[0]] });
+        const lookupTables = await loadLookupTables(connection, plan.lookupTables);
+        const signature = await sendOwnerTransaction({ connection, adapter: wallet.adapter, owner: publicKey,
+          instructions, lookupTables, onStatus: say });
+        say(`Kamino step ${step + 1} confirmed: ${explorerTx(signature, genesis)}`);
+        current = await readSafe(connection, publicKey);
+        const remaining = current.tokens.find((token) => token.mint.equals(KAMINO_SHARES_MINT))?.amount ?? BigInt(0);
+        if (remaining >= shares) throw new Error("Kamino shares did not decrease; refresh before retrying");
+        shares = remaining;
+      }
+      const usdc = current.tokens.find((token) => token.isUsdc);
+      if (usdc && usdc.amount > BigInt(0)) {
+        const signature = await sendOwnerTransaction({ connection, adapter: wallet.adapter, owner: publicKey,
+          instructions: [await ixWithdraw(connection, publicKey, usdc, usdc.amount)], onStatus: say });
+        say(`USDC withdrawal confirmed: ${explorerTx(signature, genesis)}`);
+      }
+      say("All supported USDC assets have been returned to your wallet.");
+    } catch (error) {
+      say(`Stopped: ${error instanceof Error ? error.message : String(error)}. Already confirmed steps remain on chain; refresh and retry.`);
+    } finally { await refresh().catch(() => {}); setBusy(null); }
   }
 
   const depositRaw = toRaw(depositAmount, USDC_DECIMALS);
@@ -198,6 +246,19 @@ export function SafeV2Panel() {
       </section>
 
       {safe?.exists && <section className={card}>
+        <h2 className="text-lg font-semibold">Your Safe value</h2>
+        <p className="text-3xl font-semibold tabular-nums">{safeValue === null ? "Value temporarily unavailable" : `${safeValue.toFixed(2)} USDC`}</p>
+        <p className="text-muted-foreground">Includes {usd(idleUsdc)} USDC ready to withdraw{kaminoShares > BigInt(0) ? " and an estimated Kamino position" : ""}. The final amount is known after Kamino redemption and fees.</p>
+        <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+          disabled={!!busy || !canFullExit || metaMaskBlocked}
+          onClick={() => void runFullExit()}>
+          <ArrowUpFromLine className="h-4 w-4" /> Withdraw all USDC
+        </button>
+        {kaminoShares > BigInt(0) && <p className="text-muted-foreground">This may require several wallet approvals: first redeem Kamino shares, then send USDC to your wallet. Each confirmed step can be resumed after interruption.</p>}
+        {otherHeldTokens.length > 0 && <p className="text-amber-200">The Safe also has other assets. Withdraw those separately before using full USDC withdrawal.</p>}
+      </section>}
+
+      {safe?.exists && <section className={card}>
         <h2 className="text-lg font-semibold">Deposit USDC</h2>
         <p className="text-muted-foreground">Wallet USDC: {walletUsdc === null ? "…" : (Number(walletUsdc) / 10 ** USDC_DECIMALS).toString()}</p>
         <div className="flex flex-wrap gap-2">
@@ -211,7 +272,7 @@ export function SafeV2Panel() {
         </div>
       </section>}
 
-      {safe?.exists && <section className={card}>
+      {showLabControls && safe?.exists && <section className={card}>
         <h2 className="flex items-center gap-2 text-lg font-semibold"><SlidersHorizontal className="h-4 w-4" /> Allocation</h2>
         <p className="text-muted-foreground">Your target split, stored in the Safe. The agent may only allocate within these limits once the Kamino and ONyc routes ship; today nothing is moved automatically.</p>
         {!safe.allocationBps && <p className="text-amber-200">This Safe was created before allocation targets existed; saving will initialise them.</p>}
@@ -227,10 +288,10 @@ export function SafeV2Panel() {
         </button>
       </section>}
 
-      {safe?.exists && <section className={card}>
+      {showLabControls && safe?.exists && <section className={card}>
         <h2 className="flex items-center gap-2 text-lg font-semibold"><TrendingUp className="h-4 w-4" /> Kamino USDC</h2>
         <p className="text-muted-foreground">
-          Lending yield via the Kamino USDC vault{kaminoMetrics ? ` · APY ${(kaminoMetrics.apy * 100).toFixed(2)}%` : ""}.
+          Lending yield via the Kamino USDC vault{kaminoMetrics?.apy != null ? ` · APY ${(kaminoMetrics.apy * 100).toFixed(2)}%` : ""}.
           USDC only moves between your Safe and Kamino; a 5% fee applies to realized gains only.
         </p>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
@@ -253,7 +314,7 @@ export function SafeV2Panel() {
         </div>
       </section>}
 
-      {safe && (safe.exists || safe.tokens.length > 0) && <section className={card}>
+      {(showLabControls || otherHeldTokens.length > 0) && safe && (safe.exists || safe.tokens.length > 0) && <section className={card}>
         <h2 className="text-lg font-semibold">Holdings</h2>
         {heldTokens.length === 0 ? <p className="text-muted-foreground">No tokens in the Safe.</p> :
           <ul className="space-y-2">{heldTokens.map((token) => {
@@ -284,13 +345,13 @@ export function SafeV2Panel() {
             onClick={() => void run("Reclaim rent", () => buildCleanup(false))}>
             <Trash2 className="h-4 w-4" /> Close empty accounts{safe.excessLamports > 0 ? " + return excess SOL" : ""}
           </button>
-          <button type="button" className={`${button} border border-red-500/60 text-red-300 hover:bg-red-500/10`} disabled={!!busy || metaMaskBlocked || heldTokens.length > 0}
-            title={heldTokens.length > 0 ? "Withdraw all holdings first" : undefined}
+          <button type="button" className={`${button} border border-red-500/60 text-red-300 hover:bg-red-500/10`} disabled={!!busy || metaMaskBlocked || hasUnwithdrawnAssets}
+            title={hasUnwithdrawnAssets ? "Withdraw all holdings first" : undefined}
             onClick={() => void run("Close Safe", () => buildCleanup(true))}>
             <Trash2 className="h-4 w-4" /> Close Safe
           </button>
         </div>
-        {heldTokens.length > 0 && <p className="text-muted-foreground">Close Safe unlocks after every holding is withdrawn.</p>}
+        {hasUnwithdrawnAssets && <p className="text-muted-foreground">Close Safe unlocks after every holding is withdrawn.</p>}
       </section>}
 
       <pre className="min-h-12 whitespace-pre-wrap break-all rounded-md border border-border p-3">{log.length ? log.join("\n") : busy ?? "No transactions yet. Every action is one transaction signed only by your wallet."}</pre>

@@ -73,6 +73,12 @@ export type KaminoAccounts = {
   lookupTables: string[];
 };
 
+export type KaminoWithdrawalPlan = {
+  safe: string;
+  withdrawals: (Pick<KaminoAccounts, "discriminator" | "accounts"> & { shares: string })[];
+  lookupTables: string[];
+};
+
 export type KaminoMetrics = { apy: number; tokensPerShare: number; tokensAvailable: number };
 
 export type SafeToken = {
@@ -223,11 +229,18 @@ export async function ixCloseSafe(connection: Connection, owner: PublicKey) {
 }
 
 /** Kamino accounts for this Safe from our server proxy (the Kamino API builds them for the Safe PDA). */
-export async function fetchKaminoAccounts(action: "deposit" | "withdraw", owner: PublicKey, uiAmount: string): Promise<KaminoAccounts> {
-  const res = await fetch(`/api/v2/kamino?op=${action}&owner=${owner.toBase58()}&amount=${encodeURIComponent(uiAmount)}`);
+export async function fetchKaminoAccounts(owner: PublicKey, uiAmount: string): Promise<KaminoAccounts> {
+  const res = await fetch(`/api/v2/kamino?op=deposit&owner=${owner.toBase58()}&amount=${encodeURIComponent(uiAmount)}`);
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error ?? `Kamino ${action} accounts failed (${res.status})`);
+  if (!res.ok) throw new Error(body.error ?? `Kamino deposit accounts failed (${res.status})`);
   return body as KaminoAccounts;
+}
+
+export async function fetchKaminoWithdrawalPlan(owner: PublicKey, rawShares: bigint): Promise<KaminoWithdrawalPlan> {
+  const res = await fetch(`/api/v2/kamino?op=withdraw&owner=${owner.toBase58()}&shares=${rawShares}`);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error ?? `Kamino withdrawal failed (${res.status})`);
+  return body as KaminoWithdrawalPlan;
 }
 
 export async function fetchKaminoMetrics(): Promise<KaminoMetrics> {
@@ -237,7 +250,7 @@ export async function fetchKaminoMetrics(): Promise<KaminoMetrics> {
   return body as KaminoMetrics;
 }
 
-function kaminoRemaining(kamino: KaminoAccounts) {
+function kaminoRemaining(kamino: Pick<KaminoAccounts, "accounts">) {
   return [
     { pubkey: KAMINO_KVAULT_PROGRAM, isSigner: false, isWritable: false },
     // The Safe PDA cannot sign the outer transaction; the program signs for it via invoke_signed.
@@ -259,18 +272,27 @@ export async function ixKaminoDeposit(connection: Connection, owner: PublicKey, 
 }
 
 /** Owner redeems `shares` back into the Safe; the performance fee on any gain goes to the configured treasury. */
-export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey, shares: bigint, kamino: KaminoAccounts) {
+export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey, plan: KaminoWithdrawalPlan) {
   const [vault] = deriveVaultPda(owner);
+  if (plan.safe !== vault.toBase58() || !plan.withdrawals.length) throw new Error("Kamino plan is not for this Safe");
   const prog = program(connection, owner);
   const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
   const configState = await (prog.account as unknown as Record<string, { fetch(a: PublicKey): Promise<{ treasury: PublicKey }> }>)["config"].fetch(config);
   const treasuryUsdc = getAssociatedTokenAddressSync(USDC_MINT, configState.treasury, true);
+  const withdrawals = await Promise.all(plan.withdrawals.map(async (leg) => {
+    const shares = BigInt(leg.shares);
+    if (shares <= BigInt(0) || shares > (BigInt(1) << BigInt(64)) - BigInt(1) ||
+      (leg.discriminator !== KVAULT_WITHDRAW_FROM_RESERVE && leg.discriminator !== "1383709baadc2239")) {
+      throw new Error("Invalid Kamino withdrawal leg");
+    }
+    return prog.methods.kaminoWithdraw(new BN(shares.toString()), leg.discriminator === KVAULT_WITHDRAW_FROM_RESERVE)
+      .accountsPartial({ authority: owner, vault, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+      .remainingAccounts(kaminoRemaining(leg))
+      .instruction();
+  }));
   return [
     createAssociatedTokenAccountIdempotentInstruction(owner, treasuryUsdc, configState.treasury, USDC_MINT),
-    await prog.methods.kaminoWithdraw(new BN(shares.toString()), kamino.discriminator === KVAULT_WITHDRAW_FROM_RESERVE)
-      .accountsPartial({ authority: owner, vault, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
-      .remainingAccounts(kaminoRemaining(kamino))
-      .instruction(),
+    ...withdrawals,
   ];
 }
 

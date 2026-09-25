@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Local mainnet snapshot only. Keys in /tmp/kfork are disposable test keys created by older fixtures.
+fixture_dir="${KFORK_DIR:-/tmp/kfork}"
+build_dir="${V2_BUILD_DIR:-/tmp/yield-v2-build-20260923-a}"
+args=(--reset --ledger "$fixture_dir/test-ledger" --url https://api.mainnet-beta.solana.com
+  --warp-slot "$(cat "$fixture_dir/fork-slot.txt")")
+args+=(--upgradeable-program 8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5
+  "$build_dir/target/deploy/yield_vault.so" /tmp/yield-v2-admin.json)
+args+=(--clone EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v)
+args+=(--account - "$fixture_dir/owner-usdc.json")
+while IFS= read -r program; do
+  [[ -n "$program" ]] && args+=(--clone-upgradeable-program "$program")
+done < "$fixture_dir/clone-programs.txt"
+while IFS= read -r account; do
+  [[ -n "$account" ]] && args+=(--maybe-clone "$account")
+done < "$fixture_dir/clone-accounts.txt"
+exec env NO_DNA=1 solana-test-validator "${args[@]}"

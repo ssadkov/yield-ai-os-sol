@@ -466,7 +466,8 @@ pub mod yield_vault {
         require!(rem.len() > fixed, ErrorCode::InvalidKaminoAccounts);
         let safe_usdc = &rem[1 + KV_WITHDRAW_USER_TOKEN_ATA];
         let shares_before = safe_token_balance(&rem[1 + KV_WITHDRAW_USER_SHARES_ATA], &vault_key)?;
-        require!(shares <= shares_before, ErrorCode::InsufficientShares);
+        // Kamino uses u64::MAX as "redeem all" on the final reserve leg.
+        require!(shares == u64::MAX || shares <= shares_before, ErrorCode::InsufficientShares);
         let usdc_before = safe_token_balance(safe_usdc, &vault_key)?;
 
         let mut data = discriminator.to_vec();
@@ -474,9 +475,12 @@ pub mod yield_vault {
         invoke_kvault(&ctx.accounts.vault, rem, data, fixed,
             KV_WITHDRAW_USER_TOKEN_ATA, KV_WITHDRAW_USER_SHARES_ATA)?;
 
+        let shares_after = safe_token_balance(&rem[1 + KV_WITHDRAW_USER_SHARES_ATA], &vault_key)?;
+        let burned = shares_before.checked_sub(shares_after).ok_or(ErrorCode::InsufficientShares)?;
+        require!(burned > 0 && (shares == u64::MAX || burned == shares), ErrorCode::InsufficientShares);
         let received = safe_token_balance(safe_usdc, &vault_key)?.saturating_sub(usdc_before);
         let principal = ctx.accounts.vault.route_principal[ROUTE_KAMINO_USDC];
-        let (principal_out, fee) = realize_exit(principal, shares, shares_before, received,
+        let (principal_out, fee) = realize_exit(principal, burned, shares_before, received,
             ctx.accounts.config.performance_fee_bps);
 
         if fee > 0 {

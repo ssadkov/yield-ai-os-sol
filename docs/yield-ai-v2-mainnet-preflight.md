@@ -77,6 +77,8 @@ WebSocket пока не подключать: v2 подтверждает тра
 - Только в Preview-ветке `V2_MAINNET_RPC_URL` пересоздана с типом `sensitive`; `SUPANODE_TOKEN` этой ветки удалён. Production-переменные не менялись. Vercel deployment `dpl_G5i6sFiS8SZJp47YqBCveCbFiuMa` на коммите `adcb87f` получил `READY`; target — Preview.
 - В закрытом Preview `/v2/safe` вернул HTTP 200, `/api/v2/mainnet-rpc` подтвердил Mainnet genesis, `getAccountInfo(yie1…)` вернул `null`, Kamino metrics и read-only withdraw plan успешно ответили. Это проверка доступности RPC и построения плана, а не исполнения вывода или контракта.
 - Программа `yie1…` остаётся неразвёрнутой в Mainnet. Никаких on-chain транзакций и операций со средствами эта проверка не выполняла.
+- Дополнительный read-only preflight: vanity keypair в Ubuntu WSL выводит `yie1…`; исходник `lib.rs`, `Anchor.toml` и `Cargo.toml` WSL-копии совпадают с текущей веткой. Повторный `NO_DNA=1 anchor build` завершился успешно и дал прежний SHA-256 `416f7fe873c16873b099e7a75a535f38f61173aeb731a6321cf98373a8489cef` для `489200`-байтного `.so`.
+- На момент этой проверки Mainnet deployer `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` имел `5.169212938 SOL`; read-only `getMinimumBalanceForRentExemption(489245)` вернул `2.48601484 SOL` для ProgramData. Это оценка rent одной учётной записи, не итоговая цена deploy с буфером и комиссиями. Перед подписью нужно повторно проверить баланс и фактический план транзакций.
 
 ## Что пользователь может проверить сейчас
 

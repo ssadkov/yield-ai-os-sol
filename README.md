@@ -1,5 +1,7 @@
 # Yield AI — Agent-safe execution on Solana
 
+> **Yield AI v2 work in progress:** see [the Colosseum MVP plan and acceptance gates](docs/yield-ai-v2.md). The existing generic CPI allowlist does not constrain an agent's instruction data or destination accounts. The v2 branch restricts those entrypoints to the owner while purpose-built agent actions are developed; the live deployment and the current main branch should not be treated as having that v2 protection.
+
 [![Solana](https://img.shields.io/badge/Solana-mainnet-9945FF)](https://solana.com)
 <!-- [![License: MIT](https://img.shields.io/badge/License-MIT-14F195.svg)](LICENSE) — add LICENSE at repo root, then uncomment -->
 <!-- [![CI](INSERT_CI_BADGE_MARKDOWN)](INSERT_CI_ACTIONS_URL) -->

@@ -1,5 +1,5 @@
 {
-  "address": "3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s",
+  "address": "yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih",
   "metadata": {
     "name": "yield_vault",
     "version": "0.1.0",
@@ -7,6 +7,272 @@
     "description": "Yield AI vault program"
   },
   "instructions": [
+    {
+      "name": "close_empty_token_account",
+      "docs": [
+        "Owner-only: close a zero-balance SPL Token / Token-2022 account owned by the Safe PDA.",
+        "Rent always goes to the owner."
+      ],
+      "discriminator": [
+        232,
+        75,
+        140,
+        136,
+        250,
+        78,
+        224,
+        188
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_account",
+          "writable": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_safe",
+      "docs": [
+        "Owner-only: close the Safe account and return all its lamports to the owner.",
+        "Token accounts cannot be enumerated on-chain; the client must close or empty them first.",
+        "Anything left behind stays recoverable: the PDA is derived from the owner, and",
+        "`initialize` accepts an existing USDC ATA, so re-initializing restores control."
+      ],
+      "discriminator": [
+        79,
+        231,
+        22,
+        117,
+        17,
+        177,
+        232,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_safe_for",
+      "docs": [
+        "Sponsored creation: any payer creates the Safe for `owner` without the owner's signature, so a",
+        "user arriving via CCTP needs no SOL. Only safe defaults are allowed (no agent, no CPI allowlist,",
+        "zero allocation); the owner configures the rest. `close_safe` returns the rent to the owner."
+      ],
+      "discriminator": [
+        180,
+        245,
+        93,
+        28,
+        4,
+        195,
+        86,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "vault_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "owner",
+          "type": "pubkey"
+        }
+      ]
+    },
     {
       "name": "deposit",
       "discriminator": [
@@ -342,7 +608,7 @@
     {
       "name": "execute_protocol_cpi",
       "docs": [
-        "Generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:",
+        "Owner-only generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:",
         "`[program_id_account, ...accounts matching Instruction.accounts order for that program]`.",
         "The vault PDA may sign as authority via seeds `[b\"vault\", owner.key(), bump]`."
       ],
@@ -396,7 +662,7 @@
     {
       "name": "execute_swap_cpi",
       "docs": [
-        "CPI into a whitelisted program. Pass remaining accounts as:",
+        "Owner-only CPI into a whitelisted program. Pass remaining accounts as:",
         "`[program_id_account, ...accounts matching Instruction.accounts order for that program]`.",
         "The vault PDA may sign as authority via seeds `[b\"vault\", owner.key(), bump]`."
       ],
@@ -444,6 +710,147 @@
         {
           "name": "data",
           "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "init_config",
+      "docs": [
+        "One-time protocol config. Only the program's upgrade authority can create it, so nobody can",
+        "front-run the deploy and become admin."
+      ],
+      "discriminator": [
+        23,
+        235,
+        115,
+        232,
+        168,
+        96,
+        1,
+        231
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "upgrade authority to be the signing admin."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  14,
+                  135,
+                  155,
+                  6,
+                  157,
+                  228,
+                  185,
+                  117,
+                  182,
+                  137,
+                  128,
+                  121,
+                  234,
+                  0,
+                  98,
+                  192,
+                  33,
+                  244,
+                  12,
+                  36,
+                  14,
+                  100,
+                  62,
+                  103,
+                  99,
+                  199,
+                  18,
+                  101,
+                  28,
+                  171,
+                  207,
+                  106
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                2,
+                168,
+                246,
+                145,
+                78,
+                136,
+                161,
+                176,
+                226,
+                16,
+                21,
+                62,
+                247,
+                99,
+                174,
+                43,
+                0,
+                194,
+                185,
+                61,
+                22,
+                193,
+                36,
+                210,
+                192,
+                83,
+                122,
+                16,
+                4,
+                128,
+                0,
+                0
+              ]
+            }
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        },
+        {
+          "name": "performance_fee_bps",
+          "type": "u16"
         }
       ]
     },
@@ -599,17 +1006,276 @@
           "type": "pubkey"
         },
         {
-          "name": "strategy",
+          "name": "allocation_bps",
           "type": {
-            "defined": {
-              "name": "Strategy"
-            }
+            "array": [
+              "u16",
+              8
+            ]
           }
         },
         {
           "name": "allowed_programs",
           "type": {
             "vec": "pubkey"
+          }
+        }
+      ]
+    },
+    {
+      "name": "kamino_deposit",
+      "docs": [
+        "Owner or agent: move `amount` USDC from the Safe into the Kamino USDC kVault.",
+        "Funds can only travel between the Safe's own token accounts and that kVault, and a single",
+        "deposit may not exceed the owner's Kamino target share of the Safe's idle USDC."
+      ],
+      "discriminator": [
+        237,
+        8,
+        188,
+        187,
+        115,
+        99,
+        49,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Owner or agent; checked in the handler."
+          ],
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.owner",
+                "account": "Vault"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "kamino_withdraw",
+      "docs": [
+        "Owner or agent: redeem `shares` from the Kamino USDC kVault back into the Safe.",
+        "`from_reserve = false` uses withdraw_from_available; `true` uses the full withdraw that may",
+        "pull liquidity from a lending reserve. USDC always lands in the Safe's own token account."
+      ],
+      "discriminator": [
+        199,
+        101,
+        41,
+        45,
+        213,
+        98,
+        224,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Owner or agent; checked in the handler."
+          ],
+          "signer": true
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault.owner",
+                "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "treasury_usdc_ata",
+          "docs": [
+            "Treasury USDC account; owner and mint are checked in the handler when a fee is due."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "shares",
+          "type": "u64"
+        },
+        {
+          "name": "from_reserve",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "set_agent",
+      "docs": [
+        "The owner may rotate or revoke the agent. Pubkey::default() revokes it.",
+        "Agent execution remains disabled for generic CPI instructions in v2."
+      ],
+      "discriminator": [
+        154,
+        74,
+        121,
+        91,
+        137,
+        19,
+        101,
+        166
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "agent",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_allocation",
+      "docs": [
+        "Owner sets target allocation per route in basis points (sum <= 10_000, the rest stays idle USDC).",
+        "Future agent instructions must respect these targets."
+      ],
+      "discriminator": [
+        119,
+        81,
+        22,
+        4,
+        114,
+        187,
+        23,
+        145
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "allocation_bps",
+          "type": {
+            "array": [
+              "u16",
+              8
+            ]
           }
         }
       ]
@@ -668,6 +1334,64 @@
           "type": {
             "vec": "pubkey"
           }
+        }
+      ]
+    },
+    {
+      "name": "set_config",
+      "docs": [
+        "Admin updates the treasury, the fee (capped) or hands admin over (e.g. to a Squads vault)."
+      ],
+      "discriminator": [
+        108,
+        158,
+        154,
+        175,
+        212,
+        98,
+        52,
+        66
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "treasury",
+          "type": "pubkey"
+        },
+        {
+          "name": "performance_fee_bps",
+          "type": "u16"
         }
       ]
     },
@@ -825,6 +1549,55 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "withdraw_excess_lamports",
+      "docs": [
+        "Owner-only: move Safe PDA lamports above its rent-exempt minimum to the owner."
+      ],
+      "discriminator": [
+        221,
+        166,
+        235,
+        25,
+        123,
+        95,
+        232,
+        59
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "withdraw_spl",
@@ -1014,6 +1787,19 @@
   ],
   "accounts": [
     {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
       "name": "Vault",
       "discriminator": [
         211,
@@ -1024,6 +1810,21 @@
         152,
         117,
         119
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "RouteExit",
+      "discriminator": [
+        225,
+        41,
+        83,
+        107,
+        248,
+        67,
+        189,
+        142
       ]
     }
   ],
@@ -1052,22 +1853,120 @@
       "code": 6004,
       "name": "ZeroAmount",
       "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6005,
+      "name": "TokenAccountNotEmpty",
+      "msg": "Token account still holds tokens"
+    },
+    {
+      "code": 6006,
+      "name": "NoExcessLamports",
+      "msg": "Safe holds no lamports above its rent-exempt minimum"
+    },
+    {
+      "code": 6007,
+      "name": "AllocationTooHigh",
+      "msg": "Allocation exceeds 100% (10_000 bps)"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidKaminoAccounts",
+      "msg": "Kamino accounts do not match the expected kVault instruction layout"
+    },
+    {
+      "code": 6009,
+      "name": "KaminoVaultNotAllowed",
+      "msg": "Only the Kamino USDC kVault is allowed"
+    },
+    {
+      "code": 6010,
+      "name": "NotSafeTokenAccount",
+      "msg": "Token account is not owned by this Safe"
+    },
+    {
+      "code": 6011,
+      "name": "RouteDisabled",
+      "msg": "Owner allocation for this route is zero"
+    },
+    {
+      "code": 6012,
+      "name": "AllocationExceeded",
+      "msg": "Amount exceeds the owner's allocation for this route"
+    },
+    {
+      "code": 6013,
+      "name": "FeeTooHigh",
+      "msg": "Performance fee above the hard cap"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidTreasury",
+      "msg": "Treasury token account does not match the config"
+    },
+    {
+      "code": 6015,
+      "name": "InsufficientShares",
+      "msg": "Not enough shares in the Safe"
+    },
+    {
+      "code": 6016,
+      "name": "UseDedicatedInstruction",
+      "msg": "This protocol must be used through its dedicated instruction"
     }
   ],
   "types": [
     {
-      "name": "Strategy",
+      "name": "Config",
       "type": {
-        "kind": "enum",
-        "variants": [
+        "kind": "struct",
+        "fields": [
           {
-            "name": "Conservative"
+            "name": "admin",
+            "type": "pubkey"
           },
           {
-            "name": "Balanced"
+            "name": "treasury",
+            "docs": [
+              "Wallet whose USDC token account receives performance fees."
+            ],
+            "type": "pubkey"
           },
           {
-            "name": "Growth"
+            "name": "performance_fee_bps",
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RouteExit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "route",
+            "type": "u8"
+          },
+          {
+            "name": "received",
+            "type": "u64"
+          },
+          {
+            "name": "principal_out",
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
           }
         ]
       }
@@ -1090,11 +1989,15 @@
             "type": "pubkey"
           },
           {
-            "name": "strategy",
+            "name": "allocation_bps",
+            "docs": [
+              "Owner's target allocation in basis points, indexed by ROUTE_* constants."
+            ],
             "type": {
-              "defined": {
-                "name": "Strategy"
-              }
+              "array": [
+                "u16",
+                8
+              ]
             }
           },
           {
@@ -1105,6 +2008,19 @@
             "name": "allowed_programs",
             "type": {
               "vec": "pubkey"
+            }
+          },
+          {
+            "name": "route_principal",
+            "docs": [
+              "Owner's cost basis per route (USDC base units), used to charge fees only on gains.",
+              "Appended last so earlier field offsets stay stable."
+            ],
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
             }
           }
         ]

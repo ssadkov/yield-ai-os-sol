@@ -17,20 +17,14 @@ import idlJson from "@/idl/yield_vault.json";
 
 export type StrategyName = "Conservative" | "Balanced" | "Aggressive";
 
-function strategyArg(name: StrategyName) {
-  const map: Record<StrategyName, object> = {
-    Conservative: { conservative: {} },
-    Balanced: { balanced: {} },
-    Aggressive: { growth: {} },
-  };
-  return map[name];
-}
 
 export interface VaultAccount {
   bump: number;
   owner: PublicKey;
   agent: PublicKey;
-  strategy: { conservative?: object; balanced?: object; growth?: object };
+  /** v1 field; v2 stores allocationBps instead. Legacy flows read it as Conservative. */
+  strategy?: { conservative?: object; balanced?: object; growth?: object };
+  allocationBps?: number[];
   lastRebalanceTs: BN;
   allowedPrograms: PublicKey[];
 }
@@ -69,14 +63,14 @@ export async function fetchVaultAccount(
 }
 
 export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
-  if ("conservative" in s) return "Conservative";
+  if (!s || "conservative" in s) return "Conservative";
   if ("balanced" in s) return "Balanced";
   return "Aggressive";
 }
 
 /**
  * Known program IDs the vault may CPI into.
- * Max 64 entries on-chain; keep this list merged with existing vault entries
+ * Max 16 entries on-chain in v2 (was 64); keep this list merged with existing vault entries
  * when updating, because set_allowed_programs rewrites the whole list.
  */
 export const DEFAULT_ALLOWED_PROGRAMS: PublicKey[] = [
@@ -124,7 +118,9 @@ export async function initializeVault(
   const owner = provider.wallet.publicKey;
 
   const sig = await program.methods
-    .initialize(AGENT_PUBKEY, strategyArg(strategy), DEFAULT_ALLOWED_PROGRAMS)
+    // v2: strategy presets are replaced by owner allocation targets (set later via set_allocation).
+    // v2 allowlist holds at most 16 programs and generic CPI is owner-only; start empty.
+    .initialize(AGENT_PUBKEY, Array(8).fill(0), [])
     .accounts({
       owner,
       usdcMint: USDC_MINT,
@@ -295,7 +291,7 @@ function amountToBigInt(amount: number | string | BN): bigint {
   return BigInt(amount);
 }
 
-async function resolveTransferHookAccounts(args: {
+export async function resolveTransferHookAccounts(args: {
   connection: Connection;
   source: PublicKey;
   mint: PublicKey;
@@ -326,8 +322,8 @@ export async function setAllowedPrograms(
   provider: AnchorProvider,
   programs: PublicKey[],
 ) {
-  if (programs.length > 64) {
-    throw new Error("Allowed program list cannot exceed 64 entries");
+  if (programs.length > 16) {
+    throw new Error("Allowed program list cannot exceed 16 entries");
   }
 
   const program = getProgram(provider);

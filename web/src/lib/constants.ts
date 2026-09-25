@@ -1,12 +1,18 @@
 import { PublicKey } from "@solana/web3.js";
+import idlJson from "@/idl/yield_vault.json";
 
 export const RPC_URL =
   process.env.NEXT_PUBLIC_RPC_URL || "https://api.mainnet-beta.solana.com";
 
+// v2 program (the old 3Vtz… mainnet program was closed on 2026-09-23). Must match idl/yield_vault.json.
 export const PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_PROGRAM_ID ||
-    "3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s"
+    process.env.NEXT_PUBLIC_V2_PROGRAM_ID ||
+    "yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih"
 );
+if (PROGRAM_ID.toBase58() !== idlJson.address) {
+  throw new Error("Configured program ID does not match the bundled v2 IDL");
+}
 
 export const USDC_MINT = new PublicKey(
   process.env.NEXT_PUBLIC_USDC_MINT ||

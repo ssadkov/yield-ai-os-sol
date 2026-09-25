@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "list-vaults": "tsx src/listVaults.ts",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "v2-security": "tsx src/v2SecuritySmoke.ts"
   },
   "engines": {
     "node": ">=20"

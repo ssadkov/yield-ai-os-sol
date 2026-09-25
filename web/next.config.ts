@@ -15,6 +15,11 @@ const nextConfig: NextConfig = {
     "@coral-xyz/anchor",
     "axios",
     "jup-lend-read-sdk",
+    "@kamino-finance/klend-sdk",
+    "@kamino-finance/kliquidity-sdk",
+    "@kamino-finance/farms-sdk",
+    "@kamino-finance/scope-sdk",
+    "@orca-so/whirlpools-core",
   ],
   // Opaque dynamic imports are invisible to NFT; force the entire trees of the
   // SDK and its runtime peers into the serverless bundle for all API routes.
@@ -27,6 +32,13 @@ const nextConfig: NextConfig = {
       "./node_modules/@solana/spl-token/**/*",
       "./node_modules/@coral-xyz/anchor/**/*",
       "./node_modules/axios/**/*",
+    ],
+    "/api/v2/kamino": [
+      "./node_modules/@kamino-finance/klend-sdk/**/*",
+      "./node_modules/@kamino-finance/kliquidity-sdk/**/*",
+      "./node_modules/@kamino-finance/farms-sdk/**/*",
+      "./node_modules/@kamino-finance/scope-sdk/**/*",
+      "./node_modules/@orca-so/whirlpools-core/**/*",
     ],
   },
   images: {

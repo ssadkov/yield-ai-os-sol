@@ -28,7 +28,7 @@
 
 В WSL Ubuntu из исходников этой ветки: Rust unit-тесты `6/6`, `NO_DNA=1 anchor build` завершился успешно. Бинарник `yield_vault.so` — `489200` байт, SHA-256 `416f7fe873c16873b099e7a75a535f38f61173aeb731a6321cf98373a8489cef`. Сгенерированный IDL имеет адрес `yie1…`; он перенесён во фронтенд. TypeScript `tsc --noEmit` прошёл во временной WSL-копии. Эти проверки не подтверждают поведение в настоящем Mainnet.
 
-Локальный `next build --webpack` со штатным `next.config.ts` тоже прошёл. При prerender публичный Mainnet RPC несколько раз ответил `429`, но Next завершил сборку. Сбой WASM в первой попытке вызвала неполная временная копия без `next.config.ts`, а не код ветки. Runtime `/api/v2/kamino` и размер функции в Vercel preview ещё нужно проверить отдельно.
+Локальный `next build --webpack` со штатным `next.config.ts` тоже прошёл. При prerender публичный Mainnet RPC несколько раз ответил `429`, но Next завершил сборку. Сбой WASM в первой попытке вызвала неполная временная копия без `next.config.ts`, а не код ветки. Vercel Preview на коммите `6edc5ac` собрался успешно 2026-09-25; runtime-проверки и их ограничения описаны ниже.
 
 Локальный `solana-test-validator` загрузил бинарник под `yie1…`; `client/src/v2SecuritySmoke.ts` прошёл с disposable ключами: `init_config`, права агента, создание и закрытие Safe, восстановление вывода и запрет общего CPI-пути к Kamino. Это локальная регрессия, не Mainnet-транзакция.
 
@@ -37,7 +37,7 @@
 ## Обязательные шаги до открытия пользователям
 
 1. Завершить отдельный mainnet-preview сайта: его RPC должен иметь genesis Mainnet, program ID `yie1…`, mint канонического USDC. Не переключать существующий Devnet URL на Mainnet неожиданно. На текущем Vercel проекте переменные могут указывать на `8xa1…`; новая проверка IDL намеренно остановит такой билд/запуск. Проверить preview-сборку и serverless-функцию `/api/v2/kamino` с реальными настройками.
-2. В основном checkout найден рабочий Mainnet Helius URL в `web/.env` и `agent/.env`: read-only `getGenesisHash` вернул `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d`. `web/.env` при этом содержит старый `NEXT_PUBLIC_PROGRAM_ID=3Vtz…`. Ключ Helius уже фигурирует в коде; [PR #15](https://github.com/ssadkov/yield-ai-os-sol/pull/15) ещё открыт. Сменить ключ и использовать новый URL только в серверной переменной, например `V2_MAINNET_RPC_URL`, не в `NEXT_PUBLIC_*` или клиентском пакете. Для клиентского RPC нужен отдельный публичный endpoint или серверный прокси с ограничениями; текущая локальная сборка прошла на публичном RPC, но получила `429`.
+2. В основном checkout найден рабочий Mainnet Helius URL в `web/.env` и `agent/.env`: read-only `getGenesisHash` вернул `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d`. `web/.env` при этом содержит старый `NEXT_PUBLIC_PROGRAM_ID=3Vtz…`. [PR #15](https://github.com/ssadkov/yield-ai-os-sol/pull/15) смёржен 2026-09-25; ротацию ранее раскрытого Helius-ключа нужно проверить отдельно. Сменить ключ и использовать новый URL только в серверной переменной, например `V2_MAINNET_RPC_URL`, не в `NEXT_PUBLIC_*` или клиентском пакете. Для клиентского RPC нужен отдельный публичный endpoint или серверный прокси с ограничениями; текущая локальная сборка прошла на публичном RPC, но получила `429`.
 3. Для закрытого пилота пользователь согласовал deployer `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` как первоначальные admin и treasury с fee `500 bps`. Это решение не разрешает само по себе deploy или `init_config`. Комиссия перечисляется в USDC ATA treasury; другие токены, полученные адресом deployer, программа не перемещает. Перед доступом внешних пользователей передать admin и upgrade authority в Squads и проверить полномочия на сети. `init_config` должен подписать действующий upgrade authority.
 4. Только после отдельного согласования конкретных on-chain действий: развёрнуть бинарник под vanity ID `yie1…`, проверить ProgramData, upgrade authority и хэш; вызвать `init_config`, проверить treasury/fee. Параметры, суммы, плательщик и сеть должны быть сверены непосредственно перед подписью. Команда `solana program deploy` транслирует реальные платные транзакции; локальная сборка не является симуляцией deploy.
 5. В закрытом Mainnet-пилоте на собственные `$1–5` USDC: создать Safe, внести, войти в Kamino, дождаться фактического `invest`, полностью выйти из резерва и вывести USDC владельцу. Проверить балансы, principal, стоимость и отрицательный сценарий назначения. Положительную прибыль и фактический перевод `5%` fee в treasury проверить отдельно: на форке этот случай не был подтверждён end-to-end. До полного успешного цикла нельзя давать этот маршрут обычным пользователям.
@@ -45,7 +45,7 @@
 
 ## Supanode для закрытого preview
 
-Пользователь предоставил HTTP `https://fra.sol.supanode.xyz:8899` и WebSocket `wss://fra.sol.supanode.xyz:8900`, а Bearer-токен добавит самостоятельно. В Vercel **только для защищённого Preview** ветки `codex/yield-ai-v2-mainnet` (или локально в `web/.env.local`, без коммита) задать:
+Пользователь предоставил HTTP `https://fra.sol.supanode.xyz:8899` и WebSocket `wss://fra.sol.supanode.xyz:8900`. `SUPANODE_TOKEN` добавлен в Preview, но текущий credential отклоняется Supanode; результат проверки ниже. В Vercel **только для защищённого Preview** ветки `codex/yield-ai-v2-mainnet` (или локально в `web/.env.local`, без коммита) задать:
 
 | Переменная | Значение |
 |---|---|
@@ -61,6 +61,15 @@
 Код серверного `/api/v2/mainnet-rpc` и Kamino SDK добавляет `Authorization: Bearer <SUPANODE_TOKEN>` к HTTP запросам. Браузер обращается к этому proxy на своём origin; токен не входит в `NEXT_PUBLIC_*`, URL или пакет JS. Proxy ограничен списком методов и размером запроса, но может расходовать квоту: preview должен быть закрыт от посторонних, а перед публичным запуском потребуется серверное ограничение частоты запросов. `NEXT_PUBLIC_RPC_URL` оставить без секрета; в preview он не используется подключением Safe при `NEXT_PUBLIC_V2_RPC_PROXY=1`, но ещё нужен другим страницам приложения.
 
 WebSocket пока не подключать: v2 подтверждает транзакции через `getSignatureStatuses` и `getBlockHeight` по HTTP. У `@solana/web3.js` нет заголовков в WebSocket handshake; перед публичным использованием WS нужен отдельный безопасный путь, а не токен в клиентском URL. См. [примеры RPC](https://supanode.xyz/docs/solana/rpc/examples) и [WebSocket](https://supanode.xyz/docs/solana/websocket/examples) Supanode. После установки переменных проверить `getGenesisHash = 5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d`, чтение Safe и получение Kamino-плана, не отправляя транзакций.
+
+## Проверка защищённого Preview 2026-09-25
+
+- Повторный деплой прежнего коммита `6edc5ac` после обновления branch-scoped переменных: Vercel `dpl_E1KQi3az8ySVmj3EpnFgECs5N47W`, статус `READY`. Это Preview ветки `codex/yield-ai-v2-mainnet`, не Production.
+- Через Vercel API подтверждены область действия Preview и точное совпадение семи публичных параметров с таблицей выше. `SUPANODE_TOKEN` присутствует как `sensitive`; его значение не выводилось и Vercel API его не раскрывает.
+- Vercel Authentication включена для deployment URL (`all_except_custom_domains`); внешний запрос получил редирект на SSO. По временной ссылке доступа страница `/v2/safe` открылась, `/api/v2/kamino?op=metrics` вернул корректные метрики.
+- Read-only `getGenesisHash` через `/api/v2/mainnet-rpc` вернул HTTP `401`, JSON-RPC `-32003`. Тело ответа совпало с прямым ответом Supanode на заведомо неверный Bearer-токен. План Kamino withdraw через тот же RPC вернул `502`. Причина в отклонённом credential; проверить действительность токена и отсутствие префикса `Bearer `, затем заменить Preview `SUPANODE_TOKEN` и пересобрать Preview.
+- Независимый публичный Mainnet RPC вернул `null` для аккаунта программы `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Программа на Mainnet всё ещё не развёрнута. On-chain транзакций в этой проверке не отправлялось.
+- Локальные `web/.env` и `agent/.env` содержат Helius Mainnet RPC URL: read-only `getGenesisHash` с обоих вернул Mainnet genesis. Значения ключей не выводились. Для Preview при переходе с Supanode использовать новый Helius key, поскольку прежний ранее был в коде; хранить полный URL только в серверной `V2_MAINNET_RPC_URL` и удалить веточную `SUPANODE_TOKEN`.
 
 ## Что пользователь может проверить сейчас
 

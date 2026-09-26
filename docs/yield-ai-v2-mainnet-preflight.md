@@ -1,10 +1,10 @@
 # Yield AI v2 — развёртывание программы и подготовка Mainnet (`yie1…`)
 
-Исторический preflight начат 2026-09-25. **Программа, `init_config`, upgrade с executor whitelist и registry init выполнены в Mainnet 2026-09-26. Mainnet Safe, пилот с USDC и Production-переключение ещё не выполнены.** Рабочая ветка `codex/yield-ai-v2-mainnet` создана от `codex/yield-ai-v2` (`84f3aac`); whitelist разработан в отдельной ветке `codex/yield-ai-v2-executor-whitelist`. Основной checkout `C:\work\yield-ai-os-sol` не изменялся.
+Исторический preflight начат 2026-09-25. **Программа, `init_config`, upgrade с executor whitelist, registry init и создание одного Mainnet Safe выполнены. В Safe внесены 2 USDC; вывод и цикл Kamino ещё не проверены. Production-переключение не выполнено.** Рабочая ветка `codex/yield-ai-v2-mainnet` создана от `codex/yield-ai-v2` (`84f3aac`); whitelist разработан в отдельной ветке `codex/yield-ai-v2-executor-whitelist`. Основной checkout `C:\work\yield-ai-os-sol` не изменялся.
 
 ## Адреса и текущая сеть
 
-**Текущее состояние:** whitelist байткод активен в Mainnet, registry инициализирован с одним executor `3ayNPp…`. Для создания Safe нужен обновлённый закрытый Preview из PR #18; прежний Preview использует старый формат `initialize`. Подробности в разделе «Executor whitelist» ниже.
+**Текущее состояние:** whitelist байткод активен в Mainnet, registry инициализирован с одним executor `3ayNPp…`. Владелец создал Safe через закрытый Preview PR #18. Прежний Preview использует старый формат `initialize`. Подробности в разделе «Executor whitelist» ниже.
 
 | Объект | Адрес / результат read-only проверки |
 |---|---|
@@ -15,7 +15,7 @@
 | Devnet program | `8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5`; остаётся отдельной программой |
 | Владелец, подтвердивший Devnet Safe | `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2` |
 | Его Devnet Safe | `28z3NpLQPSA3AdAUeFrko3fRm3BtdZTNcCmYe7yUYVy3`, аккаунт принадлежит `8xa1…` |
-| Будущий PDA Safe этого же владельца под `yie1…` | `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`; пока это только расчёт, Safe не создан |
+| Mainnet Safe этого же владельца под `yie1…` | `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`; создан, owner `EP9f…`, executor `3ayNPp…`, 2 USDC на Safe ATA при read-only проверке 2026-09-26 |
 | Mainnet SOL владельца на момент проверки | `0.082353123 SOL`; показанные интерфейсом `13.9704 SOL` относились к Devnet |
 | Mainnet deployer/текущая upgrade authority | `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`; баланс после `init_config` `2.678346128 SOL` |
 
@@ -123,4 +123,8 @@ WebSocket пока не подключать: v2 подтверждает тра
 
 ## Что пользователь может проверить сейчас
 
-Devnet Safe остаётся отдельным тестовым счётом. В Mainnet программа `yie1…`, config и executor registry активны, но Safe `FuDC…` ещё не создан. Можно открыть **новый закрытый Preview PR #18**, сверить Mainnet genesis, owner, program ID, USDC mint и адрес executor, затем подписать создание Safe и малый личный депозит. На адрес несуществующего Safe заранее USDC не отправлять. Вход в Kamino и депозит обычных пользователей остаются закрытым пилотом до фактического полного выхода с небольшим объёмом и проверки fee. Production не переключён.
+Devnet Safe остаётся отдельным тестовым счётом. В Mainnet программа `yie1…`, config, executor registry и Safe `FuDC…` активны. Read-only проверка `finalized` 2026-09-26 подтвердила PDA от owner `EP9f…`, владельца account `yie1…`, executor `3ayNPp…`, нулевую allocation и principal, 2 000 000 базовых единиц канонического USDC (2 USDC) на Safe ATA, отсутствие Kamino shares и 0.026385349 SOL у owner. Эта проверка не совершала транзакций и не доказывает работу вывода.
+
+История этого Safe показывает [`Initialize`](https://explorer.solana.com/tx/ATZenCzg3Xtv1jbCGbpYGgsfPSy5FPxvADJc1Pb2owSStJQ14FCv4CpCtMvsShvtvpP24tqkyzw577W1BoE175u) (slot `450694976`) и [`Deposit`](https://explorer.solana.com/tx/3Rs2i2HAowdPHnPcxiRNQokU44Bq1cyC8Ax5JKin3eQrMsJ3vseg7XYDJMz9uerZDbdtU6fB4AgKeL2ZMju8UExM) (slot `450695026`): обе транзакции `finalized`, `err=null`, в логах программы соответствующие инструкции. Комиссия сети каждой — `155000` lamports по прочитанным транзакциям; это замер с тогдашней priority fee, а не фиксированная цена будущего вывода.
+
+В Preview PR #18 добавлен частичный вывод свободного USDC: владелец вводит точную сумму до шести знаков или процент до шести знаков от текущего свободного остатка; второй ввод пересчитывается автоматически. `Max` задаёт 100%. Значения меньше одного базового USDC, больше остатка и процент выше 100 отклоняются. Контрактный `withdraw(amount)` переводит USDC из Safe ATA в ATA владельца с одной подписью; интерфейс сначала симулирует транзакцию. Процент **не включает позицию Kamino**: для неё нужно сначала погасить shares. Кнопка полного вывода по-прежнему отдельно погашает Kamino и затем переводит фактический свободный USDC. Пользователь может теперь проверить вывод, например 0.1 USDC или 5% от 2 USDC, в закрытом Mainnet Preview; подтверждение фактической транзакции и балансов остаётся следующим этапом. Вход в Kamino и депозит обычных пользователей остаются закрытым пилотом до фактического полного выхода с небольшим объёмом и проверки fee. Production не переключён.

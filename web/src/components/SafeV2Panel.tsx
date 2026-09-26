@@ -30,6 +30,14 @@ function toRaw(ui: string, decimals: number): bigint | null {
   return BigInt(match[1]) * BigInt(10) ** BigInt(decimals) + BigInt(fraction || "0");
 }
 
+function fromRaw(raw: bigint, decimals: number): string {
+  const scale = BigInt(10) ** BigInt(decimals);
+  const fraction = (raw % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${raw / scale}${fraction ? `.${fraction}` : ""}`;
+}
+
+const PERCENT_SCALE = BigInt(100_000_000); // 100% with six decimal places.
+
 function short(key: string) {
   return `${key.slice(0, 4)}…${key.slice(-4)}`;
 }
@@ -46,6 +54,7 @@ export function SafeV2Panel() {
   const [creationCost, setCreationCost] = useState<number | null>(null);
   const [kaminoMetrics, setKaminoMetrics] = useState<KaminoMetrics | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
+  const [partialWithdraw, setPartialWithdraw] = useState<{ mode: "amount" | "percent"; value: string }>({ mode: "amount", value: "" });
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   /** Draft targets in percent, indexed like ROUTES. */
@@ -109,6 +118,15 @@ export function SafeV2Panel() {
   const kaminoValue = kaminoEstimate !== null && Number.isFinite(kaminoEstimate) ? kaminoEstimate : null;
   const kaminoPrincipal = safe?.routePrincipal[ROUTE_KAMINO_USDC] ?? BigInt(0);
   const idleUsdc = safe?.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
+  const partialPercent = partialWithdraw.mode === "percent" ? toRaw(partialWithdraw.value, 6) : null;
+  const partialRaw = partialWithdraw.mode === "amount" ? toRaw(partialWithdraw.value, USDC_DECIMALS)
+    : partialPercent !== null && partialPercent <= PERCENT_SCALE ? idleUsdc * partialPercent / PERCENT_SCALE : null;
+  const partialAmountInput = partialWithdraw.mode === "amount" ? partialWithdraw.value
+    : partialRaw !== null ? fromRaw(partialRaw, USDC_DECIMALS) : "";
+  const partialPercentInput = partialWithdraw.mode === "percent" ? partialWithdraw.value
+    : partialRaw !== null && idleUsdc > BigInt(0) ? fromRaw(partialRaw * PERCENT_SCALE / idleUsdc, 6) : "";
+  const canPartialWithdraw = !!safe?.exists && idleUsdc > BigInt(0) && partialRaw !== null
+    && partialRaw > BigInt(0) && partialRaw <= idleUsdc;
   const kaminoBps = safe?.allocationBps?.[ROUTE_KAMINO_USDC] ?? 0;
   // The program caps one deposit at idle x target; Kamino's minimum deposit is 0.001 USDC.
   const kaminoPut = idleUsdc * BigInt(kaminoBps) / BigInt(10_000);
@@ -269,6 +287,26 @@ export function SafeV2Panel() {
         <h2 className="text-lg font-semibold">Your Safe value</h2>
         <p className="text-3xl font-semibold tabular-nums">{safeValue === null ? "Value temporarily unavailable" : `${safeValue.toFixed(2)} USDC`}</p>
         <p className="text-muted-foreground">Includes {usd(idleUsdc)} USDC ready to withdraw{kaminoShares > BigInt(0) ? " and an estimated Kamino position" : ""}. The final amount is known after Kamino redemption and fees.</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="space-y-1">
+            <span className="block text-muted-foreground">Withdraw available USDC</span>
+            <input className="w-36 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="Amount in USDC"
+              value={partialAmountInput} onChange={(e) => setPartialWithdraw({ mode: "amount", value: e.target.value })} />
+          </label>
+          <label className="space-y-1">
+            <span className="block text-muted-foreground">Percent of available</span>
+            <input className="w-28 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="0–100"
+              value={partialPercentInput} onChange={(e) => setPartialWithdraw({ mode: "percent", value: e.target.value })} />
+          </label>
+          <button type="button" className={`${button} border border-border hover:bg-accent`} onClick={() => setPartialWithdraw({ mode: "percent", value: "100" })}>Max</button>
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || !canPartialWithdraw || metaMaskBlocked}
+            onClick={() => { const token = safe.tokens.find((item) => item.isUsdc); if (token && partialRaw)
+              void run(`Withdraw ${fromRaw(partialRaw, USDC_DECIMALS)} USDC`, async () => [await ixWithdraw(connection, publicKey, token, partialRaw)]); }}>
+            <ArrowUpFromLine className="h-4 w-4" /> Withdraw amount
+          </button>
+        </div>
+        <p className="text-muted-foreground">The amount and percent use only the USDC currently in your Safe. Kamino funds must be redeemed first. Your wallet signs one transaction.</p>
         <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
           disabled={!!busy || !canFullExit || metaMaskBlocked}
           onClick={() => void runFullExit()}>

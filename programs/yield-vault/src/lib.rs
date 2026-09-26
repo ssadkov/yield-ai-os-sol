@@ -13,6 +13,8 @@ declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
 
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;
+/// Admin-managed executor keys. The separate PDA avoids changing the deployed Config account size.
+const MAX_EXECUTORS: usize = 16;
 /// Allocation routes, indexed into `Vault::allocation_bps`. Unused indices are reserved for future protocols.
 pub const MAX_ROUTES: usize = 8;
 pub const ROUTE_KAMINO_USDC: usize = 0;
@@ -81,10 +83,26 @@ fn kamino_shares_ata(safe: &Pubkey) -> Pubkey {
     anchor_spl::associated_token::get_associated_token_address(safe, &KAMINO_USDC_KVAULT_SHARES)
 }
 
-/// Owner, or the configured agent (the default key means "no agent").
-fn require_owner_or_agent(vault: &Vault, authority: &Pubkey) -> Result<()> {
-    let is_agent = vault.agent != Pubkey::default() && *authority == vault.agent;
-    require!(*authority == vault.owner || is_agent, ErrorCode::Unauthorized);
+fn validate_executors(default_executor: Pubkey, approved: &[Pubkey]) -> Result<()> {
+    require!(approved.len() <= MAX_EXECUTORS, ErrorCode::TooManyExecutors);
+    for (index, executor) in approved.iter().enumerate() {
+        require!(*executor != Pubkey::default(), ErrorCode::InvalidExecutor);
+        require!(!approved[..index].contains(executor), ErrorCode::DuplicateExecutor);
+    }
+    require!(
+        default_executor == Pubkey::default() || approved.contains(&default_executor),
+        ErrorCode::ExecutorNotApproved
+    );
+    Ok(())
+}
+
+/// The owner always retains control. An agent must match this Safe and the current admin whitelist.
+fn require_owner_or_agent(vault: &Vault, authority: &Pubkey, registry: &ExecutorRegistry) -> Result<()> {
+    if *authority == vault.owner {
+        return Ok(());
+    }
+    require!(vault.agent != Pubkey::default() && *authority == vault.agent, ErrorCode::Unauthorized);
+    require!(registry.approved.contains(authority), ErrorCode::ExecutorNotApproved);
     Ok(())
 }
 
@@ -154,6 +172,8 @@ pub mod yield_vault {
             ErrorCode::TooManyPrograms
         );
         validate_allocation(&allocation_bps)?;
+        require!(agent != Pubkey::default(), ErrorCode::InvalidExecutor);
+        require!(ctx.accounts.executor_registry.approved.contains(&agent), ErrorCode::ExecutorNotApproved);
         let vault = &mut ctx.accounts.vault;
         vault.bump = ctx.bumps.vault;
         vault.owner = ctx.accounts.owner.key();
@@ -212,6 +232,29 @@ pub mod yield_vault {
         Ok(())
     }
 
+    /// One global executor registry per program. Only the current config admin can initialize it.
+    pub fn init_executor_registry(
+        ctx: Context<InitExecutorRegistry>, default_executor: Pubkey, approved: Vec<Pubkey>
+    ) -> Result<()> {
+        validate_executors(default_executor, &approved)?;
+        let registry = &mut ctx.accounts.executor_registry;
+        registry.bump = ctx.bumps.executor_registry;
+        registry.default_executor = default_executor;
+        registry.approved = approved;
+        Ok(())
+    }
+
+    /// Replacing the list can approve, revoke, or pause executors without a program upgrade.
+    pub fn set_executor_registry(
+        ctx: Context<SetExecutorRegistry>, default_executor: Pubkey, approved: Vec<Pubkey>
+    ) -> Result<()> {
+        validate_executors(default_executor, &approved)?;
+        let registry = &mut ctx.accounts.executor_registry;
+        registry.default_executor = default_executor;
+        registry.approved = approved;
+        Ok(())
+    }
+
     pub fn set_allowed_programs(
         ctx: Context<SetAllowedPrograms>,
         allowed_programs: Vec<Pubkey>,
@@ -228,6 +271,9 @@ pub mod yield_vault {
     /// The owner may rotate or revoke the agent. Pubkey::default() revokes it.
     /// Agent execution remains disabled for generic CPI instructions in v2.
     pub fn set_agent(ctx: Context<SetAgent>, agent: Pubkey) -> Result<()> {
+        if agent != Pubkey::default() {
+            require!(ctx.accounts.executor_registry.approved.contains(&agent), ErrorCode::ExecutorNotApproved);
+        }
         ctx.accounts.vault.agent = agent;
         Ok(())
     }
@@ -423,7 +469,7 @@ pub mod yield_vault {
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
         let vault = &ctx.accounts.vault;
-        require_owner_or_agent(vault, &ctx.accounts.authority.key())?;
+        require_owner_or_agent(vault, &ctx.accounts.authority.key(), &ctx.accounts.executor_registry)?;
         let target_bps = vault.allocation_bps[ROUTE_KAMINO_USDC];
         require!(target_bps > 0, ErrorCode::RouteDisabled);
 
@@ -456,7 +502,7 @@ pub mod yield_vault {
     ) -> Result<()> {
         require!(shares > 0, ErrorCode::ZeroAmount);
         let vault_key = ctx.accounts.vault.key();
-        require_owner_or_agent(&ctx.accounts.vault, &ctx.accounts.authority.key())?;
+        require_owner_or_agent(&ctx.accounts.vault, &ctx.accounts.authority.key(), &ctx.accounts.executor_registry)?;
         let (discriminator, fixed) = if from_reserve {
             (KVAULT_WITHDRAW, KV_WITHDRAW_FULL_FIXED_ACCOUNTS)
         } else {
@@ -581,6 +627,15 @@ pub struct Config {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct ExecutorRegistry {
+    pub bump: u8,
+    pub default_executor: Pubkey,
+    #[max_len(16)]
+    pub approved: Vec<Pubkey>,
+}
+
 #[event]
 pub struct RouteExit {
     pub vault: Pubkey,
@@ -602,6 +657,8 @@ pub struct Initialize<'info> {
         bump
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
     pub usdc_mint: Account<'info, Mint>,
     // init_if_needed: after close_safe the ATA may still exist; re-initializing must reuse it.
     #[account(
@@ -681,6 +738,8 @@ pub struct SetAgent<'info> {
         has_one = owner,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -835,6 +894,8 @@ pub struct KaminoAction<'info> {
         bump = vault.bump,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -847,6 +908,8 @@ pub struct KaminoWithdraw<'info> {
         bump = vault.bump,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
     /// Treasury USDC account; owner and mint are checked in the handler when a fee is due.
@@ -883,6 +946,32 @@ pub struct SetConfig<'info> {
     pub admin: Signer<'info>,
     #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
+}
+
+#[derive(Accounts)]
+pub struct InitExecutorRegistry<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ExecutorRegistry::INIT_SPACE,
+        seeds = [b"executor_registry"],
+        bump,
+    )]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetExecutorRegistry<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -967,6 +1056,14 @@ pub enum ErrorCode {
     InsufficientShares,
     #[msg("This protocol must be used through its dedicated instruction")]
     UseDedicatedInstruction,
+    #[msg("Too many executor keys in the global whitelist")]
+    TooManyExecutors,
+    #[msg("The executor key cannot be the default pubkey")]
+    InvalidExecutor,
+    #[msg("Duplicate executor key in the global whitelist")]
+    DuplicateExecutor,
+    #[msg("Executor is not in the current admin whitelist")]
+    ExecutorNotApproved,
 }
 
 #[cfg(test)]

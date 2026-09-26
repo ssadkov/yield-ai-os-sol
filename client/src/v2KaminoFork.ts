@@ -106,8 +106,8 @@ async function run() {
   if (!/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?/.test(rpc)) throw new Error("fork test runs only against localhost");
   const connection = new Connection(rpc, "confirmed");
   const owner = loadOrCreate("owner"), agent = loadOrCreate("agent"), attacker = loadOrCreate("attacker");
-  const treasury = loadOrCreate("treasury");
   const admin = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(process.env.V2_ADMIN_KEYPAIR ?? "/tmp/yield-v2-admin.json", "utf8"))));
+  const treasury = admin;
   for (const kp of [owner, agent, attacker, admin]) {
     await connection.confirmTransaction(await connection.requestAirdrop(kp.publicKey, 2_000_000_000), "confirmed");
   }
@@ -136,13 +136,17 @@ async function run() {
   await methods.initConfig(treasury.publicKey, 500)
     .accounts({ admin: admin.publicKey, config, programData, systemProgram: SystemProgram.programId })
     .signers([admin]).rpc();
+  const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], PROGRAM_ID);
+  await methods.initExecutorRegistry(agent.publicKey, [agent.publicKey])
+    .accounts({ admin: admin.publicKey, config, executorRegistry, systemProgram: SystemProgram.programId })
+    .signers([admin]).rpc();
   const treasuryUsdc = getAssociatedTokenAddressSync(USDC, treasury.publicKey);
   await sendAndConfirmTransaction(connection, new Transaction().add(
     createAssociatedTokenAccountIdempotentInstruction(agent.publicKey, treasuryUsdc, treasury.publicKey, USDC)), [agent]);
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
   await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault: safe, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
+    .accounts({ owner: owner.publicKey, vault: safe, executorRegistry, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
   await methods.deposit(new BN(OWNER_USDC.toString()))
@@ -154,7 +158,7 @@ async function run() {
   console.log(`safe ${safe.toBase58()} usdc ${(await getAccount(connection, safeUsdc)).amount}`);
 
   const agentDeposit = (amount: bigint, replace: Record<number, PublicKey> = {}, signer = agent) => methods.kaminoDeposit(new BN(amount.toString()))
-    .accounts({ authority: signer.publicKey, vault: safe }).remainingAccounts(remaining(kvDeposit, replace))
+    .accounts({ authority: signer.publicKey, vault: safe, executorRegistry }).remainingAccounts(remaining(kvDeposit, replace))
     .preInstructions([cu]).signers([signer]).rpc();
 
   await expectFailure("deposit above 60% target", () => agentDeposit(BigInt(60_000_001)), /AllocationExceeded/);
@@ -193,7 +197,7 @@ async function run() {
   assert.equal(principalAfterDeposit, BigInt(60_000_000));
 
   const agentWithdraw = (amount: bigint, replace: Record<number, PublicKey> = {}) => methods.kaminoWithdraw(new BN(amount.toString()), false)
-    .accounts({ authority: agent.publicKey, vault: safe, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
     .remainingAccounts(remaining(kvWithdraw, replace))
     .preInstructions([cu]).signers([agent]).rpc();
   const attackerUsdc = getAssociatedTokenAddressSync(USDC, attacker.publicKey);

@@ -5,7 +5,7 @@ set -euo pipefail
 fixture_dir="${KFORK_DIR:-/tmp/kfork}"
 build_dir="${V2_BUILD_DIR:?set V2_BUILD_DIR to the yie1 build directory}"
 [[ -f "$build_dir/target/deploy/yield_vault.so" ]] || { echo "Missing yie1 program build" >&2; exit 1; }
-args=(--reset --ledger "$fixture_dir/test-ledger" --url https://api.mainnet-beta.solana.com
+args=(--reset --ledger "$fixture_dir/test-ledger" --url "${MAINNET_RPC_URL:-https://api.mainnet-beta.solana.com}"
   --warp-slot "$(cat "$fixture_dir/fork-slot.txt")")
 args+=(--upgradeable-program yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih
   "$build_dir/target/deploy/yield_vault.so" /tmp/yield-v2-admin.json)

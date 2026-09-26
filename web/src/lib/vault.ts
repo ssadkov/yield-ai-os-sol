@@ -116,13 +116,25 @@ export async function initializeVault(
 ) {
   const program = getProgram(provider);
   const owner = provider.wallet.publicKey;
+  const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], program.programId);
+  let agent = AGENT_PUBKEY;
+  if (await provider.connection.getGenesisHash() === "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d") {
+    const registry = await (program.account as unknown as Record<string, { fetch(key: PublicKey): Promise<{
+      defaultExecutor: PublicKey; approved: PublicKey[]
+    }> }>)["executorRegistry"].fetch(executorRegistry);
+    agent = registry.defaultExecutor;
+    if (agent.equals(PublicKey.default) || !registry.approved.some((key) => key.equals(agent))) {
+      throw new Error("The admin has not approved a default executor for this Safe");
+    }
+  }
 
   const sig = await program.methods
     // v2: strategy presets are replaced by owner allocation targets (set later via set_allocation).
     // v2 allowlist holds at most 16 programs and generic CPI is owner-only; start empty.
-    .initialize(AGENT_PUBKEY, Array(8).fill(0), [])
+    .initialize(agent, Array(8).fill(0), [])
     .accounts({
       owner,
+      executorRegistry,
       usdcMint: USDC_MINT,
       tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,

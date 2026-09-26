@@ -9,12 +9,12 @@ import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, Slide
 import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
-  ixInitialize, ixSetAllocation, ixSyncExecutor, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
-  readExecutorRegistry,
+  ixInitialize, ixSetAllocation, ixSetExecutorLimits, ixSyncExecutor, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  readExecutorLimits, readExecutorRegistry,
   safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, fetchKaminoWithdrawalPlan,
   ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
   KAMINO_SHARES_MINT, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTE_KAMINO_USDC, ROUTES,
-  type ExecutorRegistryState, type KaminoMetrics, type SafeState, type SafeToken,
+  type ExecutorLimitsState, type ExecutorRegistryState, type KaminoMetrics, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
@@ -50,6 +50,8 @@ export function SafeV2Panel() {
   const [genesis, setGenesis] = useState<string | null>(null);
   const [safe, setSafe] = useState<SafeState | null>(null);
   const [executorRegistry, setExecutorRegistry] = useState<ExecutorRegistryState | null>(null);
+  const [executorLimits, setExecutorLimits] = useState<ExecutorLimitsState | null>(null);
+  const [limitDraft, setLimitDraft] = useState({ action: "1000", volume: "1000", principal: "1000", enabled: true });
   const [walletUsdc, setWalletUsdc] = useState<bigint | null>(null);
   const [walletSol, setWalletSol] = useState<number | null>(null);
   const [creationCost, setCreationCost] = useState<number | null>(null);
@@ -65,10 +67,11 @@ export function SafeV2Panel() {
   useEffect(() => setMounted(true), []);
 
   const refresh = useCallback(async () => {
-    if (!publicKey) { setSafe(null); setExecutorRegistry(null); return; }
+    if (!publicKey) { setSafe(null); setExecutorRegistry(null); setExecutorLimits(null); return; }
     const chainGenesis = await connection.getGenesisHash();
     setGenesis(chainGenesis);
     setExecutorRegistry(chainGenesis === MAINNET_GENESIS ? await readExecutorRegistry(connection, publicKey) : null);
+    setExecutorLimits(chainGenesis === MAINNET_GENESIS ? await readExecutorLimits(connection, publicKey) : null);
     setSafe(await readSafe(connection, publicKey));
     setWalletSol(await connection.getBalance(publicKey, "confirmed"));
     setCreationCost(await safeCreationCostLamports(connection));
@@ -82,6 +85,14 @@ export function SafeV2Panel() {
   useEffect(() => {
     if (safe?.allocationBps) setAllocationDraft(ROUTES.map((route) => safe.allocationBps![route.index] / 100));
   }, [safe]);
+  useEffect(() => {
+    if (executorLimits) setLimitDraft({
+      action: fromRaw(executorLimits.maxActionUsdc, USDC_DECIMALS),
+      volume: fromRaw(executorLimits.max24hVolumeUsdc, USDC_DECIMALS),
+      principal: fromRaw(executorLimits.maxPrincipalUsdc, USDC_DECIMALS),
+      enabled: executorLimits.enabled,
+    });
+  }, [executorLimits]);
 
   const allocatedPercent = allocationDraft.reduce((sum, value) => sum + value, 0);
   const allocationChanged = !safe?.allocationBps
@@ -106,6 +117,14 @@ export function SafeV2Panel() {
   const assignedAgent = safe?.agent;
   const agentApproved = !!assignedAgent && !assignedAgent.equals(PublicKey.default)
     && !!executorRegistry?.approved.some((key) => key.equals(assignedAgent));
+  const limitAmounts = [limitDraft.action, limitDraft.volume, limitDraft.principal]
+    .map((value) => toRaw(value, USDC_DECIMALS));
+  const validLimits = limitAmounts.every((value) => value !== null && value > BigInt(0))
+    && limitAmounts[1]! >= limitAmounts[0]!;
+  const limitsChanged = !executorLimits || executorLimits.enabled !== limitDraft.enabled
+    || executorLimits.maxActionUsdc !== limitAmounts[0]
+    || executorLimits.max24hVolumeUsdc !== limitAmounts[1]
+    || executorLimits.maxPrincipalUsdc !== limitAmounts[2];
   const canSyncExecutor = !!safe?.exists && !!defaultExecutor && (executorReady || defaultExecutor.equals(PublicKey.default))
     && !!assignedAgent && !assignedAgent.equals(defaultExecutor);
   const isMetaMask = wallet?.adapter.name.toLowerCase() === "metamask";
@@ -312,6 +331,39 @@ export function SafeV2Panel() {
         </p>}
         {safe && !safe.exists && safe.tokens.length > 0 && <p className="text-amber-200">This address already owns token accounts from a previous Safe. Creating the Safe again restores access to them.</p>}
       </section>
+
+      {safe?.exists && isMainnet && <section className={card}>
+        <h2 className="text-lg font-semibold">Executor security limits</h2>
+        <p className="text-muted-foreground">These limits apply to executor actions for this Safe. Your own signed deposits and withdrawals remain available. The executor service is not running yet.</p>
+        {!executorLimits && <p className="text-amber-200">This Safe predates security limits. The executor is blocked until you save them with your wallet. The first save needs refundable SOL rent for the new limits account.</p>}
+        {executorLimits && <p className="text-muted-foreground">Status: {executorLimits.enabled ? "Enabled" : "Paused"} · Counted toward the 24-hour limit: {fromRaw(executorLimits.used24hUsdc, USDC_DECIMALS)} / {fromRaw(executorLimits.max24hVolumeUsdc, USDC_DECIMALS)} USDC</p>}
+        <div className="grid gap-3 sm:grid-cols-3">
+          {([
+            ["action", "One action"], ["volume", "Rolling 24 hours"], ["principal", "Invested principal"],
+          ] as const).map(([key, label]) => <label key={key} className="block space-y-1">
+            <span className="block text-muted-foreground">{label} (USDC)</span>
+            <input className="w-full rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal"
+              value={limitDraft[key]} onChange={(e) => setLimitDraft((prev) => ({ ...prev, [key]: e.target.value }))} />
+          </label>)}
+        </div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={limitDraft.enabled}
+          onChange={(e) => setLimitDraft((prev) => ({ ...prev, enabled: e.target.checked }))} /> Allow executor actions</label>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || metaMaskBlocked || noFeeSol || !validLimits || !limitsChanged}
+            onClick={() => void run("Save executor limits", async () => [await ixSetExecutorLimits(connection, publicKey, {
+              maxActionUsdc: limitAmounts[0]!, max24hVolumeUsdc: limitAmounts[1]!,
+              maxPrincipalUsdc: limitAmounts[2]!, enabled: limitDraft.enabled,
+            })])}>Save limits</button>
+          {executorLimits?.enabled && <button type="button" className={`${button} border border-border hover:bg-accent`}
+            disabled={!!busy || metaMaskBlocked || noFeeSol}
+            onClick={() => void run("Pause executor", async () => [await ixSetExecutorLimits(connection, publicKey, {
+              maxActionUsdc: executorLimits.maxActionUsdc, max24hVolumeUsdc: executorLimits.max24hVolumeUsdc,
+              maxPrincipalUsdc: executorLimits.maxPrincipalUsdc, enabled: false,
+            })])}>Pause executor</button>}
+        </div>
+        <p className="text-muted-foreground">A deposit also cannot raise the total invested principal above its limit. Deposits and withdrawals share the 24-hour volume: after an executor deposits the full daily limit, only you can withdraw until that budget recovers or you raise it. Updating limits keeps already used volume.</p>
+      </section>}
 
       {safe?.exists && <section className={card}>
         <h2 className="text-lg font-semibold">Your Safe value</h2>

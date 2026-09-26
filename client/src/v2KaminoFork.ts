@@ -137,6 +137,7 @@ async function run() {
     .accounts({ admin: admin.publicKey, config, programData, systemProgram: SystemProgram.programId })
     .signers([admin]).rpc();
   const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], PROGRAM_ID);
+  const [executorLimits] = PublicKey.findProgramAddressSync([Buffer.from("executor_limits"), safe.toBuffer()], PROGRAM_ID);
   await methods.initExecutorRegistry(agent.publicKey, [agent.publicKey])
     .accounts({ admin: admin.publicKey, config, executorRegistry, systemProgram: SystemProgram.programId })
     .signers([admin]).rpc();
@@ -146,7 +147,7 @@ async function run() {
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
   await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault: safe, executorRegistry, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
+    .accounts({ owner: owner.publicKey, vault: safe, executorLimits, executorRegistry, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
   await methods.deposit(new BN(OWNER_USDC.toString()))
@@ -158,10 +159,17 @@ async function run() {
   console.log(`safe ${safe.toBase58()} usdc ${(await getAccount(connection, safeUsdc)).amount}`);
 
   const agentDeposit = (amount: bigint, replace: Record<number, PublicKey> = {}, signer = agent) => methods.kaminoDeposit(new BN(amount.toString()))
-    .accounts({ authority: signer.publicKey, vault: safe, executorRegistry }).remainingAccounts(remaining(kvDeposit, replace))
+    .accounts({ authority: signer.publicKey, vault: safe, executorRegistry, executorLimits }).remainingAccounts(remaining(kvDeposit, replace))
     .preInstructions([cu]).signers([signer]).rpc();
+  const setLimits = (action: number, daily: number, principal: number) => methods.setExecutorLimits(
+    new BN(action), new BN(daily), new BN(principal), true)
+    .accounts({ owner: owner.publicKey, vault: safe, executorLimits, systemProgram: SystemProgram.programId })
+    .signers([owner]).rpc();
 
   await expectFailure("deposit above 60% target", () => agentDeposit(BigInt(60_000_001)), /AllocationExceeded/);
+  await setLimits(50_000_000, 100_000_000, 100_000_000);
+  await expectFailure("executor action cap", () => agentDeposit(BigInt(60_000_000)), /ExecutorActionLimit/);
+  await setLimits(1_000_000_000, 1_000_000_000, 1_000_000_000);
   const attackerShares = getAssociatedTokenAddressSync(sharesMint, attacker.publicKey);
   await sendAndConfirmTransaction(connection, new Transaction().add(
     createAssociatedTokenAccountIdempotentInstruction(attacker.publicKey, attackerShares, attacker.publicKey, sharesMint)), [attacker]);
@@ -169,6 +177,8 @@ async function run() {
   await expectFailure("non-agent caller", () => agentDeposit(BigInt(1_000_000), {}, attacker), /Unauthorized/);
 
   await agentDeposit(BigInt(60_000_000));
+  await expectFailure("repeated deposit cannot exceed 60% portfolio target", () =>
+    agentDeposit(BigInt(1_000_000)), /AllocationExceeded/);
   const shares = (await getAccount(connection, safeShares)).amount;
   const idle = (await getAccount(connection, safeUsdc)).amount;
   console.log(`  deposit 60 USDC -> Safe shares ${shares}, idle USDC ${idle}`);
@@ -197,7 +207,7 @@ async function run() {
   assert.equal(principalAfterDeposit, BigInt(60_000_000));
 
   const agentWithdraw = (amount: bigint, replace: Record<number, PublicKey> = {}) => methods.kaminoWithdraw(new BN(amount.toString()), false)
-    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry, executorLimits, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
     .remainingAccounts(remaining(kvWithdraw, replace))
     .preInstructions([cu]).signers([agent]).rpc();
   const attackerUsdc = getAssociatedTokenAddressSync(USDC, attacker.publicKey);
@@ -206,6 +216,10 @@ async function run() {
   await expectFailure("withdraw USDC to attacker", () => agentWithdraw(shares, { 5: attackerUsdc }), /NotSafeTokenAccount/);
 
   await expectFailure("withdraw more shares than the Safe holds", () => agentWithdraw(shares + BigInt(1)), /InsufficientShares/);
+  await setLimits(100_000_000, 100_000_000, 100_000_000);
+  await expectFailure("deposit and exit share one rolling volume budget", () =>
+    agentWithdraw(shares), /ExecutorVolumeLimit/);
+  await setLimits(1_000_000_000, 1_000_000_000, 1_000_000_000);
   await agentWithdraw(shares);
   const after = (await getAccount(connection, safeUsdc)).amount;
   console.log(`  withdraw all shares -> Safe USDC ${after} (deposited 60_000_000)`);

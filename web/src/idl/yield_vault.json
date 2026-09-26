@@ -111,6 +111,39 @@
               }
             ]
           }
+        },
+        {
+          "name": "executor_limits",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -985,6 +1018,38 @@
           }
         },
         {
+          "name": "executor_limits",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault"
+              }
+            ]
+          }
+        },
+        {
           "name": "executor_registry",
           "pda": {
             "seeds": [
@@ -1217,6 +1282,39 @@
               }
             ]
           }
+        },
+        {
+          "name": "executor_limits",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault"
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -1299,6 +1397,39 @@
                   114,
                   121
                 ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_limits",
+          "writable": true,
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault"
               }
             ]
           }
@@ -1598,6 +1729,107 @@
         {
           "name": "performance_fee_bps",
           "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "set_executor_limits",
+      "docs": [
+        "Owner-only policy. Until this PDA exists and is enabled, an executor cannot move USDC."
+      ],
+      "discriminator": [
+        53,
+        214,
+        153,
+        193,
+        35,
+        209,
+        137,
+        248
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "vault"
+          ]
+        },
+        {
+          "name": "vault",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_limits",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  108,
+                  105,
+                  109,
+                  105,
+                  116,
+                  115
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "max_action_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "max_24h_volume_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "max_principal_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "enabled",
+          "type": "bool"
         }
       ]
     },
@@ -2091,6 +2323,19 @@
       ]
     },
     {
+      "name": "ExecutorLimits",
+      "discriminator": [
+        64,
+        201,
+        180,
+        69,
+        164,
+        234,
+        140,
+        162
+      ]
+    },
+    {
       "name": "ExecutorRegistry",
       "discriminator": [
         92,
@@ -2237,6 +2482,36 @@
       "code": 6020,
       "name": "ExecutorNotApproved",
       "msg": "Executor is not in the current admin whitelist"
+    },
+    {
+      "code": 6021,
+      "name": "ExecutorLimitsMissing",
+      "msg": "Executor limits for this Safe are missing"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidExecutorLimits",
+      "msg": "Executor limits do not belong to this Safe or are invalid"
+    },
+    {
+      "code": 6023,
+      "name": "ExecutorPaused",
+      "msg": "Executor is paused by the Safe owner"
+    },
+    {
+      "code": 6024,
+      "name": "ExecutorActionLimit",
+      "msg": "Executor action exceeds its USDC limit"
+    },
+    {
+      "code": 6025,
+      "name": "ExecutorVolumeLimit",
+      "msg": "Executor movement exceeds the rolling 24-hour USDC limit"
+    },
+    {
+      "code": 6026,
+      "name": "ExecutorPositionLimit",
+      "msg": "Executor deposit exceeds the Safe's principal limit"
     }
   ],
   "types": [
@@ -2263,6 +2538,59 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ExecutorLimits",
+      "docs": [
+        "Per-Safe owner policy. Every executor USDC movement shares one volume ledger across routes."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "enabled",
+            "type": "bool"
+          },
+          {
+            "name": "max_action_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_24h_volume_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_principal_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "hour_epoch",
+            "type": {
+              "array": [
+                "i64",
+                25
+              ]
+            }
+          },
+          {
+            "name": "hour_volume",
+            "type": {
+              "array": [
+                "u64",
+                25
+              ]
+            }
           }
         ]
       }

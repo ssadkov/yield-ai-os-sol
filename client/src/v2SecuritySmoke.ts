@@ -149,25 +149,50 @@ async function run() {
   const attackerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, attacker.publicKey)).address;
   await mintTo(connection, payer, mint, ownerAta, payer, 1_000_000);
   const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), owner.publicKey.toBuffer()], program.programId);
+  const [executorLimits] = PublicKey.findProgramAddressSync([Buffer.from("executor_limits"), vault.toBuffer()], program.programId);
   const vaultAta = getAssociatedTokenAddressSync(mint, vault, true);
   if (!onDevnet) {
     await expectFailure("zero executor on owner-created Safe", () => program.methods
       .initialize(PublicKey.default, ZERO_ALLOCATION, [])
-      .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+      .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
         tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /InvalidExecutor/);
     await expectFailure("unapproved executor on Safe creation", () => program.methods
       .initialize(attacker.publicKey, ZERO_ALLOCATION, [])
-      .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+      .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
         tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /ExecutorNotApproved/);
   }
 
   await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+    .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
+  const initialLimits = await (program.account as any).executorLimits.fetch(executorLimits);
+  assert.equal(initialLimits.maxActionUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.max24HVolumeUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.maxPrincipalUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.enabled, true);
+  const setLimits = (signer: Keypair, action: number, daily: number, principal: number, enabled: boolean) =>
+    (program.methods as any).setExecutorLimits(new BN(action), new BN(daily), new BN(principal), enabled)
+      .accounts({ owner: signer.publicKey, vault, executorLimits, systemProgram: SystemProgram.programId })
+      .signers([signer]).rpc();
+  await expectFailure("non-owner cannot change executor limits", () =>
+    setLimits(attacker, 1, 1, 1, true), /ConstraintSeeds|ConstraintHasOne/);
+  await expectFailure("daily limit below action limit", () =>
+    setLimits(owner, 200, 100, 300, true), /InvalidExecutorLimits/);
+  await setLimits(owner, 500_000_000, 1_000_000_000, 1_000_000_000, false);
+  await expectFailure("paused executor cannot enter Kamino", () =>
+    (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: agent.publicKey, vault, executorRegistry, executorLimits })
+      .signers([agent]).rpc(), /ExecutorPaused/);
+  await expectFailure("paused executor cannot exit Kamino", () =>
+    (program.methods as any).kaminoWithdraw(new BN(1), false)
+      .accounts({ authority: agent.publicKey, vault, executorRegistry, executorLimits, config,
+        treasuryUsdcAta: ownerAta, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([agent]).rpc(), /ExecutorPaused/);
+  await setLimits(owner, 500_000_000, 1_000_000_000, 1_000_000_000, true);
   await program.methods.deposit(new BN(1_000_000))
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, ownerUsdcAta: ownerAta,
       vaultUsdcAta: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
@@ -247,7 +272,7 @@ async function run() {
     .accounts({ owner: signer.publicKey, vault, tokenAccount: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([signer]).rpc();
   const closeSafe = (signer: Keypair) => methods.closeSafe()
-    .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
+    .accounts({ owner: signer.publicKey, vault, executorLimits }).signers([signer]).rpc();
   const withdrawExcess = (signer: Keypair) => methods.withdrawExcessLamports()
     .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
   const notOwner = /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/;
@@ -258,9 +283,10 @@ async function run() {
   // Close the Safe while its ATA still holds 800_000: the tokens must stay recoverable.
   await closeSafe(owner);
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
+  assert.equal(await connection.getAccountInfo(executorLimits), null, "Executor limits rent was not returned on close_safe");
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
   await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+    .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -305,12 +331,23 @@ async function run() {
   assert.equal((created.agent as PublicKey).toBase58(), PublicKey.default.toBase58());
   assert.deepEqual(created.allocationBps, ZERO_ALLOCATION);
   assert.equal(created.allowedPrograms.length, 0);
+  const [sponsoredLimits] = PublicKey.findProgramAddressSync(
+    [Buffer.from("executor_limits"), sponsoredVault.toBuffer()], program.programId);
+  assert.equal(await connection.getAccountInfo(sponsoredLimits), null);
+  await methods.setAgent(agent.publicKey)
+    .accounts({ owner: sponsored.publicKey, vault: sponsoredVault, executorRegistry }).signers([sponsored]).rpc();
+  await methods.setAllocation([10_000, 0, 0, 0, 0, 0, 0, 0])
+    .accounts({ owner: sponsored.publicKey, vault: sponsoredVault }).signers([sponsored]).rpc();
+  await expectFailure("legacy Safe without policy blocks executor", () =>
+    methods.kaminoDeposit(new BN(1))
+      .accounts({ authority: agent.publicKey, vault: sponsoredVault, executorRegistry, executorLimits: program.programId })
+      .signers([agent]).rpc(), /ExecutorLimitsMissing/);
   await expectFailure("create_safe_for twice", createFor, /already in use|0x0/);
   const sponsoredRent = (await connection.getAccountInfo(sponsoredVault))!.lamports + (await connection.getAccountInfo(sponsoredAta))!.lamports;
   await methods.closeEmptyTokenAccount()
     .accounts({ owner: sponsored.publicKey, vault: sponsoredVault, tokenAccount: sponsoredAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([sponsored]).rpc();
-  await methods.closeSafe().accounts({ owner: sponsored.publicKey, vault: sponsoredVault }).signers([sponsored]).rpc();
+  await methods.closeSafe().accounts({ owner: sponsored.publicKey, vault: sponsoredVault, executorLimits: program.programId }).signers([sponsored]).rpc();
   // All rent of a sponsored Safe goes to its owner, not to the sponsor.
   assert.equal(await connection.getBalance(sponsored.publicKey, "confirmed"), sponsoredRent);
 
@@ -321,8 +358,8 @@ async function run() {
     await refund(attacker);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
-  console.log("PASS: executor whitelist admin control, Safe assignment and revocation; agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
-    "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
+  console.log("PASS: executor whitelist, default limits, owner-only changes, pause, missing-policy denial and policy rent recovery; " +
+    "agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
     "config access control and the Kamino generic-CPI block succeeded");
 }
 

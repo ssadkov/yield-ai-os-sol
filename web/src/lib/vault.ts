@@ -116,6 +116,10 @@ export async function initializeVault(
 ) {
   const program = getProgram(provider);
   const owner = provider.wallet.publicKey;
+  const [vault] = deriveVaultPda(owner);
+  const [executorLimits] = PublicKey.findProgramAddressSync(
+    [Buffer.from("executor_limits"), vault.toBuffer()], program.programId,
+  );
   const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], program.programId);
   let agent = AGENT_PUBKEY;
   if (await provider.connection.getGenesisHash() === "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d") {
@@ -134,6 +138,8 @@ export async function initializeVault(
     .initialize(agent, Array(8).fill(0), [])
     .accounts({
       owner,
+      vault,
+      executorLimits,
       executorRegistry,
       usdcMint: USDC_MINT,
       tokenProgram: TOKEN_PROGRAM_ID,

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yield AI v2 — Mainnet program deploy</title>
+  <style>
+    body { max-width: 850px; margin: 3rem auto; padding: 0 1.25rem; font: 16px/1.55 system-ui, sans-serif; color: #192236; background: #f8fafc; }
+    h1, h2 { line-height: 1.2; }
+    .status { padding: 1rem 1.25rem; background: #e7f7ee; border-left: 4px solid #208b54; }
+    table { border-collapse: collapse; width: 100%; margin: 1.5rem 0; }
+    th, td { padding: .65rem; border-bottom: 1px solid #cbd5e1; text-align: left; vertical-align: top; }
+    th { width: 12rem; }
+    code { overflow-wrap: anywhere; }
+    a { color: #1457a6; }
+  </style>
+</head>
+<body>
+  <h1>Yield AI v2: программа в Solana Mainnet</h1>
+  <p class="status"><strong>Deploy подтверждён on-chain.</strong> Конфигурация Safe и пользовательский Mainnet-пилот ещё не выполнены.</p>
+  <table>
+    <tbody>
+      <tr><th>Program ID</th><td><code>yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih</code></td></tr>
+      <tr><th>Транзакция</th><td><a href="https://explorer.solana.com/tx/3rjmqMW8KQ1V5ergbvRdN78qmbwgw1z7rNNydeJmsZFkXdiRVDUPWwv7XANi6WRojTT4tQ1BYpXmraRSr6Nwbz34">3rjmqMW8…Nwbz34</a> — finalized, без ошибки</td></tr>
+      <tr><th>Слот и время</th><td>450553234 · 2026-09-26 03:25:59 UTC</td></tr>
+      <tr><th>ProgramData</th><td><code>GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY</code>, 489200 байт</td></tr>
+      <tr><th>Upgrade authority</th><td><code>8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A</code></td></tr>
+      <tr><th>SHA-256</th><td><code>416f7fe873c16873b099e7a75a535f38f61173aeb731a6321cf98373a8489cef</code></td></tr>
+      <tr><th>Расход deployer</th><td>2.489830570 SOL за все попытки, включая rent и комиссии; остаток 2.679382368 SOL на момент проверки</td></tr>
+    </tbody>
+  </table>
+  <h2>Проверено</h2>
+  <p>Аккаунт программы исполняемый; транзакция finalized; сохранённый buffer закрыт. Выгруженный из Mainnet байткод побайтно совпал с локальной WSL-сборкой. Серверный Helius RPC настроен только в защищённом Preview.</p>
+  <h2>Следующие отдельные шаги</h2>
+  <ol>
+    <li>Согласовать и выполнить <code>init_config</code> с конкретными admin, treasury и fee 500 bps.</li>
+    <li>Провести малый owner-signed Mainnet цикл: Safe → USDC → Kamino → полный вывод.</li>
+    <li>Проверить fee с фактической прибыли, предел доли Kamino и передать полномочия в Squads до доступа внешних пользователей.</li>
+  </ol>
+  <p>Production не переключён. Отправлять USDC на рассчитанный адрес Mainnet Safe до его создания и проверки нельзя. Детали и исторические проверки: <a href="yield-ai-v2-mainnet-preflight.md">Yield AI v2 Mainnet preflight</a>.</p>
+</body>
+</html>

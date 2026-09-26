@@ -127,6 +127,22 @@ async function run() {
   const configState = await (program.account as any).config.fetch(config);
   assert.equal(configState.performanceFeeBps, 500);
   assert.equal((configState.admin as PublicKey).toBase58(), admin.publicKey.toBase58());
+  const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], program.programId);
+  if (!onDevnet) {
+    const initRegistry = (signer: Keypair, defaultExecutor: PublicKey, approved: PublicKey[]) =>
+      (program.methods as any).initExecutorRegistry(defaultExecutor, approved)
+        .accounts({ admin: signer.publicKey, config, executorRegistry, systemProgram: SystemProgram.programId })
+        .signers([signer]).rpc();
+    await expectFailure("non-admin executor registry init", () =>
+      initRegistry(attacker, agent.publicKey, [agent.publicKey]), /ConstraintHasOne|Unauthorized/);
+    await expectFailure("default executor missing from whitelist", () =>
+      initRegistry(admin, agent.publicKey, [replacementAgent.publicKey]), /ExecutorNotApproved/);
+    await expectFailure("duplicate executor in whitelist", () =>
+      initRegistry(admin, agent.publicKey, [agent.publicKey, agent.publicKey]), /DuplicateExecutor/);
+    await initRegistry(admin, agent.publicKey, [agent.publicKey, replacementAgent.publicKey]);
+    const registry = await (program.account as any).executorRegistry.fetch(executorRegistry);
+    assert.equal(registry.defaultExecutor.toBase58(), agent.publicKey.toBase58());
+  }
 
   const mint = await createMint(connection, payer, payer.publicKey, null, 6);
   const ownerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, owner.publicKey)).address;
@@ -134,9 +150,21 @@ async function run() {
   await mintTo(connection, payer, mint, ownerAta, payer, 1_000_000);
   const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), owner.publicKey.toBuffer()], program.programId);
   const vaultAta = getAssociatedTokenAddressSync(mint, vault, true);
+  if (!onDevnet) {
+    await expectFailure("zero executor on owner-created Safe", () => program.methods
+      .initialize(PublicKey.default, ZERO_ALLOCATION, [])
+      .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /InvalidExecutor/);
+    await expectFailure("unapproved executor on Safe creation", () => program.methods
+      .initialize(attacker.publicKey, ZERO_ALLOCATION, [])
+      .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /ExecutorNotApproved/);
+  }
 
   await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
+    .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -181,13 +209,26 @@ async function run() {
   }
 
   await expectFailure("non-owner agent rotation", () => (program.methods as any).setAgent(replacementAgent.publicKey)
-    .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne/);
+    .accounts({ owner: attacker.publicKey, vault, executorRegistry }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne/);
   await (program.methods as any).setAgent(PublicKey.default)
-    .accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc();
+    .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc();
   assert.equal(((await (program.account as any).vault.fetch(vault)).agent as PublicKey).toBase58(), PublicKey.default.toBase58());
   await (program.methods as any).setAgent(replacementAgent.publicKey)
-    .accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc();
+    .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc();
   assert.equal(((await (program.account as any).vault.fetch(vault)).agent as PublicKey).toBase58(), replacementAgent.publicKey.toBase58());
+  if (!onDevnet) {
+    await expectFailure("non-admin whitelist change", () => (program.methods as any)
+      .setExecutorRegistry(attacker.publicKey, [attacker.publicKey])
+      .accounts({ admin: attacker.publicKey, config, executorRegistry }).signers([attacker]).rpc(), /ConstraintHasOne/);
+    await (program.methods as any).setExecutorRegistry(agent.publicKey, [agent.publicKey])
+      .accounts({ admin: admin.publicKey, config, executorRegistry }).signers([admin]).rpc();
+    await expectFailure("revoked executor cannot act", () => (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: replacementAgent.publicKey, vault, executorRegistry }).signers([replacementAgent]).rpc(), /ExecutorNotApproved/);
+    await expectFailure("owner remains able to act after executor revocation", () => (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc(), /InvalidKaminoAccounts/);
+    await expectFailure("revoked executor cannot be reassigned", () => (program.methods as any).setAgent(replacementAgent.publicKey)
+      .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc(), /ExecutorNotApproved/);
+  }
 
   const ownerRecovery = createTransferInstruction(vaultAta, ownerAta, vault, 200_000);
   await program.methods.executeProtocolCpi(Buffer.from(ownerRecovery.data))
@@ -219,7 +260,7 @@ async function run() {
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
   await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
+    .accounts({ owner: owner.publicKey, vault, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -280,7 +321,7 @@ async function run() {
     await refund(attacker);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
-  console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
+  console.log("PASS: executor whitelist admin control, Safe assignment and revocation; agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
     "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
     "config access control and the Kamino generic-CPI block succeeded");
 }

@@ -9,11 +9,12 @@ import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, Slide
 import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
-  ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  ixInitialize, ixSetAllocation, ixSyncExecutor, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  readExecutorRegistry,
   safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, fetchKaminoWithdrawalPlan,
   ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
   KAMINO_SHARES_MINT, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTE_KAMINO_USDC, ROUTES,
-  type KaminoMetrics, type SafeState, type SafeToken,
+  type ExecutorRegistryState, type KaminoMetrics, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
@@ -39,6 +40,7 @@ export function SafeV2Panel() {
   const [mounted, setMounted] = useState(false);
   const [genesis, setGenesis] = useState<string | null>(null);
   const [safe, setSafe] = useState<SafeState | null>(null);
+  const [executorRegistry, setExecutorRegistry] = useState<ExecutorRegistryState | null>(null);
   const [walletUsdc, setWalletUsdc] = useState<bigint | null>(null);
   const [walletSol, setWalletSol] = useState<number | null>(null);
   const [creationCost, setCreationCost] = useState<number | null>(null);
@@ -52,8 +54,10 @@ export function SafeV2Panel() {
   useEffect(() => setMounted(true), []);
 
   const refresh = useCallback(async () => {
-    if (!publicKey) { setSafe(null); return; }
-    setGenesis(await connection.getGenesisHash());
+    if (!publicKey) { setSafe(null); setExecutorRegistry(null); return; }
+    const chainGenesis = await connection.getGenesisHash();
+    setGenesis(chainGenesis);
+    setExecutorRegistry(chainGenesis === MAINNET_GENESIS ? await readExecutorRegistry(connection, publicKey) : null);
     setSafe(await readSafe(connection, publicKey));
     setWalletSol(await connection.getBalance(publicKey, "confirmed"));
     setCreationCost(await safeCreationCostLamports(connection));
@@ -85,6 +89,14 @@ export function SafeV2Panel() {
   }
 
   const cluster = genesis === MAINNET_GENESIS ? "Mainnet" : genesis === DEVNET_GENESIS ? "Devnet" : "…";
+  const defaultExecutor = executorRegistry?.defaultExecutor;
+  const executorReady = !!defaultExecutor && !defaultExecutor.equals(PublicKey.default)
+    && executorRegistry!.approved.some((key) => key.equals(defaultExecutor));
+  const assignedAgent = safe?.agent;
+  const agentApproved = !!assignedAgent && !assignedAgent.equals(PublicKey.default)
+    && !!executorRegistry?.approved.some((key) => key.equals(assignedAgent));
+  const canSyncExecutor = !!safe?.exists && !!defaultExecutor && (executorReady || defaultExecutor.equals(PublicKey.default))
+    && !!assignedAgent && !assignedAgent.equals(defaultExecutor);
   const isMetaMask = wallet?.adapter.name.toLowerCase() === "metamask";
   const metaMaskBlocked = isMetaMask && cluster === "Devnet";
   const noFeeSol = walletSol !== null && walletSol < MIN_FEE_LAMPORTS;
@@ -233,11 +245,19 @@ export function SafeV2Panel() {
           <dt className="text-muted-foreground">Wallet SOL</dt><dd>{walletSol === null ? "…" : `${sol(walletSol)} SOL`}</dd>
           <dt className="text-muted-foreground">Safe address</dt><dd>{safe?.vault.toBase58() ?? "…"}</dd>
           <dt className="text-muted-foreground">Status</dt><dd>{safe ? safe.exists ? "Active" : "Not created" : "…"}</dd>
+          {isMainnet && !safe?.exists && <><dt className="text-muted-foreground">Executor on creation</dt><dd>{executorReady ? defaultExecutor!.toBase58() : "Waiting for admin whitelist"}</dd></>}
           {safe?.exists && <><dt className="text-muted-foreground">Agent</dt><dd>{!safe.agent || safe.agent.equals(PublicKey.default) ? "None (owner-only)" : safe.agent.toBase58()}</dd></>}
         </dl>
         {safe && !safe.exists && <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
-          disabled={!!busy || metaMaskBlocked || cannotCreate} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
+          disabled={!!busy || metaMaskBlocked || cannotCreate || !genesis || (isMainnet && !executorReady)} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
           <ShieldCheck className="h-4 w-4" /> Create Safe
+        </button>}
+        {safe && !safe.exists && isMainnet && !executorReady && <p className="text-amber-200">The admin must approve a default executor before Safe creation is enabled.</p>}
+        {safe?.exists && isMainnet && assignedAgent && !assignedAgent.equals(PublicKey.default) && !agentApproved &&
+          <p className="text-amber-200">This executor is no longer in the admin whitelist. Your wallet still controls the Safe.</p>}
+        {isMainnet && canSyncExecutor && <button type="button" className={`${button} border border-border hover:bg-accent`}
+          disabled={!!busy || metaMaskBlocked} onClick={() => void run("Update executor", async () => [await ixSyncExecutor(connection, publicKey)])}>
+          {defaultExecutor!.equals(PublicKey.default) ? "Disable executor" : "Update executor"}
         </button>}
         {safe && !safe.exists && creationCost !== null && <p className="text-muted-foreground">
           Creating the Safe costs about {sol(creationCost)} SOL of rent, refunded when you close it.{cannotCreate ? ` Your wallet has ${sol(walletSol ?? 0)} SOL.` : ""}

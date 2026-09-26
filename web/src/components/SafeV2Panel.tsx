@@ -37,6 +37,7 @@ function fromRaw(raw: bigint, decimals: number): string {
 }
 
 const PERCENT_SCALE = BigInt(100_000_000); // 100% with six decimal places.
+const KAMINO_MIN_DEPOSIT_RAW = BigInt(1_000_000); // 1 USDC succeeds on the current Mainnet vault; 0.1 USDC is rejected.
 
 function short(key: string) {
   return `${key.slice(0, 4)}…${key.slice(-4)}`;
@@ -54,6 +55,7 @@ export function SafeV2Panel() {
   const [creationCost, setCreationCost] = useState<number | null>(null);
   const [kaminoMetrics, setKaminoMetrics] = useState<KaminoMetrics | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
+  const [kaminoAmount, setKaminoAmount] = useState("");
   const [partialWithdraw, setPartialWithdraw] = useState<{ mode: "amount" | "percent"; value: string }>({ mode: "amount", value: "" });
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -128,9 +130,13 @@ export function SafeV2Panel() {
   const canPartialWithdraw = !!safe?.exists && idleUsdc > BigInt(0) && partialRaw !== null
     && partialRaw > BigInt(0) && partialRaw <= idleUsdc;
   const kaminoBps = safe?.allocationBps?.[ROUTE_KAMINO_USDC] ?? 0;
-  // The program caps one deposit at idle x target; Kamino's minimum deposit is 0.001 USDC.
+  // The program caps one deposit at idle x target; use a Mainnet-simulated Kamino minimum.
   const kaminoPut = idleUsdc * BigInt(kaminoBps) / BigInt(10_000);
-  const canKaminoDeposit = isMainnet && kaminoPut >= BigInt(1_000);
+  const canKaminoDeposit = isMainnet && kaminoPut >= KAMINO_MIN_DEPOSIT_RAW;
+  const kaminoRaw = toRaw(kaminoAmount, USDC_DECIMALS);
+  const validKaminoAmount = !!safe?.exists && isMainnet && kaminoRaw !== null && kaminoRaw >= KAMINO_MIN_DEPOSIT_RAW;
+  const canInvestFromSafe = validKaminoAmount && kaminoRaw <= idleUsdc;
+  const canInvestFromWallet = validKaminoAmount && walletUsdc !== null && kaminoRaw <= walletUsdc;
   const usd = (raw: bigint) => (Number(raw) / 1e6).toFixed(2);
   const safeValue = kaminoShares > BigInt(0) && kaminoValue === null
     ? null : Number(idleUsdc) / 1e6 + (kaminoValue ?? 0);
@@ -140,6 +146,30 @@ export function SafeV2Panel() {
     if (!publicKey) return [];
     const kamino = await fetchKaminoAccounts(publicKey, (Number(kaminoPut) / 1e6).toString());
     return { instructions: await ixKaminoDeposit(connection, publicKey, kaminoPut, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
+  }
+  async function buildOwnerKaminoDeposit(source: "safe" | "wallet", amount: bigint): Promise<Built> {
+    if (!publicKey || !isMainnet || amount < KAMINO_MIN_DEPOSIT_RAW) throw new Error("Use at least 1 USDC for this Kamino vault");
+    const current = await readSafe(connection, publicKey);
+    if (!current.exists || !current.allocationBps) throw new Error("Refresh the Safe before investing");
+    const available = current.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
+    if (source === "safe" && amount > available) throw new Error("Not enough available USDC in the Safe");
+    if (source === "wallet") {
+      const walletAta = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
+      const balance = await connection.getTokenAccountBalance(walletAta, "confirmed");
+      if (amount > BigInt(balance.value.amount)) throw new Error("Not enough USDC in your wallet");
+    }
+
+    const plan = await fetchKaminoAccounts(publicKey, fromRaw(amount, USDC_DECIMALS));
+    const original = current.allocationBps;
+    const fullKamino = Array(MAX_ROUTES).fill(0) as number[];
+    fullKamino[ROUTE_KAMINO_USDC] = 10_000;
+    const needsTemporaryAllocation = original.some((bps, index) => bps !== fullKamino[index]);
+    const instructions: TransactionInstruction[] = [];
+    if (needsTemporaryAllocation) instructions.push(await ixSetAllocation(connection, publicKey, fullKamino));
+    if (source === "wallet") instructions.push(await ixDepositUsdc(connection, publicKey, amount));
+    instructions.push(...await ixKaminoDeposit(connection, publicKey, amount, plan));
+    if (needsTemporaryAllocation) instructions.push(await ixSetAllocation(connection, publicKey, original));
+    return { instructions, lookupTables: await loadLookupTables(connection, plan.lookupTables) };
   }
   async function buildKaminoWithdrawAll() {
     if (!publicKey) return [];
@@ -328,6 +358,32 @@ export function SafeV2Panel() {
             <ArrowDownToLine className="h-4 w-4" /> Deposit
           </button>
         </div>
+      </section>}
+
+      {safe?.exists && <section className={card}>
+        <h2 className="text-lg font-semibold">Invest in Kamino USDC</h2>
+        <p className="text-muted-foreground">Choose where the USDC starts. Your wallet signs once; Kamino shares stay in your Safe. This does not change your saved allocation.</p>
+        {!isMainnet && <p className="text-amber-200">This Kamino vault is available on Solana Mainnet only.</p>}
+        {isMainnet && <p className="text-amber-200">The full Kamino exit has passed local tests, but its live Mainnet round trip is still being checked. Use a small pilot amount.</p>}
+        <p className="text-muted-foreground">Safe available: {fromRaw(idleUsdc, USDC_DECIMALS)} USDC · Wallet available: {walletUsdc === null ? "…" : fromRaw(walletUsdc, USDC_DECIMALS)} USDC</p>
+        <label className="block space-y-1">
+          <span className="block text-muted-foreground">Amount to invest (USDC)</span>
+          <input className="w-40 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="0.00"
+            value={kaminoAmount} onChange={(e) => setKaminoAmount(e.target.value)} />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={`${button} border border-border hover:bg-accent`}
+            disabled={!!busy || !canInvestFromSafe || metaMaskBlocked || noFeeSol}
+            onClick={() => kaminoRaw && void run(`Invest ${fromRaw(kaminoRaw, USDC_DECIMALS)} USDC from Safe`, () => buildOwnerKaminoDeposit("safe", kaminoRaw))}>
+            <TrendingUp className="h-4 w-4" /> Invest from Safe
+          </button>
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || !canInvestFromWallet || metaMaskBlocked || noFeeSol}
+            onClick={() => kaminoRaw && void run(`Invest ${fromRaw(kaminoRaw, USDC_DECIMALS)} USDC from wallet`, () => buildOwnerKaminoDeposit("wallet", kaminoRaw))}>
+            <ArrowDownToLine className="h-4 w-4" /> Invest from wallet
+          </button>
+        </div>
+        <p className="text-muted-foreground">Minimum 1 USDC for this vault in the current Mainnet test. A new Kamino shares account may require refundable SOL rent. Investment and wallet transfer succeed together or both revert.</p>
       </section>}
 
       {showLabControls && safe?.exists && <section className={card}>

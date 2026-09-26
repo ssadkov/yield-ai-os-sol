@@ -1,5 +1,5 @@
 {
-  "address": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "address": "yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih",
   "metadata": {
     "name": "yield_vault",
     "version": "0.1.0",
@@ -764,38 +764,38 @@
               {
                 "kind": "const",
                 "value": [
-                  118,
-                  62,
-                  17,
-                  254,
-                  51,
-                  43,
-                  183,
-                  91,
-                  105,
-                  60,
-                  189,
-                  61,
+                  14,
+                  135,
+                  155,
+                  6,
+                  157,
+                  228,
+                  185,
                   117,
-                  60,
-                  56,
-                  146,
+                  182,
+                  137,
+                  128,
+                  121,
+                  234,
+                  0,
+                  98,
+                  192,
+                  33,
+                  244,
+                  12,
                   36,
-                  32,
-                  186,
-                  119,
-                  96,
-                  202,
-                  63,
-                  53,
-                  75,
-                  231,
-                  186,
-                  255,
+                  14,
+                  100,
+                  62,
+                  103,
+                  99,
+                  199,
+                  18,
+                  101,
+                  28,
+                  171,
                   207,
-                  139,
-                  120,
-                  92
+                  106
                 ]
               }
             ],
@@ -855,6 +855,96 @@
       ]
     },
     {
+      "name": "init_executor_registry",
+      "docs": [
+        "One global executor registry per program. Only the current config admin can initialize it."
+      ],
+      "discriminator": [
+        253,
+        147,
+        233,
+        215,
+        102,
+        124,
+        190,
+        57
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "default_executor",
+          "type": "pubkey"
+        },
+        {
+          "name": "approved",
+          "type": {
+            "vec": "pubkey"
+          }
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "discriminator": [
         175,
@@ -890,6 +980,35 @@
               {
                 "kind": "account",
                 "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
               }
             ]
           }
@@ -1069,6 +1188,35 @@
               }
             ]
           }
+        },
+        {
+          "name": "executor_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
         }
       ],
       "args": [
@@ -1122,6 +1270,35 @@
                 "kind": "account",
                 "path": "vault.owner",
                 "account": "Vault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
               }
             ]
           }
@@ -1209,6 +1386,35 @@
               {
                 "kind": "account",
                 "path": "owner"
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_registry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
               }
             ]
           }
@@ -1392,6 +1598,91 @@
         {
           "name": "performance_fee_bps",
           "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "set_executor_registry",
+      "docs": [
+        "Replacing the list can approve, revoke, or pause executors without a program upgrade."
+      ],
+      "discriminator": [
+        195,
+        68,
+        186,
+        23,
+        74,
+        5,
+        224,
+        9
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "executor_registry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  101,
+                  120,
+                  101,
+                  99,
+                  117,
+                  116,
+                  111,
+                  114,
+                  95,
+                  114,
+                  101,
+                  103,
+                  105,
+                  115,
+                  116,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "default_executor",
+          "type": "pubkey"
+        },
+        {
+          "name": "approved",
+          "type": {
+            "vec": "pubkey"
+          }
         }
       ]
     },
@@ -1800,6 +2091,19 @@
       ]
     },
     {
+      "name": "ExecutorRegistry",
+      "discriminator": [
+        92,
+        60,
+        128,
+        85,
+        99,
+        80,
+        163,
+        5
+      ]
+    },
+    {
       "name": "Vault",
       "discriminator": [
         211,
@@ -1913,6 +2217,26 @@
       "code": 6016,
       "name": "UseDedicatedInstruction",
       "msg": "This protocol must be used through its dedicated instruction"
+    },
+    {
+      "code": 6017,
+      "name": "TooManyExecutors",
+      "msg": "Too many executor keys in the global whitelist"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidExecutor",
+      "msg": "The executor key cannot be the default pubkey"
+    },
+    {
+      "code": 6019,
+      "name": "DuplicateExecutor",
+      "msg": "Duplicate executor key in the global whitelist"
+    },
+    {
+      "code": 6020,
+      "name": "ExecutorNotApproved",
+      "msg": "Executor is not in the current admin whitelist"
     }
   ],
   "types": [
@@ -1939,6 +2263,28 @@
           {
             "name": "bump",
             "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ExecutorRegistry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "default_executor",
+            "type": "pubkey"
+          },
+          {
+            "name": "approved",
+            "type": {
+              "vec": "pubkey"
+            }
           }
         ]
       }

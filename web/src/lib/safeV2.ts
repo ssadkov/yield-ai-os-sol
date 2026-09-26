@@ -22,6 +22,15 @@ export const ROUTES = [
 ] as const;
 export const MAX_ROUTES = 8;
 export const ZERO_ALLOCATION = Array(MAX_ROUTES).fill(0) as number[];
+export type ExecutorRegistryState = {
+  address: PublicKey;
+  defaultExecutor: PublicKey;
+  approved: PublicKey[];
+};
+
+export function deriveExecutorRegistryPda() {
+  return PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], new PublicKey(idlJson.address));
+}
 /** 8 discriminator + bump + owner + agent + allocation [u16; 8] + ts + Vec<Pubkey> (max 16). */
 const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 16 * 32;
 const TOKEN_ACCOUNT_SIZE = 165;
@@ -115,6 +124,47 @@ function program(connection: Connection, owner: PublicKey) {
   return new Program(idlJson as Idl, new AnchorProvider(connection, readOnlyWallet as never, { commitment: "confirmed" }));
 }
 
+/** The admin selects the default. The user never enters or signs for an executor key. */
+export async function readExecutorRegistry(connection: Connection, owner: PublicKey): Promise<ExecutorRegistryState | null> {
+  const [address] = deriveExecutorRegistryPda();
+  const info = await connection.getAccountInfo(address, "confirmed");
+  if (!info) return null;
+  const prog = program(connection, owner);
+  if (!info.owner.equals(prog.programId)) throw new Error("Executor registry has the wrong program owner");
+  const decoded = prog.coder.accounts.decode("executorRegistry", info.data) as
+    { defaultExecutor: PublicKey; approved: PublicKey[] };
+  return { address, defaultExecutor: decoded.defaultExecutor, approved: decoded.approved };
+}
+
+export async function readProtocolAdmin(connection: Connection, wallet: PublicKey) {
+  const prog = program(connection, wallet);
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
+  const state = await (prog.account as unknown as Record<string, { fetch(key: PublicKey): Promise<{
+    admin: PublicKey
+  }> }>)["config"].fetch(config);
+  return state.admin;
+}
+
+/** Admin-only registry update. The wallet signs after simulation in sendOwnerTransaction. */
+export async function ixConfigureExecutorRegistry(
+  connection: Connection, admin: PublicKey, defaultExecutor: PublicKey, approved: PublicKey[],
+) {
+  if (approved.length > 16 || approved.some((key) => key.equals(PublicKey.default)) ||
+    new Set(approved.map((key) => key.toBase58())).size !== approved.length ||
+    (!defaultExecutor.equals(PublicKey.default) && !approved.some((key) => key.equals(defaultExecutor)))) {
+    throw new Error("Executor whitelist must contain up to 16 distinct nonzero keys and include the default");
+  }
+  const prog = program(connection, admin);
+  const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
+  const [executorRegistry] = deriveExecutorRegistryPda();
+  if (!(await readProtocolAdmin(connection, admin)).equals(admin)) throw new Error("Connected wallet is not the protocol admin");
+  const existing = await connection.getAccountInfo(executorRegistry, "confirmed");
+  if (existing) return prog.methods.setExecutorRegistry(defaultExecutor, approved)
+    .accountsPartial({ admin, config, executorRegistry }).instruction();
+  return prog.methods.initExecutorRegistry(defaultExecutor, approved)
+    .accountsPartial({ admin, config, executorRegistry, systemProgram: SystemProgram.programId }).instruction();
+}
+
 export async function readSafe(connection: Connection, owner: PublicKey): Promise<SafeState> {
   const [vault] = deriveVaultPda(owner);
   const info = await connection.getAccountInfo(vault, "confirmed");
@@ -148,15 +198,37 @@ export async function readSafe(connection: Connection, owner: PublicKey): Promis
 
 export async function ixInitialize(connection: Connection, owner: PublicKey) {
   const [vault] = deriveVaultPda(owner);
-  // No agent and no CPI allowlist: every agent action will get its own constrained instruction.
+  const [executorRegistry] = deriveExecutorRegistryPda();
+  const registry = await readExecutorRegistry(connection, owner);
+  const isMainnet = await connection.getGenesisHash() === MAINNET_GENESIS;
+  if (isMainnet && (!registry || registry.defaultExecutor.equals(PublicKey.default) ||
+    !registry.approved.some((key) => key.equals(registry.defaultExecutor)))) {
+    throw new Error("The admin has not approved a default executor for this Safe");
+  }
+  // Mainnet uses the admin's current default. Older Devnet deployments keep the safe no-agent default.
+  const agent = isMainnet ? registry!.defaultExecutor : PublicKey.default;
   return program(connection, owner).methods
-    .initialize(PublicKey.default, ZERO_ALLOCATION, [])
+    .initialize(agent, ZERO_ALLOCATION, [])
     .accountsPartial({
-      owner, vault, usdcMint: USDC_MINT,
+      owner, vault, executorRegistry, usdcMint: USDC_MINT,
       vaultUsdcAta: getAssociatedTokenAddressSync(USDC_MINT, vault, true),
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
+    .instruction();
+}
+
+/** Owner-only rotation to the admin's current default, or revocation when the admin pauses the registry. */
+export async function ixSyncExecutor(connection: Connection, owner: PublicKey) {
+  const [vault] = deriveVaultPda(owner);
+  const registry = await readExecutorRegistry(connection, owner);
+  if (!registry) throw new Error("Executor registry is not initialized");
+  const agent = registry.defaultExecutor;
+  if (!agent.equals(PublicKey.default) && !registry.approved.some((key) => key.equals(agent))) {
+    throw new Error("The admin default executor is not approved");
+  }
+  return program(connection, owner).methods.setAgent(agent)
+    .accountsPartial({ owner, vault, executorRegistry: registry.address })
     .instruction();
 }
 
@@ -261,11 +333,12 @@ function kaminoRemaining(kamino: Pick<KaminoAccounts, "accounts">) {
 /** Owner moves `amount` USDC from the Safe into Kamino. Creates the Safe's shares account if missing (owner pays). */
 export async function ixKaminoDeposit(connection: Connection, owner: PublicKey, amount: bigint, kamino: KaminoAccounts) {
   const [vault] = deriveVaultPda(owner);
+  const [executorRegistry] = deriveExecutorRegistryPda();
   const safeShares = getAssociatedTokenAddressSync(KAMINO_SHARES_MINT, vault, true);
   return [
     createAssociatedTokenAccountIdempotentInstruction(owner, safeShares, vault, KAMINO_SHARES_MINT),
     await program(connection, owner).methods.kaminoDeposit(new BN(amount.toString()))
-      .accountsPartial({ authority: owner, vault })
+      .accountsPartial({ authority: owner, vault, executorRegistry })
       .remainingAccounts(kaminoRemaining(kamino))
       .instruction(),
   ];
@@ -274,6 +347,7 @@ export async function ixKaminoDeposit(connection: Connection, owner: PublicKey, 
 /** Owner redeems `shares` back into the Safe; the performance fee on any gain goes to the configured treasury. */
 export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey, plan: KaminoWithdrawalPlan) {
   const [vault] = deriveVaultPda(owner);
+  const [executorRegistry] = deriveExecutorRegistryPda();
   if (plan.safe !== vault.toBase58() || !plan.withdrawals.length) throw new Error("Kamino plan is not for this Safe");
   const prog = program(connection, owner);
   const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
@@ -286,7 +360,7 @@ export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey,
       throw new Error("Invalid Kamino withdrawal leg");
     }
     return prog.methods.kaminoWithdraw(new BN(shares.toString()), leg.discriminator === KVAULT_WITHDRAW_FROM_RESERVE)
-      .accountsPartial({ authority: owner, vault, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ authority: owner, vault, executorRegistry, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
       .remainingAccounts(kaminoRemaining(leg))
       .instruction();
   }));
@@ -324,6 +398,9 @@ export async function sendOwnerTransaction(args: {
   const genesis = await connection.getGenesisHash();
   const chain = genesis === MAINNET_GENESIS ? "solana:mainnet" : genesis === DEVNET_GENESIS ? "solana:devnet" : null;
   if (!chain) throw new Error(`unsupported cluster (genesis ${genesis})`);
+  if (chain === "solana:mainnet" && USDC_MINT.toBase58() !== "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") {
+    throw new Error("Mainnet USDC mint is misconfigured; transaction blocked");
+  }
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   const tx = new VersionedTransaction(new TransactionMessage({
     payerKey: owner, recentBlockhash: blockhash,

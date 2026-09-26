@@ -1,19 +1,20 @@
 # Yield AI v2 — развёртывание программы и подготовка Mainnet (`yie1…`)
 
-Исторический preflight начат 2026-09-25. **Программа развёрнута в Mainnet 2026-09-26; `init_config`, Mainnet Safe, пилот с USDC и Production-переключение ещё не выполнены.** Рабочая ветка `codex/yield-ai-v2-mainnet` создана от `codex/yield-ai-v2` (`84f3aac`); основной checkout `C:\work\yield-ai-os-sol` не изменялся. Состояние ветки следует перепроверить перед выпуском.
+Исторический preflight начат 2026-09-25. **Программа развёрнута и `init_config` выполнен в Mainnet 2026-09-26; Mainnet Safe, пилот с USDC и Production-переключение ещё не выполнены.** Рабочая ветка `codex/yield-ai-v2-mainnet` создана от `codex/yield-ai-v2` (`84f3aac`); основной checkout `C:\work\yield-ai-os-sol` не изменялся. Состояние ветки следует перепроверить перед выпуском.
 
 ## Адреса и текущая сеть
 
 | Объект | Адрес / результат read-only проверки |
 |---|---|
 | Mainnet program ID | `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`; исполняемая upgradeable программа, deploy slot `450553234` |
+| Mainnet config PDA | `8MzeS2fxHGw35et7rQAqA4TJ8mw7p7CMP1rH1C5iRbk2`; создан, admin и treasury `8xwj…`, performance fee `500 bps` |
 | Vanity keypair | хранится только в WSL Ubuntu `~/.config/solana/yield-v2/vanity/`; `solana-keygen pubkey` совпал с `yie1…`; секрет в репозиторий и лог не копировать |
 | Devnet program | `8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5`; остаётся отдельной программой |
 | Владелец, подтвердивший Devnet Safe | `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2` |
 | Его Devnet Safe | `28z3NpLQPSA3AdAUeFrko3fRm3BtdZTNcCmYe7yUYVy3`, аккаунт принадлежит `8xa1…` |
 | Будущий PDA Safe этого же владельца под `yie1…` | `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`; пока это только расчёт, Safe не создан |
 | Mainnet SOL владельца на момент проверки | `0.082353123 SOL`; показанные интерфейсом `13.9704 SOL` относились к Devnet |
-| Mainnet deployer/текущая upgrade authority | `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`; баланс после deploy `2.679382368 SOL` |
+| Mainnet deployer/текущая upgrade authority | `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`; баланс после `init_config` `2.678346128 SOL` |
 
 **Деньги:** Devnet Safe и Mainnet Safe — разные адреса на разных кластерах. Средства не переходят между ними. Текущий `https://yield-ai-os-sol.vercel.app/v2/safe` на момент проверки обслуживал Devnet (`8xa1…` и Devnet USDC `4zMMC9…`); использовать его для Mainnet USDC нельзя. Публиковать mainnet-профиль нужно отдельно, с явной проверкой RPC/genesis, program ID и mint в интерфейсе и кошельке.
 
@@ -38,8 +39,8 @@
 
 1. Закрытый mainnet-preview сайта собран и проверен на Mainnet genesis, program ID `yie1…`, mint канонического USDC и работающий read-only Kamino withdraw plan (детали ниже). Существующий Production/Devnet URL не переключать неожиданно. Перед on-chain пробой отдельно проверить сеть, владельца, program ID и mint в интерфейсе и окне кошелька.
 2. Новый Helius URL добавлен только в серверную Preview-переменную `V2_MAINNET_RPC_URL` типа `sensitive`; браузер использует same-origin proxy. [PR #15](https://github.com/ssadkov/yield-ai-os-sol/pull/15) удалил прежний ключ из кода, но отзыв старого Helius-ключа нужно проверить отдельно. В основном checkout `web/.env` всё ещё содержит старый `NEXT_PUBLIC_PROGRAM_ID=3Vtz…`; он не является настройкой этого Preview. До публичного запуска proxy нужны ограничения частоты запросов.
-3. Для закрытого пилота пользователь согласовал deployer `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` как первоначальные admin и treasury с fee `500 bps`. Это решение не разрешает само по себе deploy или `init_config`. Комиссия перечисляется в USDC ATA treasury; другие токены, полученные адресом deployer, программа не перемещает. Перед доступом внешних пользователей передать admin и upgrade authority в Squads и проверить полномочия на сети. `init_config` должен подписать действующий upgrade authority.
-4. Deploy бинарника под `yie1…`, проверка ProgramData, upgrade authority и хэша завершены. Следующий отдельный on-chain шаг — `init_config` с повторной сверкой admin, treasury, `500 bps`, плательщика и Mainnet перед подписью. Сам deploy не инициализировал конфигурацию и не открыл путь для пользовательских депозитов.
+3. Для закрытого пилота пользователь согласовал deployer `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` как первоначальные admin и treasury с fee `500 bps`; `init_config` выполнен с отдельного разрешения пользователя. Комиссия перечисляется в USDC ATA treasury; другие токены, полученные адресом deployer, программа не перемещает. Перед доступом внешних пользователей передать admin и upgrade authority в Squads и проверить полномочия на сети.
+4. Deploy бинарника под `yie1…`, проверка ProgramData, upgrade authority и хэша, а также `init_config` завершены. Это ещё не подтверждает работу Mainnet Safe и не открывает путь для пользовательских депозитов.
 5. В закрытом Mainnet-пилоте на собственные `$1–5` USDC: создать Safe, внести, войти в Kamino, дождаться фактического `invest`, полностью выйти из резерва и вывести USDC владельцу. Проверить балансы, principal, стоимость и отрицательный сценарий назначения. Положительную прибыль и фактический перевод `5%` fee в treasury проверить отдельно: на форке этот случай не был подтверждён end-to-end. До полного успешного цикла нельзя давать этот маршрут обычным пользователям.
 6. Текущий лимит доли в Kamino вычисляется по свободному USDC отдельного вызова и может позволить суммарную долю выше цели. До публичного запуска довести лимит до расчёта по общей стоимости позиции.
 
@@ -86,8 +87,14 @@ WebSocket пока не подключать: v2 подтверждает тра
 - CLI в Ubuntu WSL использовал новый Helius Mainnet URL из user-scoped environment, `--max-len 489200`, `--use-rpc` и отдельный buffer keypair вне Git. Попытки записи останавливались на `Max retries exceeded`; продолжение того же buffer завершилось успешно. Buffer `4p8DYZPzZuWR31yj22Nu4RDqAQsYBGEUtgBZxKK93uPb` после deploy закрыт, его rent вернулся плательщику.
 - Финальная подпись [`3rjmqMW8KQ1V5ergbvRdN78qmbwgw1z7rNNydeJmsZFkXdiRVDUPWwv7XANi6WRojTT4tQ1BYpXmraRSr6Nwbz34`](https://explorer.solana.com/tx/3rjmqMW8KQ1V5ergbvRdN78qmbwgw1z7rNNydeJmsZFkXdiRVDUPWwv7XANi6WRojTT4tQ1BYpXmraRSr6Nwbz34) — `finalized`, `err=null`, slot `450553234`, время `2026-09-26T03:25:59Z`. Program account исполняемый под `BPFLoaderUpgradeab1e11111111111111111111111`; ProgramData `GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY`, authority `8xwj…`, data length `489200`.
 - Выгруженный из Mainnet байткод `489200` байт побайтно совпал с WSL-сборкой; SHA-256 обеих копий `416f7fe873c16873b099e7a75a535f38f61173aeb731a6321cf98373a8489cef`. Баланс deployer: `5.169212938 → 2.679382368 SOL`; фактическое уменьшение `2.489830570 SOL` включает неудавшиеся попытки записи и комиссии.
-- Этот результат подтверждает развёртывание программы, но не инициализацию `config`, работу реального Mainnet Safe, Kamino-цикл или готовность Production. До отдельного пилота нельзя направлять пользовательский USDC в Mainnet Safe.
+- На момент deploy этот результат подтверждал только развёртывание программы: `config`, реальный Mainnet Safe, Kamino-цикл и Production ещё не проверялись. До отдельного пилота нельзя направлять пользовательский USDC в Mainnet Safe.
+
+## Mainnet init_config 2026-09-26
+
+- Пользователь отдельно разрешил `init_config` в Solana Mainnet: config PDA `8MzeS2fxHGw35et7rQAqA4TJ8mw7p7CMP1rH1C5iRbk2`, admin, treasury и плательщик `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`, performance fee `500 bps` (5%). Перед отправкой перепроверены Mainnet genesis, исполняемый program, ProgramData upgrade authority, отсутствие config и баланс плательщика.
+- Симуляция подписанной транзакции завершилась с `err=null`, `InitConfig` success, `11711` CU. Подпись отправленной транзакции [`5Bt7tgANqSqwWNugWTycXasFbY9Aj83XrHWq3L9RuUsuH8DHNuVXmPTnQC2q1GmsfKpHbGzcaugGKjVMS5Zr8ouS`](https://explorer.solana.com/tx/5Bt7tgANqSqwWNugWTycXasFbY9Aj83XrHWq3L9RuUsuH8DHNuVXmPTnQC2q1GmsfKpHbGzcaugGKjVMS5Zr8ouS) получила `finalized`, `err=null`, slot `450559592`.
+- On-chain чтение config на `finalized` подтвердило admin `8xwj…`, treasury `8xwj…`, `performance_fee_bps=500`, bump `253`. Баланс deployer: `2.679382368 → 2.678346128 SOL`; расходы `0.001036240 SOL` = rent config `0.001031240 SOL` + network fee `0.000005 SOL`. Mainnet Safe и USDC операции не выполнялись.
 
 ## Что пользователь может проверить сейчас
 
-Devnet Safe уже создан, и пользователь может продолжать тестировать его **только тестовыми токенами в Devnet**, сверяя кластер в кошельке. Mainnet программа `yie1…` теперь существует, но config и Mainnet Safe `FuDC…` ещё не созданы; отправлять на предполагаемый Safe USDC заранее нельзя. Preview остаётся закрытым, Production не переключён. Пользовательские Mainnet депозиты не открывать до отдельного согласованного `init_config` и малого owner-signed пилота с полным выводом.
+Devnet Safe уже создан, и пользователь может продолжать тестировать его **только тестовыми токенами в Devnet**, сверяя кластер в кошельке. Mainnet программа `yie1…` и config созданы, но Mainnet Safe `FuDC…` ещё нет; отправлять на предполагаемый Safe USDC заранее нельзя. Preview остаётся закрытым, Production не переключён. Пользовательские Mainnet депозиты не открывать до малого owner-signed пилота с полным выводом.

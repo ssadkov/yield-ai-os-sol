@@ -21,6 +21,8 @@ const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((mod) => mod.WalletMultiButton),
   { ssr: false },
 );
+const PILOT_OWNER = "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2";
+const PILOT_SAFE = "FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ";
 
 function toRaw(ui: string, decimals: number): bigint | null {
   const match = /^(\d+)(?:\.(\d*))?$/.exec(ui.trim());
@@ -160,6 +162,8 @@ export function SafeV2Panel() {
   const safeValue = kaminoShares > BigInt(0) && kaminoValue === null
     ? null : Number(idleUsdc) / 1e6 + (kaminoValue ?? 0);
   const showLabControls = process.env.NEXT_PUBLIC_V2_LAB_CONTROLS === "1";
+  const showPilotAllocation = showLabControls || (isMainnet && publicKey?.toBase58() === PILOT_OWNER
+    && safe?.vault.toBase58() === PILOT_SAFE);
 
   async function buildKaminoDeposit() {
     if (!publicKey) return [];
@@ -416,7 +420,7 @@ export function SafeV2Panel() {
         <h2 className="text-lg font-semibold">Invest in Kamino USDC</h2>
         <p className="text-muted-foreground">Choose where the USDC starts. Your wallet signs once; Kamino shares stay in your Safe. This does not change your saved allocation.</p>
         {!isMainnet && <p className="text-amber-200">This Kamino vault is available on Solana Mainnet only.</p>}
-        {isMainnet && <p className="text-amber-200">The full Kamino exit has passed local tests, but its live Mainnet round trip is still being checked. Use a small pilot amount.</p>}
+        {isMainnet && <p className="text-amber-200">A small Mainnet Kamino deposit and full withdrawal succeeded. Each new deposit still carries vault and network risk; start small.</p>}
         <p className="text-muted-foreground">Safe available: {fromRaw(idleUsdc, USDC_DECIMALS)} USDC · Wallet available: {walletUsdc === null ? "…" : fromRaw(walletUsdc, USDC_DECIMALS)} USDC</p>
         <label className="block space-y-1">
           <span className="block text-muted-foreground">Amount to invest (USDC)</span>
@@ -438,9 +442,9 @@ export function SafeV2Panel() {
         <p className="text-muted-foreground">Minimum 1 USDC for this vault in the current Mainnet test. A new Kamino shares account may require refundable SOL rent. Investment and wallet transfer succeed together or both revert.</p>
       </section>}
 
-      {showLabControls && safe?.exists && <section className={card}>
+      {showPilotAllocation && safe?.exists && <section className={card}>
         <h2 className="flex items-center gap-2 text-lg font-semibold"><SlidersHorizontal className="h-4 w-4" /> Allocation</h2>
-        <p className="text-muted-foreground">Your target split, stored in the Safe. The agent may only allocate within these limits once the Kamino and ONyc routes ship; today nothing is moved automatically.</p>
+        <p className="text-muted-foreground">Your target split, stored in the Safe. For the executor pilot, set Kamino USDC to 50% and ONyc to 0%; saving only updates the target and moves no USDC.</p>
         {!safe.allocationBps && <p className="text-amber-200">This Safe was created before allocation targets existed; saving will initialise them.</p>}
         {ROUTES.map((route, i) => <label key={route.key} className="block space-y-1">
           <span className="flex justify-between"><span>{route.label}</span><span className="tabular-nums">{allocationDraft[i]}%</span></span>

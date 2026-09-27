@@ -268,7 +268,7 @@ export async function ixInitialize(connection: Connection, owner: PublicKey) {
   // Mainnet uses the admin's current default. Older Devnet deployments keep the safe no-agent default.
   const agent = isMainnet ? registry!.defaultExecutor : PublicKey.default;
   return program(connection, owner).methods
-    .initialize(agent, ZERO_ALLOCATION, [])
+    .initializeWithLimits(agent, ZERO_ALLOCATION, [])
     .accountsPartial({
       owner, vault, executorLimits, executorRegistry, usdcMint: USDC_MINT,
       vaultUsdcAta: getAssociatedTokenAddressSync(USDC_MINT, vault, true),
@@ -357,9 +357,11 @@ export async function ixWithdrawExcessLamports(connection: Connection, owner: Pu
 export async function ixCloseSafe(connection: Connection, owner: PublicKey) {
   const [vault] = deriveVaultPda(owner);
   const [policy] = deriveExecutorLimitsPda(owner);
-  const executorLimits = await connection.getAccountInfo(policy, "confirmed") ? policy : new PublicKey(idlJson.address);
-  return program(connection, owner).methods.closeSafe()
-    .accountsPartial({ owner, vault, executorLimits }).instruction();
+  const builder = program(connection, owner).methods.closeSafe().accountsPartial({ owner, vault });
+  if (await connection.getAccountInfo(policy, "confirmed")) {
+    builder.remainingAccounts([{ pubkey: policy, isSigner: false, isWritable: true }]);
+  }
+  return builder.instruction();
 }
 
 /** Kamino accounts for this Safe from our server proxy (the Kamino API builds them for the Safe PDA). */
@@ -400,7 +402,7 @@ export async function ixKaminoDeposit(connection: Connection, owner: PublicKey, 
   return [
     createAssociatedTokenAccountIdempotentInstruction(owner, safeShares, vault, KAMINO_SHARES_MINT),
     await program(connection, owner).methods.kaminoDeposit(new BN(amount.toString()))
-      .accountsPartial({ authority: owner, vault, executorRegistry, executorLimits: new PublicKey(idlJson.address) })
+      .accountsPartial({ authority: owner, vault, executorRegistry })
       .remainingAccounts(kaminoRemaining(kamino))
       .instruction(),
   ];
@@ -422,7 +424,7 @@ export async function ixKaminoWithdraw(connection: Connection, owner: PublicKey,
       throw new Error("Invalid Kamino withdrawal leg");
     }
     return prog.methods.kaminoWithdraw(new BN(shares.toString()), leg.discriminator === KVAULT_WITHDRAW_FROM_RESERVE)
-      .accountsPartial({ authority: owner, vault, executorRegistry, executorLimits: prog.programId, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+      .accountsPartial({ authority: owner, vault, executorRegistry, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
       .remainingAccounts(kaminoRemaining(leg))
       .instruction();
   }));

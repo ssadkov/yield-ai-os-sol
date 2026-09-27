@@ -135,7 +135,7 @@ export async function initializeVault(
   const sig = await program.methods
     // v2: strategy presets are replaced by owner allocation targets (set later via set_allocation).
     // v2 allowlist holds at most 16 programs and generic CPI is owner-only; start empty.
-    .initialize(agent, Array(8).fill(0), [])
+    .initializeWithLimits(agent, Array(8).fill(0), [])
     .accounts({
       owner,
       vault,

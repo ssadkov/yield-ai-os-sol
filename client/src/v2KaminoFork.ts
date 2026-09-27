@@ -146,7 +146,7 @@ async function run() {
     createAssociatedTokenAccountIdempotentInstruction(agent.publicKey, treasuryUsdc, treasury.publicKey, USDC)), [agent]);
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
-  await methods.initialize(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
+  await methods.initializeWithLimits(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
     .accounts({ owner: owner.publicKey, vault: safe, executorLimits, executorRegistry, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -159,7 +159,8 @@ async function run() {
   console.log(`safe ${safe.toBase58()} usdc ${(await getAccount(connection, safeUsdc)).amount}`);
 
   const agentDeposit = (amount: bigint, replace: Record<number, PublicKey> = {}, signer = agent) => methods.kaminoDeposit(new BN(amount.toString()))
-    .accounts({ authority: signer.publicKey, vault: safe, executorRegistry, executorLimits }).remainingAccounts(remaining(kvDeposit, replace))
+    .accounts({ authority: signer.publicKey, vault: safe, executorRegistry })
+    .remainingAccounts([...remaining(kvDeposit, replace), { pubkey: executorLimits, isSigner: false, isWritable: true }])
     .preInstructions([cu]).signers([signer]).rpc();
   const setLimits = (action: number, daily: number, principal: number) => methods.setExecutorLimits(
     new BN(action), new BN(daily), new BN(principal), true)
@@ -167,6 +168,9 @@ async function run() {
     .signers([owner]).rpc();
 
   await expectFailure("deposit above 60% target", () => agentDeposit(BigInt(60_000_001)), /AllocationExceeded/);
+  await expectFailure("executor cannot omit limits tail", () => methods.kaminoDeposit(new BN(1_000_000))
+    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry })
+    .remainingAccounts(remaining(kvDeposit)).preInstructions([cu]).signers([agent]).rpc(), /InvalidExecutorLimits|ExecutorLimitsMissing/);
   await setLimits(50_000_000, 100_000_000, 100_000_000);
   await expectFailure("executor action cap", () => agentDeposit(BigInt(60_000_000)), /ExecutorActionLimit/);
   await setLimits(1_000_000_000, 1_000_000_000, 1_000_000_000);
@@ -207,8 +211,8 @@ async function run() {
   assert.equal(principalAfterDeposit, BigInt(60_000_000));
 
   const agentWithdraw = (amount: bigint, replace: Record<number, PublicKey> = {}) => methods.kaminoWithdraw(new BN(amount.toString()), false)
-    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry, executorLimits, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
-    .remainingAccounts(remaining(kvWithdraw, replace))
+    .accounts({ authority: agent.publicKey, vault: safe, executorRegistry, config, treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+    .remainingAccounts([...remaining(kvWithdraw, replace), { pubkey: executorLimits, isSigner: false, isWritable: true }])
     .preInstructions([cu]).signers([agent]).rpc();
   const attackerUsdc = getAssociatedTokenAddressSync(USDC, attacker.publicKey);
   await sendAndConfirmTransaction(connection, new Transaction().add(
@@ -221,6 +225,17 @@ async function run() {
     agentWithdraw(shares), /ExecutorVolumeLimit/);
   await setLimits(1_000_000_000, 1_000_000_000, 1_000_000_000);
   await agentWithdraw(shares);
+  // Existing production owner clients use the original account list without a limits PDA.
+  await methods.kaminoDeposit(new BN(1_000_000))
+    .accounts({ authority: owner.publicKey, vault: safe, executorRegistry })
+    .remainingAccounts(remaining(kvDeposit)).preInstructions([cu]).signers([owner]).rpc();
+  const ownerRoundTripShares = (await getAccount(connection, safeShares)).amount;
+  assert(ownerRoundTripShares > BigInt(0));
+  await methods.kaminoWithdraw(new BN(ownerRoundTripShares.toString()), false)
+    .accounts({ authority: owner.publicKey, vault: safe, executorRegistry, config,
+      treasuryUsdcAta: treasuryUsdc, tokenProgram: TOKEN_PROGRAM_ID })
+    .remainingAccounts(remaining(kvWithdraw)).preInstructions([cu]).signers([owner]).rpc();
+  assert.equal((await getAccount(connection, safeShares)).amount, BigInt(0));
   const after = (await getAccount(connection, safeUsdc)).amount;
   console.log(`  withdraw all shares -> Safe USDC ${after} (deposited 60_000_000)`);
   assert.equal((await getAccount(connection, safeShares)).amount, BigInt(0));

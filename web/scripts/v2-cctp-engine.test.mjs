@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { encodeFunctionData } from "viem";
+import { encodeAbiParameters, encodeEventTopics, encodeFunctionData } from "viem";
 import {
   CCTP_TESTNET, FORWARD_HOOK, ZERO_BYTES32, CCTP_JOURNAL_KEY,
-  decodeSourceBurn, maxFeeRaw, messengerAbi, mintedToAta, mintRecipientBytes32,
+  decodeSourceBurn, decodeSourceBurnReceipt, maxFeeRaw, messengerAbi, mintedToAta, mintRecipientBytes32,
   readJournal, saveJournal,
 } from "../src/lib/v2CctpEngine.ts";
 
@@ -40,6 +40,29 @@ test("recovered burn must target the exact Safe ATA with the forwarding hook", (
   assert.throws(() => decodeSourceBurn({ to: CCTP_TESTNET.sourceUsdc, input, from }, hash, recipient), /TokenMessenger/);
   const noHook = encodeFunctionData({ abi: messengerAbi, functionName: "depositForBurnWithHook", args: [...args.slice(0, 7), "0x"] });
   assert.throws(() => decodeSourceBurn({ to: CCTP_TESTNET.tokenMessenger, input: noHook, from }, hash, recipient), /forwarding hook/);
+});
+
+test("smart-account wrapper is tracked by the authentic Circle burn event", () => {
+  const depositor = "0x2222222222222222222222222222222222222222";
+  const log = {
+    address: CCTP_TESTNET.tokenMessenger,
+    topics: encodeEventTopics({ abi: messengerAbi, eventName: "DepositForBurn",
+      args: { burnToken: CCTP_TESTNET.sourceUsdc, depositor, minFinalityThreshold: CCTP_TESTNET.finalityThreshold } }),
+    data: encodeAbiParameters([
+      { type: "uint256" }, { type: "bytes32" }, { type: "uint32" }, { type: "bytes32" },
+      { type: "bytes32" }, { type: "uint256" }, { type: "bytes" },
+    ], [BigInt(2_000_000), mintRecipientBytes32(recipient.ata), CCTP_TESTNET.destinationDomain,
+      ZERO_BYTES32, ZERO_BYTES32, BigInt(174_246), FORWARD_HOOK]),
+  };
+  const transfer = decodeSourceBurnReceipt({ status: "success", logs: [log] }, hash, recipient);
+  assert.equal(transfer.sourceAddress, depositor);
+  assert.equal(transfer.amountRaw, "2000000");
+  assert.throws(() => decodeSourceBurnReceipt({ status: "success", logs: [log] }, hash,
+    { ...recipient, ata: owner.toBase58() }), /Safe ATA/);
+  assert.throws(() => decodeSourceBurnReceipt({ status: "success", logs: [{ ...log, address: from }] }, hash, recipient),
+    /exactly one Circle burn/);
+  assert.throws(() => decodeSourceBurnReceipt({ status: "success", logs: [log, log] }, hash, recipient),
+    /exactly one Circle burn/);
 });
 
 test("journal deduplicates by source tx and rejects malformed records", () => {

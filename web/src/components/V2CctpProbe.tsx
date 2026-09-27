@@ -280,7 +280,7 @@ export function V2CctpProbe() {
       {active && <div className="space-y-1 break-all">
         <p>Source: <a className="underline" href={`https://sepolia.basescan.org/tx/${active.sourceTxHash}`} target="_blank" rel="noreferrer">{active.sourceTxHash}</a></p>
         <p>Amount: {formatUnits(BigInt(active.amountRaw), 6)} USDC · recipient {active.ata}</p>
-        <p>Status: {active.stage}{active.circleStatus ? ` · Circle ${active.circleStatus}` : ""}{active.forwardState ? ` · relay ${active.forwardState}` : ""}{active.messageHash ? ` · message ${active.messageHash}` : ""}</p>
+        <p>Status: {active.stage}{active.circleStatus ? ` · Circle ${active.circleStatus}` : ""}{active.forwardState ? ` · relay ${active.forwardState}` : ""}{active.eventNonce ? ` · message nonce ${active.eventNonce}` : ""}{active.messageHash ? ` · message ${active.messageHash}` : ""}</p>
         {active.forwardTxHash && <p>Solana mint: <a className="underline" href={`https://solscan.io/tx/${active.forwardTxHash}?cluster=devnet`} target="_blank" rel="noreferrer">{active.forwardTxHash}</a></p>}
         {active.receivedRaw && <p>Verified minted amount: {formatUnits(BigInt(active.receivedRaw), 6)} USDC</p>}
         {statusError && <p className="text-amber-200">Tracking: {statusError}</p>}

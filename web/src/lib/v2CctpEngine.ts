@@ -1,8 +1,8 @@
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
-  createPublicClient, decodeFunctionData, http, parseAbi,
-  type Hex,
+  createPublicClient, decodeFunctionData, http, parseAbi, parseEventLogs,
+  type Hex, type TransactionReceipt,
 } from "viem";
 import { baseSepolia } from "viem/chains";
 
@@ -32,6 +32,7 @@ export const erc20Abi = parseAbi([
 ]);
 export const messengerAbi = parseAbi([
   "function depositForBurnWithHook(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold, bytes hookData)",
+  "event DepositForBurn(address indexed burnToken, uint256 amount, address indexed depositor, bytes32 mintRecipient, uint32 destinationDomain, bytes32 destinationTokenMessenger, bytes32 destinationCaller, uint256 maxFee, uint32 indexed minFinalityThreshold, bytes hookData)",
 ]);
 
 export type Recipient = { owner: string; safe: string; ata: string; balanceRaw: bigint };
@@ -48,6 +49,7 @@ export type BridgeTransfer = {
   maxFeeRaw: string;
   startedAt: number;
   stage: BridgeStage;
+  eventNonce?: Hex;
   messageHash?: string;
   circleStatus?: string;
   forwardState?: string;
@@ -103,10 +105,32 @@ export function mintRecipientBytes32(ata: string): Hex {
 
 export function isTxHash(value: string): value is Hex { return /^0x[0-9a-fA-F]{64}$/.test(value); }
 
-/** Decode the source transaction rather than trusting a pasted hash or localStorage. */
+/** MetaMask smart accounts can wrap the burn, so verify Circle's emitted event. */
 export async function inspectSourceBurn(hash: Hex, recipient: Recipient): Promise<BridgeTransfer> {
-  const tx = await sourceClient.getTransaction({ hash });
-  return decodeSourceBurn({ to: tx.to, input: tx.input, from: tx.from }, hash, recipient);
+  const receipt = await sourceClient.getTransactionReceipt({ hash });
+  return decodeSourceBurnReceipt(receipt, hash, recipient);
+}
+
+export function decodeSourceBurnReceipt(
+  receipt: Pick<TransactionReceipt, "logs" | "status">, hash: Hex, recipient: Recipient,
+): BridgeTransfer {
+  if (receipt.status !== "success") throw new Error("Source transaction did not succeed");
+  const logs = parseEventLogs({ abi: messengerAbi, eventName: "DepositForBurn", logs: receipt.logs });
+  const burns = logs.filter((log) => log.address.toLowerCase() === CCTP_TESTNET.tokenMessenger.toLowerCase());
+  if (burns.length !== 1) throw new Error("Expected exactly one Circle burn event in the source transaction");
+  const burn = burns[0].args;
+  if (burn.destinationDomain !== CCTP_TESTNET.destinationDomain ||
+    burn.mintRecipient.toLowerCase() !== mintRecipientBytes32(recipient.ata).toLowerCase() ||
+    burn.burnToken.toLowerCase() !== CCTP_TESTNET.sourceUsdc.toLowerCase() ||
+    burn.destinationCaller !== ZERO_BYTES32 || burn.minFinalityThreshold !== CCTP_TESTNET.finalityThreshold ||
+    burn.hookData.toLowerCase() !== FORWARD_HOOK || burn.amount <= burn.maxFee) {
+    throw new Error("Burn route, Safe ATA, token, or forwarding hook does not match");
+  }
+  return {
+    version: 1, sourceTxHash: hash, sourceAddress: burn.depositor, owner: recipient.owner,
+    safe: recipient.safe, ata: recipient.ata, amountRaw: burn.amount.toString(), maxFeeRaw: burn.maxFee.toString(),
+    startedAt: Date.now(), stage: "source_pending",
+  };
 }
 
 export function decodeSourceBurn(
@@ -164,23 +188,24 @@ export function mintedToAta(tx: NonNullable<Awaited<ReturnType<Connection["getPa
 /** Read-only reconciliation: Circle's status alone never credits a transfer. */
 export async function refreshTransfer(connection: Connection, transfer: BridgeTransfer): Promise<BridgeTransfer> {
   if (transfer.stage === "settled" || transfer.stage === "source_failed" || transfer.stage === "destination_failed") return transfer;
-  const source = await inspectSourceBurn(transfer.sourceTxHash, {
+  const receipt = await sourceClient.getTransactionReceipt({ hash: transfer.sourceTxHash }).catch(() => null);
+  if (!receipt) return transfer;
+  if (receipt.status !== "success") return { ...transfer, stage: "source_failed" };
+  const source = decodeSourceBurnReceipt(receipt, transfer.sourceTxHash, {
     owner: transfer.owner, safe: transfer.safe, ata: transfer.ata, balanceRaw: BigInt(0),
   });
   if (source.amountRaw !== transfer.amountRaw || source.maxFeeRaw !== transfer.maxFeeRaw ||
     source.sourceAddress.toLowerCase() !== transfer.sourceAddress.toLowerCase()) {
     throw new Error("Stored burn differs from the Base Sepolia transaction");
   }
-  const receipt = await sourceClient.getTransactionReceipt({ hash: transfer.sourceTxHash }).catch(() => null);
-  if (!receipt) return transfer;
-  if (receipt.status !== "success") return { ...transfer, stage: "source_failed" };
   const response = await fetch(`${CCTP_TESTNET.iris}/v2/messages/${CCTP_TESTNET.sourceDomain}?transactionHash=${transfer.sourceTxHash}`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Circle status HTTP ${response.status}`);
-  const body: { messages?: { messageHash?: string; status?: string; forwardState?: string; forwardTxHash?: string }[] } = await response.json();
+  const body: { messages?: { eventNonce?: string; messageHash?: string; status?: string; forwardState?: string; forwardTxHash?: string }[] } = await response.json();
   if (!Array.isArray(body.messages) || body.messages.length === 0) return { ...transfer, stage: "circle_pending" };
   if (body.messages.length !== 1) throw new Error("Multiple Circle messages in one burn; manual review required");
   const message = body.messages[0];
   const next = { ...transfer, stage: "destination_pending" as BridgeStage,
+    eventNonce: message.eventNonce && isTxHash(message.eventNonce) ? message.eventNonce : undefined,
     messageHash: message.messageHash, circleStatus: message.status, forwardState: message.forwardState };
   if (!message.forwardTxHash) return next;
   next.forwardTxHash = message.forwardTxHash;

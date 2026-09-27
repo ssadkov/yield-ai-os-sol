@@ -1,6 +1,6 @@
 # Yield AI v2 — лимиты executor на каждый Safe
 
-Проектное состояние ветки `codex/yield-ai-v2-executor-limits`. Этот код **ещё не развёрнут в Mainnet**. Существующий контракт `yie1…` продолжает работать по прежним правилам до отдельного upgrade. Сервис executor не запущен.
+Контракт этой ветки **развёрнут в Mainnet** под `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` 2026-09-27. Интерфейс Production ещё не переключён на эту ветку. У пилотного Safe политика лимитов пока отсутствует, поэтому executor-signed действия заблокированы. Сервис executor не запущен.
 
 ## Права и исходные значения
 
@@ -34,15 +34,24 @@ Owner allocation контролируется отдельно. Для executor 
 ## Локальные результаты 2026-09-27
 
 - `cargo test -p yield-vault --lib`: **9/9 PASS**. Проверены повторные операции в одном окне, границы action/position, пауза и повторный депозит при target 50%.
-- `NO_DNA=1 anchor build`: **PASS**; итоговый SBF `.so` — `620488` байт, SHA-256 `7f0da515e6a1d4249b5748457e279cc0636867cd43d973522da8e698ac80ebe9`. Это локальный бинарник, **не** активная Mainnet-программа. Web и client `tsc --noEmit` — **PASS** в WSL.
+- `NO_DNA=1 anchor build`: **PASS**; итоговый SBF `.so` — `620488` байт, SHA-256 `7f0da515e6a1d4249b5748457e279cc0636867cd43d973522da8e698ac80ebe9`. Считанный после upgrade Mainnet-байткод совпал с ним побайтно по размеру и SHA-256. Web и client `tsc --noEmit` — **PASS** в WSL.
 - `client/src/v2SecuritySmoke.ts` на отдельном локальном validator: **PASS** для owner-only изменения лимитов, проверки 1000 USDC по умолчанию, паузы, отказа Safe без политики, создания и закрытия Safe старым списком аккаунтов, возврата policy rent и остальных ранее существовавших прав. Тест использовал одноразовые локальные ключи.
 - `client/src/v2KaminoFork.ts` на локальном форке Mainnet: **PASS**. При 100 USDC тестового депозита executor вложил 60 USDC при target 60%; попытка следующего депозита 1 USDC отвергнута. Предел одного действия 50 USDC отклонил попытку вложить 60 USDC, а предел 100 USDC за 24 часа отклонил полный выход после входа на 60 USDC. После возврата лимита к 1000 USDC executor полностью вышел. Затем owner выполнил депозит 1 USDC и полный выход прежним форматом аккаунтов; в Safe осталось `99.997990` USDC, shares и principal стали нулевыми. Это локальный тест, не Mainnet-транзакция.
 
-Новый бинарник больше текущего Mainnet ProgramData. Read-only Mainnet RPC подтвердил текущий размер ProgramData `536949` байт и rent `2.728351160 SOL` (slot `450922750`). Для бинарника `620488` байт нужен ProgramData минимум `620533` байта; RPC оценил дополнительный rent **0.424606720 SOL** без комиссий. Временный upload buffer требует `3.152917240 SOL` rent, который возвращается после успешного upgrade/закрытия buffer. Баланс deployer на этом слоте — `2.929490300 SOL`; до пополнения пиковая нехватка была около `0.648 SOL`. Пользователь обещал пополнить deployer на 1 SOL; подтверждение зачисления ещё ожидается. Unsigned симуляция `ExtendProgram` на `83584` байта: `err=null`, `2520 CU`. Старый Mainnet байткод `536904` байта с SHA-256 `37bcd17d1a92fe05665eed207e5a0167062c886dc3efa6df28cbbbb99a307042` сохранён локально для отката. Ни расширение, ни upgrade, ни активация политики у пилотного Safe пока не выполнялись.
+## Mainnet upgrade 2026-09-27
 
-Preview PR #20 сначала упал на Vercel на этапе сбора страницы: ветка наследовала глобальный `NEXT_PUBLIC_PROGRAM_ID`, который не совпадал с IDL `yie1…`. Для ветки `codex/yield-ai-v2-executor-limits` добавлена отдельная Preview-переменная `NEXT_PUBLIC_PROGRAM_ID=yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Production-переменные не менялись; следующий Preview build должен подтвердить исправление.
+Перед отправкой проверены Mainnet genesis `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d`, upgrade authority и плательщик `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`, SHA-256 локального бинарника, баланс `3.929490300 SOL` и успешный Preview PR #20. Unsigned симуляция `ExtendProgram` на `83584` байта ранее завершилась с `err=null`, `2520 CU`. Старый Mainnet байткод `536904` байта с SHA-256 `37bcd17d1a92fe05665eed207e5a0167062c886dc3efa6df28cbbbb99a307042` сохранён в `C:\Users\Sergei\AppData\Local\Temp\yield-v2-mainnet-before-executor-limits-37bcd17d1a92.so` для возможного отката.
+
+- [Расширение ProgramData](https://solscan.io/tx/2Lygao7q74BtrGcJXZY3qX4HSzMLXYGpadNPjApxchQFaVXZt4qp27ziq7KypqQ25RxUY9sURW2NikYcZCUTGjsz), slot `450933460`, `extendProgram` на `83584` байта, finalized без ошибки. ProgramData `GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY` стал `620533` байта. Дополнительный постоянный rent — `0.424606720 SOL`, комиссия транзакции `0.000005 SOL`.
+- [Upgrade программы](https://solscan.io/tx/eP49ZLETJdaNWSfUcqiSNkaG4KSAh3KXnucuccdAqhN7fw7RbhZRmw2RpyG32LiKxmSKGt9yvGxyXruon6wzDWQ), slot `450933736`, `upgrade`, finalized без ошибки. Размер активного кода `620488` байт, SHA-256 выгруженного из Mainnet кода **`7f0da515e6a1d4249b5748457e279cc0636867cd43d973522da8e698ac80ebe9`** совпал с локальным бинарником. Upgrade authority осталась `8xwj…`. Временный buffer `4p8DYZPzZuWR31yj22Nu4RDqAQsYBGEUtgBZxKK93uPb` закрыт, его rent возвращён.
+- После двух шагов deployer имел `3.501793581 SOL`; уменьшение от состояния после пополнения составило `0.427696719 SOL`, включая постоянный rent и суммарные комиссии/издержки загрузки. Это не затрагивало USDC пользователей.
+- Пилотный Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` остался аккаунтом программы `yie1…` с корректным discriminator `Vault` и размером `677` байт. Его policy PDA `DQ9Y8Fd1AKg7UZVcyuttw2B9Tgit8EJawu1W9LrzbUd8` отсутствует: лимиты для него **ещё не активированы владельцем**. Средства и Kamino-позиция этим upgrade не перемещались.
+
+Программа после upgrade проверена read-only через Helius. Owner-signed Mainnet цикл Kamino и создание policy на существующем Safe этой сборкой ещё не проверены. Точная сборка не проходила отдельный upgrade в Devnet; локальные validator и Mainnet-account fork тесты описаны выше.
+
+Preview PR #20 сначала упал на Vercel на этапе сбора страницы: ветка наследовала глобальный `NEXT_PUBLIC_PROGRAM_ID`, который не совпадал с IDL `yie1…`. Для ветки `codex/yield-ai-v2-executor-limits` добавлена отдельная Preview-переменная `NEXT_PUBLIC_PROGRAM_ID=yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Повторный Preview build **PASS**; Production-переменные не менялись.
 
 ## Порядок выпуска
 
-1. Перед Mainnet upgrade повторно сверить бинарник/IDL, ProgramData и authority, оценить rent расширения программы и баланс плательщика. Получить отдельное разрешение на конкретные on-chain транзакции расширения и upgrade.
-2. После upgrade владелец активирует политику существующего пилотного Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`, проверяет три значения и паузу. Только затем разрешать даже ручной agent-signed пилот. Production UI переключать после проверки совместимости и выхода из Kamino.
+1. Владелец активирует политику существующего пилотного Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` через актуальный Preview, проверяет три значения и паузу. Только затем разрешать даже ручной agent-signed пилот.
+2. Проверить owner-signed маленький вход и полный выход из Kamino на Mainnet после upgrade, включая существующий Safe и старый формат owner-инструкций. Переключать Production UI после этой проверки и отдельного подтверждения релиза.

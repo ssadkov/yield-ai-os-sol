@@ -135,6 +135,8 @@ The old mainnet program `3Vtz…` (closed 2026-09-23) had no way to reclaim rent
 
 Для локальной пробы из `web/` установить зависимости по lockfile и запустить `node node_modules/next/dist/bin/next dev` с `NEXT_PUBLIC_V2_CCTP_ENABLED=1` (PowerShell: `$env:NEXT_PUBLIC_V2_CCTP_ENABLED='1'; node node_modules/next/dist/bin/next dev`). Открыть `/v2/cctp`, подключить Solana wallet владельца **уже созданного Devnet Safe** и MetaMask с Base Sepolia test USDC и ETH. Экран сам покажет Safe/ATA; вручную адрес получателя не вводится. По желанию можно переопределить только `NEXT_PUBLIC_V2_CCTP_DEVNET_RPC_URL`; genesis всё равно проверяется. Без тестовых средств доступны read-only проверка Safe, quote и импорт существующего burn hash. Node-тест `node --experimental-strip-types --test scripts/v2-cctp-engine.test.mjs` прошёл 5/5; `tsc --noEmit` прошёл; локальный HTTP `/v2/cctp` вернул 200 с формой восстановления. Полный Next build с включённым CCTP успешно скомпилировал код и прошёл TypeScript, но генерация несвязанных страниц застряла на повторяющихся 429 публичного RPC и была остановлена. Реальная EVM подпись, Circle relay и Solana mint этой версии ещё не проверены.
 
+Preview ветки `codex/yield-ai-v2-cctp-engine` получает только два branch-scoped Vercel env: `NEXT_PUBLIC_PROGRAM_ID=yie1…` для основного Mainnet IDL и `NEXT_PUBLIC_V2_CCTP_ENABLED=1` для тестовой страницы. Первый автоматический Preview не собрался из-за прежнего общего program ID; переменные других веток и Production не менялись.
+
 ### Источники для CCTP и кошелька
 
 - [Circle: Forwarding Service, Solana ATA и off-curve PDA](https://developers.circle.com/cctp/concepts/forwarding-service)

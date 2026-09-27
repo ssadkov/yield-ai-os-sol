@@ -1,7 +1,9 @@
 /** Unsigned one-USDC executor deposit simulation for the pinned Mainnet pilot Safe. */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { AnchorProvider, BN, Program, type Idl } from "@coral-xyz/anchor";
+import { pathToFileURL } from "node:url";
+import anchor, { type Idl } from "@coral-xyz/anchor";
+import BN from "bn.js";
 import {
   ComputeBudgetProgram, Connection, PublicKey, TransactionMessage, VersionedTransaction,
   type AddressLookupTableAccount,
@@ -18,9 +20,9 @@ const CU_LIMIT = 300_000;
 const CU_PRICE = 500_000; // 0.5 lamport per requested CU, maximum priority fee 0.00015 SOL.
 
 type ApiIx = { programAddress: string; data: string; accounts: { address: string; role: string }[] };
+const { AnchorProvider, Program } = anchor;
 
-async function main() {
-  if (process.argv.slice(2).length) throw new Error("No arguments accepted: simulation is pinned to 1 USDC and one Safe");
+export async function buildPilotDeposit() {
   const endpoint = process.env.V2_MAINNET_RPC_URL;
   if (!endpoint) throw new Error("Set V2_MAINNET_RPC_URL to a private Mainnet RPC endpoint");
   const connection = new Connection(endpoint, "finalized");
@@ -65,7 +67,13 @@ async function main() {
     instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: CU_PRICE }), ix],
   }).compileToV0Message(tables);
-  const tx = new VersionedTransaction(message); // Signatures remain empty. Never send this object.
+  const tx = new VersionedTransaction(message); // Signatures remain empty until an explicitly authorized send.
+  return { connection, message, tx, blockhash };
+}
+
+async function main() {
+  if (process.argv.slice(2).length) throw new Error("No arguments accepted: simulation is pinned to 1 USDC and one Safe");
+  const { connection, message, tx } = await buildPilotDeposit();
   const [fee, result] = await Promise.all([
     connection.getFeeForMessage(message, "finalized"),
     connection.simulateTransaction(tx, { sigVerify: false, replaceRecentBlockhash: true, commitment: "finalized" }),
@@ -82,4 +90,6 @@ async function main() {
   if (result.value.err) process.exitCode = 1;
 }
 
-main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });
+}

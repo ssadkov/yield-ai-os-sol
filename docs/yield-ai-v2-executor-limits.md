@@ -40,6 +40,8 @@ Owner allocation контролируется отдельно. Для executor 
 
 Новый бинарник больше текущего Mainnet ProgramData. Read-only Mainnet RPC подтвердил текущий размер ProgramData `536949` байт и rent `2.728351160 SOL` (slot `450922750`). Для бинарника `620488` байт нужен ProgramData минимум `620533` байта; RPC оценил дополнительный rent **0.424606720 SOL** без комиссий. Временный upload buffer требует `3.152917240 SOL` rent, который возвращается после успешного upgrade/закрытия buffer. Баланс deployer на этом слоте — `2.929490300 SOL`; до пополнения пиковая нехватка была около `0.648 SOL`. Пользователь обещал пополнить deployer на 1 SOL; подтверждение зачисления ещё ожидается. Unsigned симуляция `ExtendProgram` на `83584` байта: `err=null`, `2520 CU`. Старый Mainnet байткод `536904` байта с SHA-256 `37bcd17d1a92fe05665eed207e5a0167062c886dc3efa6df28cbbbb99a307042` сохранён локально для отката. Ни расширение, ни upgrade, ни активация политики у пилотного Safe пока не выполнялись.
 
+Preview PR #20 сначала упал на Vercel на этапе сбора страницы: ветка наследовала глобальный `NEXT_PUBLIC_PROGRAM_ID`, который не совпадал с IDL `yie1…`. Для ветки `codex/yield-ai-v2-executor-limits` добавлена отдельная Preview-переменная `NEXT_PUBLIC_PROGRAM_ID=yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Production-переменные не менялись; следующий Preview build должен подтвердить исправление.
+
 ## Порядок выпуска
 
 1. Перед Mainnet upgrade повторно сверить бинарник/IDL, ProgramData и authority, оценить rent расширения программы и баланс плательщика. Получить отдельное разрешение на конкретные on-chain транзакции расширения и upgrade.

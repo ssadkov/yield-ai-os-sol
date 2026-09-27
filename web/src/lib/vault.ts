@@ -116,6 +116,10 @@ export async function initializeVault(
 ) {
   const program = getProgram(provider);
   const owner = provider.wallet.publicKey;
+  const [vault] = deriveVaultPda(owner);
+  const [executorLimits] = PublicKey.findProgramAddressSync(
+    [Buffer.from("executor_limits"), vault.toBuffer()], program.programId,
+  );
   const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], program.programId);
   let agent = AGENT_PUBKEY;
   if (await provider.connection.getGenesisHash() === "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d") {
@@ -131,9 +135,11 @@ export async function initializeVault(
   const sig = await program.methods
     // v2: strategy presets are replaced by owner allocation targets (set later via set_allocation).
     // v2 allowlist holds at most 16 programs and generic CPI is owner-only; start empty.
-    .initialize(agent, Array(8).fill(0), [])
+    .initializeWithLimits(agent, Array(8).fill(0), [])
     .accounts({
       owner,
+      vault,
+      executorLimits,
       executorRegistry,
       usdcMint: USDC_MINT,
       tokenProgram: TOKEN_PROGRAM_ID,

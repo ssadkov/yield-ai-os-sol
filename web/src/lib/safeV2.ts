@@ -28,22 +28,38 @@ export type ExecutorRegistryState = {
   approved: PublicKey[];
 };
 
+export type ExecutorLimitsState = {
+  address: PublicKey;
+  enabled: boolean;
+  maxActionUsdc: bigint;
+  max24hVolumeUsdc: bigint;
+  maxPrincipalUsdc: bigint;
+  used24hUsdc: bigint;
+};
+
 export function deriveExecutorRegistryPda() {
   return PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], new PublicKey(idlJson.address));
 }
-/** 8 discriminator + bump + owner + agent + allocation [u16; 8] + ts + Vec<Pubkey> (max 16). */
-const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 16 * 32;
+export function deriveExecutorLimitsPda(owner: PublicKey) {
+  const [vault] = deriveVaultPda(owner);
+  return PublicKey.findProgramAddressSync([Buffer.from("executor_limits"), vault.toBuffer()], new PublicKey(idlJson.address));
+}
+/** Includes the principal [u64; 8] appended after the initial Vault fields. */
+const VAULT_ACCOUNT_SIZE = 8 + 1 + 32 + 32 + 16 + 8 + 4 + 16 * 32 + 8 * 8;
+const EXECUTOR_LIMITS_ACCOUNT_SIZE = 8 + 32 + 1 + 1 + 8 * 3 + 25 * 8 * 2;
+export const DEFAULT_EXECUTOR_LIMIT_RAW = BigInt(1_000_000_000);
 const TOKEN_ACCOUNT_SIZE = 165;
 /** Base fee plus priority headroom; a wallet below this cannot pay for any transaction. */
 export const MIN_FEE_LAMPORTS = 20_000;
 
 /** SOL the owner needs to create a Safe: rent for the Safe account and its USDC ATA, plus fees. */
 export async function safeCreationCostLamports(connection: Connection) {
-  const [vaultRent, ataRent] = await Promise.all([
+  const [vaultRent, limitsRent, ataRent] = await Promise.all([
     connection.getMinimumBalanceForRentExemption(VAULT_ACCOUNT_SIZE),
+    connection.getMinimumBalanceForRentExemption(EXECUTOR_LIMITS_ACCOUNT_SIZE),
     connection.getMinimumBalanceForRentExemption(TOKEN_ACCOUNT_SIZE),
   ]);
-  return vaultRent + ataRent + MIN_FEE_LAMPORTS;
+  return vaultRent + limitsRent + ataRent + MIN_FEE_LAMPORTS;
 }
 
 /** Turn raw simulation failures into something a user can act on. */
@@ -136,6 +152,49 @@ export async function readExecutorRegistry(connection: Connection, owner: Public
   return { address, defaultExecutor: decoded.defaultExecutor, approved: decoded.approved };
 }
 
+export async function readExecutorLimits(connection: Connection, owner: PublicKey): Promise<ExecutorLimitsState | null> {
+  const [vault] = deriveVaultPda(owner);
+  const [address] = deriveExecutorLimitsPda(owner);
+  const info = await connection.getAccountInfo(address, "confirmed");
+  if (!info) return null;
+  const prog = program(connection, owner);
+  if (!info.owner.equals(prog.programId)) throw new Error("Executor limits have the wrong program owner");
+  const decoded = prog.coder.accounts.decode("executorLimits", info.data) as {
+    vault: PublicKey; enabled: boolean; maxActionUsdc: BN; max24HVolumeUsdc: BN;
+    maxPrincipalUsdc: BN; hourEpoch: BN[]; hourVolume: BN[];
+  };
+  if (!decoded.vault.equals(vault)) throw new Error("Executor limits belong to another Safe");
+  const hour = Math.floor(Date.now() / 3_600_000);
+  const used24hUsdc = decoded.hourVolume.reduce((sum, volume, index) => {
+    const bucket = Number(decoded.hourEpoch[index].toString());
+    return bucket >= hour - 24 && bucket <= hour ? sum + BigInt(volume.toString()) : sum;
+  }, BigInt(0));
+  return {
+    address, enabled: decoded.enabled,
+    maxActionUsdc: BigInt(decoded.maxActionUsdc.toString()),
+    max24hVolumeUsdc: BigInt(decoded.max24HVolumeUsdc.toString()),
+    maxPrincipalUsdc: BigInt(decoded.maxPrincipalUsdc.toString()),
+    used24hUsdc,
+  };
+}
+
+export async function ixSetExecutorLimits(connection: Connection, owner: PublicKey, limits: {
+  maxActionUsdc: bigint; max24hVolumeUsdc: bigint; maxPrincipalUsdc: bigint; enabled: boolean;
+}) {
+  const maxU64 = (BigInt(1) << BigInt(64)) - BigInt(1);
+  const amounts = [limits.maxActionUsdc, limits.max24hVolumeUsdc, limits.maxPrincipalUsdc];
+  if (amounts.some((amount) => amount > maxU64 || amount < BigInt(0)) ||
+    (limits.enabled && amounts.some((amount) => amount === BigInt(0)))) {
+    throw new Error("Executor limits must be positive USDC amounts within u64");
+  }
+  const [vault] = deriveVaultPda(owner);
+  const [executorLimits] = deriveExecutorLimitsPda(owner);
+  return program(connection, owner).methods.setExecutorLimits(
+    new BN(limits.maxActionUsdc.toString()), new BN(limits.max24hVolumeUsdc.toString()),
+    new BN(limits.maxPrincipalUsdc.toString()), limits.enabled,
+  ).accountsPartial({ owner, vault, executorLimits, systemProgram: SystemProgram.programId }).instruction();
+}
+
 export async function readProtocolAdmin(connection: Connection, wallet: PublicKey) {
   const prog = program(connection, wallet);
   const [config] = PublicKey.findProgramAddressSync([Buffer.from("config")], prog.programId);
@@ -198,6 +257,7 @@ export async function readSafe(connection: Connection, owner: PublicKey): Promis
 
 export async function ixInitialize(connection: Connection, owner: PublicKey) {
   const [vault] = deriveVaultPda(owner);
+  const [executorLimits] = deriveExecutorLimitsPda(owner);
   const [executorRegistry] = deriveExecutorRegistryPda();
   const registry = await readExecutorRegistry(connection, owner);
   const isMainnet = await connection.getGenesisHash() === MAINNET_GENESIS;
@@ -208,9 +268,9 @@ export async function ixInitialize(connection: Connection, owner: PublicKey) {
   // Mainnet uses the admin's current default. Older Devnet deployments keep the safe no-agent default.
   const agent = isMainnet ? registry!.defaultExecutor : PublicKey.default;
   return program(connection, owner).methods
-    .initialize(agent, ZERO_ALLOCATION, [])
+    .initializeWithLimits(agent, ZERO_ALLOCATION, [])
     .accountsPartial({
-      owner, vault, executorRegistry, usdcMint: USDC_MINT,
+      owner, vault, executorLimits, executorRegistry, usdcMint: USDC_MINT,
       vaultUsdcAta: getAssociatedTokenAddressSync(USDC_MINT, vault, true),
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
@@ -296,8 +356,12 @@ export async function ixWithdrawExcessLamports(connection: Connection, owner: Pu
 
 export async function ixCloseSafe(connection: Connection, owner: PublicKey) {
   const [vault] = deriveVaultPda(owner);
-  return program(connection, owner).methods.closeSafe()
-    .accountsPartial({ owner, vault }).instruction();
+  const [policy] = deriveExecutorLimitsPda(owner);
+  const builder = program(connection, owner).methods.closeSafe().accountsPartial({ owner, vault });
+  if (await connection.getAccountInfo(policy, "confirmed")) {
+    builder.remainingAccounts([{ pubkey: policy, isSigner: false, isWritable: true }]);
+  }
+  return builder.instruction();
 }
 
 /** Kamino accounts for this Safe from our server proxy (the Kamino API builds them for the Safe PDA). */

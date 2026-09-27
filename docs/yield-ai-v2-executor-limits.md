@@ -47,14 +47,20 @@ Owner allocation контролируется отдельно. Для executor 
 - После двух шагов deployer имел `3.501793581 SOL`; уменьшение от состояния после пополнения составило `0.427696719 SOL`, включая постоянный rent и суммарные комиссии/издержки загрузки. Это не затрагивало USDC пользователей.
 - Пилотный Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` остался аккаунтом программы `yie1…` с корректным discriminator `Vault` и размером `677` байт. Средства и Kamino-позиция самим upgrade не перемещались.
 - Владелец [создал policy PDA](https://solscan.io/tx/4SyTHxyHo5NC9aqBJdoiHHaMVAqW1UGafLmhLocKAUaBKaczarbdMxrjNPwZcnZzBUcCpXWFtu31WYaem9pRpGS9) `DQ9Y8Fd1AKg7UZVcyuttw2B9Tgit8EJawu1W9LrzbUd8`, slot `450938049`, finalized без ошибки. On-chain проверены `enabled=true` и три значения `1000 USDC`. Из кошелька владельца списалось `0.003172520 SOL`: `0.003017520 SOL` rent в PDA и `0.000155 SOL` сетевая комиссия.
-- После установки policy read-only snapshot Safe: `1 USDC` idle, `1.891798` Kamino shares, учтённый principal `2 USDC`, Kamino allocation `0 bps`. Реальный [депозит 2 USDC](https://solscan.io/tx/29RrTVDqQixj8zcBdyCT35YS6ZgTuusSLKYuLLhYPEQMUcrVawnJLFYbmW5U4aAEZXNf9yTVeYTVLwahuptsBJZG) был до этого upgrade; Mainnet-вывод из Kamino ещё не выполнялся.
+- После установки policy read-only snapshot Safe: `1 USDC` idle, `1.891798` Kamino shares, учтённый principal `2 USDC`, Kamino allocation `0 bps`. Реальный [депозит 2 USDC](https://solscan.io/tx/29RrTVDqQixj8zcBdyCT35YS6ZgTuusSLKYuLLhYPEQMUcrVawnJLFYbmW5U4aAEZXNf9yTVeYTVLwahuptsBJZG) был до этого upgrade; этот snapshot предшествовал живому выводу ниже.
 
-Программа после upgrade проверена read-only через Helius; создание policy на существующем Safe уже проверено Mainnet-транзакцией. Owner-signed Mainnet выход из Kamino этой сборкой ещё не проверен. Точная сборка не проходила отдельный upgrade в Devnet; локальные validator и Mainnet-account fork тесты описаны выше.
+Программа после upgrade проверена read-only через Helius; создание policy и owner-signed полный вывод текущей позиции уже проверены Mainnet-транзакциями. Точная сборка не проходила отдельный upgrade в Devnet; локальные validator и Mainnet-account fork тесты описаны выше.
+
+### Живой полный вывод из Kamino и Safe
+
+- [Погашение Kamino shares](https://solscan.io/tx/5wXWkCcmZBAzj7QDuvhPytrSqAZK44uqmmpxstBcPikRo7yo9TvmvKEaoCrZWSqCv6qmPv9HDAetguhzQkn9DVZM), slot `450943512`, finalized без ошибки: `1.891798` shares списано из Safe, `1.999291 USDC` зачислено в Safe. Учтённый principal перед выходом был `2 USDC`, поэтому фактическое отличие составило `-0.000709 USDC`; performance fee с прибыли не взималась. Сетевая комиссия владельца `0.000380 SOL`, фактический расход `154713 CU`.
+- [Вывод USDC владельцу](https://solscan.io/tx/2atdNN4G9FauvvuTqhQbhF4LkmV7Hq5ioA6K9YeAY1L79ZRRfBitjerrWcmo2YJwdXt1VfufsbEdLhur97bZG5sC), slot `450943541`, finalized без ошибки: все `2.999291 USDC` (погашение плюс прежний `1 USDC` idle) переведены из Safe в USDC ATA владельца `EP9f…`; комиссия `0.000155 SOL`, `17219 CU`.
+- Повторное finalized чтение: в Safe `0` Kamino shares, `route_principal[0]=0`, `0` USDC; USDC ATA владельца содержит `13.119247 USDC` на момент проверки. Policy осталась `enabled=true`, лимиты `1000/1000/1000 USDC`, allocation Safe `0 bps`. Пустой shares ATA ещё существует; его rent не включён в указанные сетевые комиссии.
 
 Preview PR #20 сначала упал на Vercel на этапе сбора страницы: ветка наследовала глобальный `NEXT_PUBLIC_PROGRAM_ID`, который не совпадал с IDL `yie1…`. Для ветки `codex/yield-ai-v2-executor-limits` добавлена отдельная Preview-переменная `NEXT_PUBLIC_PROGRAM_ID=yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Повторный Preview build **PASS**; Production-переменные не менялись.
 
 ## Порядок выпуска
 
-1. Следующий Mainnet-тест в доступном Preview — owner-signed **Withdraw all USDC** для уже вложенного малого депозита пилотного Safe. UI по шагам погашает Kamino shares в Safe, затем отдельной подписью отправляет весь полученный и idle USDC владельцу. После подтверждений проверить нулевые shares/principal, фактический USDC в кошельке, комиссию и отсутствие недоступного остатка. Каждый подтверждённый шаг сохраняется; при прерывании владелец может обновить страницу и повторить действие.
+1. Owner-signed Mainnet путь **Withdraw all USDC** для пилотного Safe пройден: Kamino shares, principal и Safe USDC обнулились; фактический вывод владельцу подтверждён выше.
 2. Провести малый agent-signed пилот после осознанной установки owner allocation и отдельно проверить отклонение операций сверх action/24h/principal лимитов; сервис executor пока не запускать.
-3. Переключать Production UI после живого выхода из Kamino и отдельного подтверждения релиза. PR #20 остаётся draft поверх PR #19.
+3. Согласовать переключение Production UI после проверки остальных release gates и PR #19. PR #20 остаётся draft поверх PR #19 до решения о выпуске.

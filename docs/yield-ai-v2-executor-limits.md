@@ -1,6 +1,6 @@
 # Yield AI v2 — лимиты executor на каждый Safe
 
-Контракт этой ветки **развёрнут в Mainnet** под `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` 2026-09-27. Интерфейс Production ещё не переключён на эту ветку. У пилотного Safe политика лимитов пока отсутствует, поэтому executor-signed действия заблокированы. Сервис executor не запущен.
+Контракт этой ветки **развёрнут в Mainnet** под `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` 2026-09-27. Интерфейс Production ещё не переключён на эту ветку. Владелец пилотного Safe уже создал политику 1000/1000/1000 USDC. Сервис executor не запущен, а allocation Safe равна нулю, поэтому автоматического входа в Kamino нет.
 
 ## Права и исходные значения
 
@@ -45,13 +45,16 @@ Owner allocation контролируется отдельно. Для executor 
 - [Расширение ProgramData](https://solscan.io/tx/2Lygao7q74BtrGcJXZY3qX4HSzMLXYGpadNPjApxchQFaVXZt4qp27ziq7KypqQ25RxUY9sURW2NikYcZCUTGjsz), slot `450933460`, `extendProgram` на `83584` байта, finalized без ошибки. ProgramData `GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY` стал `620533` байта. Дополнительный постоянный rent — `0.424606720 SOL`, комиссия транзакции `0.000005 SOL`.
 - [Upgrade программы](https://solscan.io/tx/eP49ZLETJdaNWSfUcqiSNkaG4KSAh3KXnucuccdAqhN7fw7RbhZRmw2RpyG32LiKxmSKGt9yvGxyXruon6wzDWQ), slot `450933736`, `upgrade`, finalized без ошибки. Размер активного кода `620488` байт, SHA-256 выгруженного из Mainnet кода **`7f0da515e6a1d4249b5748457e279cc0636867cd43d973522da8e698ac80ebe9`** совпал с локальным бинарником. Upgrade authority осталась `8xwj…`. Временный buffer `4p8DYZPzZuWR31yj22Nu4RDqAQsYBGEUtgBZxKK93uPb` закрыт, его rent возвращён.
 - После двух шагов deployer имел `3.501793581 SOL`; уменьшение от состояния после пополнения составило `0.427696719 SOL`, включая постоянный rent и суммарные комиссии/издержки загрузки. Это не затрагивало USDC пользователей.
-- Пилотный Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` остался аккаунтом программы `yie1…` с корректным discriminator `Vault` и размером `677` байт. Его policy PDA `DQ9Y8Fd1AKg7UZVcyuttw2B9Tgit8EJawu1W9LrzbUd8` отсутствует: лимиты для него **ещё не активированы владельцем**. Средства и Kamino-позиция этим upgrade не перемещались.
+- Пилотный Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` остался аккаунтом программы `yie1…` с корректным discriminator `Vault` и размером `677` байт. Средства и Kamino-позиция самим upgrade не перемещались.
+- Владелец [создал policy PDA](https://solscan.io/tx/4SyTHxyHo5NC9aqBJdoiHHaMVAqW1UGafLmhLocKAUaBKaczarbdMxrjNPwZcnZzBUcCpXWFtu31WYaem9pRpGS9) `DQ9Y8Fd1AKg7UZVcyuttw2B9Tgit8EJawu1W9LrzbUd8`, slot `450938049`, finalized без ошибки. On-chain проверены `enabled=true` и три значения `1000 USDC`. Из кошелька владельца списалось `0.003172520 SOL`: `0.003017520 SOL` rent в PDA и `0.000155 SOL` сетевая комиссия.
+- После установки policy read-only snapshot Safe: `1 USDC` idle, `1.891798` Kamino shares, учтённый principal `2 USDC`, Kamino allocation `0 bps`. Реальный [депозит 2 USDC](https://solscan.io/tx/29RrTVDqQixj8zcBdyCT35YS6ZgTuusSLKYuLLhYPEQMUcrVawnJLFYbmW5U4aAEZXNf9yTVeYTVLwahuptsBJZG) был до этого upgrade; Mainnet-вывод из Kamino ещё не выполнялся.
 
-Программа после upgrade проверена read-only через Helius. Owner-signed Mainnet цикл Kamino и создание policy на существующем Safe этой сборкой ещё не проверены. Точная сборка не проходила отдельный upgrade в Devnet; локальные validator и Mainnet-account fork тесты описаны выше.
+Программа после upgrade проверена read-only через Helius; создание policy на существующем Safe уже проверено Mainnet-транзакцией. Owner-signed Mainnet выход из Kamino этой сборкой ещё не проверен. Точная сборка не проходила отдельный upgrade в Devnet; локальные validator и Mainnet-account fork тесты описаны выше.
 
 Preview PR #20 сначала упал на Vercel на этапе сбора страницы: ветка наследовала глобальный `NEXT_PUBLIC_PROGRAM_ID`, который не совпадал с IDL `yie1…`. Для ветки `codex/yield-ai-v2-executor-limits` добавлена отдельная Preview-переменная `NEXT_PUBLIC_PROGRAM_ID=yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`. Повторный Preview build **PASS**; Production-переменные не менялись.
 
 ## Порядок выпуска
 
-1. Владелец активирует политику существующего пилотного Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ` через актуальный Preview, проверяет три значения и паузу. Только затем разрешать даже ручной agent-signed пилот.
-2. Проверить owner-signed маленький вход и полный выход из Kamino на Mainnet после upgrade, включая существующий Safe и старый формат owner-инструкций. Переключать Production UI после этой проверки и отдельного подтверждения релиза.
+1. Следующий Mainnet-тест — owner-signed **Withdraw all from Kamino** для уже вложенного малого депозита пилотного Safe. После подтверждения проверить нулевые shares/principal, фактический USDC в Safe, комиссию и отсутствие недоступного остатка. Владелец сможет затем проверить полный вывод USDC из Safe в кошелёк.
+2. Провести малый agent-signed пилот после осознанной установки owner allocation и отдельно проверить отклонение операций сверх action/24h/principal лимитов; сервис executor пока не запускать.
+3. Переключать Production UI после живого выхода из Kamino и отдельного подтверждения релиза. PR #20 остаётся draft поверх PR #19.

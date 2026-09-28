@@ -15,7 +15,9 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 function WalletConnectionNotice({ message }: { message: string }) {
   const { publicKey } = useWallet();
   if (!message || publicKey) return null;
-  return <p role="alert" className="p-3 text-amber-200">Solana wallet connection failed: {message}</p>;
+  return <p role="alert" className="p-3 text-amber-200">Solana wallet connection failed: {message}{message.startsWith("MetaMask returned no Solana account") && <>
+    {" "}<a className="underline" href="/v2-metamask-diagnostic.html">Run isolated MetaMask diagnostic</a>.
+  </>}</p>;
 }
 
 export function SolanaProvider({ children }: { children: ReactNode }) {
@@ -37,7 +39,7 @@ export function SolanaProvider({ children }: { children: ReactNode }) {
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect onError={(error, adapter) => {
         if (adapter?.name.toLowerCase() === "metamask" && error.name === "WalletAccountError") {
-          setWalletError("MetaMask returned no Solana account to this site. In MetaMask, disconnect this site under Connected sites, reload, then select MetaMask here before connecting the Base account. Check the displayed Solana owner before creating a Safe.");
+          setWalletError("MetaMask returned no Solana account to this site. Use the isolated test to distinguish the wallet provider from this app's connection code. Do not create a Safe until the Solana owner is shown.");
           return;
         }
         const cause = (error as Error & { cause?: unknown }).cause;

@@ -43,7 +43,7 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   const connection = routeMode === "mainnet" ? appConnection : devnetConnection;
   const sourceClient = useMemo(() => sourceClientFor(route), [route]);
   const sendEnabled = routeMode !== "mainnet" || process.env.NEXT_PUBLIC_V2_CCTP_MAINNET_SEND_ENABLED === "1";
-  const { publicKey, wallet: solanaWallet, wallets } = useWallet();
+  const { publicKey, wallet: solanaWallet, wallets, select } = useWallet();
   const [sdkOwner, setSdkOwner] = useState<PublicKey | null>(null);
   const sdkWalletRef = useRef<{ accounts: readonly { address: string }[] } | null>(null);
   const solanaOwner = publicKey ?? sdkOwner;
@@ -165,6 +165,8 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
       const owner = new PublicKey(account.address);
       sdkWalletRef.current = wallet;
       setSdkOwner(owner);
+      // Once the permission exists, let the shared adapter reuse it on /v2/safe.
+      if (registered) select(registered.adapter.name);
     } catch (error) {
       setSolanaConnectError(error instanceof Error ? error.message : String(error));
     } finally { setSolanaConnecting(false); }

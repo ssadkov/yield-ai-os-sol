@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import type { StandardWalletAdapter } from "@solana/wallet-adapter-base";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { createWalletClient, custom, formatUnits, parseUnits, type EIP1193Provider, type Hex } from "viem";
 import {
@@ -42,14 +43,20 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   const connection = routeMode === "mainnet" ? appConnection : devnetConnection;
   const sourceClient = useMemo(() => sourceClientFor(route), [route]);
   const sendEnabled = routeMode !== "mainnet" || process.env.NEXT_PUBLIC_V2_CCTP_MAINNET_SEND_ENABLED === "1";
-  const { publicKey, wallet: solanaWallet, wallets, select } = useWallet();
-  const derived = useMemo(() => publicKey ? deriveSafeRecipient(publicKey, route) : null, [publicKey, route]);
-  const ownerRef = useRef(publicKey?.toBase58());
-  ownerRef.current = publicKey?.toBase58();
+  const { publicKey, wallet: solanaWallet } = useWallet();
+  const [sdkOwner, setSdkOwner] = useState<PublicKey | null>(null);
+  const sdkWalletRef = useRef<{ accounts: readonly { address: string }[] } | null>(null);
+  const solanaOwner = publicKey ?? sdkOwner;
+  const derived = useMemo(() => solanaOwner ? deriveSafeRecipient(solanaOwner, route) : null, [solanaOwner, route]);
+  const ownerRef = useRef(solanaOwner?.toBase58());
+  ownerRef.current = solanaOwner?.toBase58();
   const [recipient, setRecipient] = useState<Recipient | null>(null);
   const [recipientError, setRecipientError] = useState("");
   const [evm, setEvm] = useState<{ provider: EIP1193Provider; address: Hex } | null>(null);
   const [usdc, setUsdc] = useState<bigint | null>(null);
+  const [evmError, setEvmError] = useState("");
+  const [solanaConnectError, setSolanaConnectError] = useState("");
+  const [solanaConnecting, setSolanaConnecting] = useState(false);
   const [amount, setAmount] = useState("2");
   const [quote, setQuote] = useState<FeeQuote | null>(null);
   const [journal, setJournal] = useState<BridgeTransfer[]>([]);
@@ -58,6 +65,10 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   const [busy, setBusy] = useState(false);
   const [statusError, setStatusError] = useState("");
   const [log, setLog] = useState("");
+
+  useEffect(() => {
+    if (publicKey) setSdkOwner(null);
+  }, [publicKey]);
 
   function record(transfer: BridgeTransfer) {
     try { setJournal(saveJournal(localStorage, transfer, route)); }
@@ -76,15 +87,15 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   useEffect(() => {
     setRecipient(null);
     setRecipientError("");
-    if (!publicKey) return;
+    if (!solanaOwner) return;
     let cancelled = false;
-    void validateRecipient(connection, publicKey, route).then((value) => {
+    void validateRecipient(connection, solanaOwner, route).then((value) => {
       if (!cancelled) setRecipient(value);
     }).catch((error) => {
       if (!cancelled) setRecipientError(error instanceof Error ? error.message : String(error));
     });
     return () => { cancelled = true; };
-  }, [connection, publicKey, route]);
+  }, [connection, solanaOwner, route]);
 
   const transfers = journal.filter((item) => recipient && item.owner === recipient.owner &&
     item.safe === recipient.safe && item.ata === recipient.ata);
@@ -130,15 +141,42 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
     if (quote && amountRaw > BigInt(0)) ceiling = maxFeeRaw(amountRaw, quote);
   } catch { /* Invalid input disables burn. */ }
 
+  async function connectMetaMaskSolana() {
+    if (routeMode !== "mainnet" || solanaConnecting) return;
+    setSolanaConnecting(true);
+    setSolanaConnectError("");
+    try {
+      const { createSolanaClient } = await import("@metamask/connect-solana");
+      const client = await createSolanaClient({
+        dapp: { name: "Yield AI v2 CCTP", url: window.location.origin },
+        api: { supportedNetworks: { mainnet: connection.rpcEndpoint } },
+        skipAutoRegister: true,
+      });
+      const wallet = client.getWallet() as StandardWalletAdapter["wallet"];
+      const { accounts } = await wallet.features["standard:connect"].connect();
+      const account = accounts[0];
+      if (!account) throw new Error("MetaMask returned no Solana account");
+      const owner = new PublicKey(account.address);
+      sdkWalletRef.current = wallet;
+      setSdkOwner(owner);
+    } catch (error) {
+      setSolanaConnectError(error instanceof Error ? error.message : String(error));
+    } finally { setSolanaConnecting(false); }
+  }
+
   async function connectEvm() {
     setBusy(true);
+    setEvmError("");
+    setEvm(null);
+    setUsdc(null);
     try {
       const provider = await findMetaMask();
       if (!provider) throw new Error("MetaMask (EIP-6963 io.metamask) not found");
       await provider.request({ method: "eth_requestAccounts" });
       try {
         await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: `0x${route.sourceChain.id.toString(16)}` }] });
-      } catch {
+      } catch (error) {
+        if (Number((error as { code?: number })?.code) !== 4902) throw error;
         await provider.request({ method: "wallet_addEthereumChain", params: [{
           chainId: `0x${route.sourceChain.id.toString(16)}`, chainName: route.sourceName,
           rpcUrls: [routeMode === "mainnet" ? "https://mainnet.base.org" : "https://sepolia.base.org"],
@@ -150,17 +188,8 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
       if (!address) throw new Error("No MetaMask EVM account selected");
       if (Number(await provider.request({ method: "eth_chainId" })) !== route.sourceChain.id) throw new Error(`MetaMask is not on ${route.sourceName}`);
       setEvm({ provider, address });
-      if (!publicKey) {
-        const metaMaskSolana = wallets.find((item) => item.adapter.name.toLowerCase() === "metamask");
-        if (metaMaskSolana) {
-          select(metaMaskSolana.adapter.name);
-          setLog("Base account connected. Approve the separate Solana connection in MetaMask to identify your Safe owner.");
-        } else {
-          setLog("Base account connected. Select MetaMask in the Solana Safe owner wallet picker above to identify your Safe owner.");
-        }
-      }
       setUsdc(await sourceClient.readContract({ address: route.sourceUsdc, abi: erc20Abi, functionName: "balanceOf", args: [address] }));
-    } catch (error) { setLog(`EVM connect failed: ${error instanceof Error ? error.message : String(error)}`); }
+    } catch (error) { setEvmError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
 
@@ -171,12 +200,14 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   }
 
   async function burnToSafe() {
-    if (!sendEnabled || !evm || !recipient || !publicKey || !quote || ceiling === null || amountRaw <= ceiling || pending) return;
+    if (!sendEnabled || !evm || !recipient || !solanaOwner || !quote || ceiling === null || amountRaw <= ceiling || pending) return;
     setBusy(true);
     setLog("");
     try {
-      const owner = publicKey.toBase58();
-      const verified = await validateRecipient(connection, publicKey, route);
+      const owner = solanaOwner.toBase58();
+      if (!publicKey && sdkWalletRef.current?.accounts[0]?.address !== owner)
+        throw new Error("MetaMask Solana account changed; reconnect the Safe owner before burn");
+      const verified = await validateRecipient(connection, solanaOwner, route);
       if (verified.ata !== recipient.ata || ownerRef.current !== owner) throw new Error("Solana owner or Safe changed; review recipient again");
       await checkWallet(evm.provider, evm.address);
       // A lower quote is welcome; an increased ceiling needs fresh user review.
@@ -208,7 +239,9 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
       });
       setUsdc(currentBalance);
       if (currentBalance < amountRaw) throw new Error(`${route.sourceName} USDC balance fell below the burn amount`);
-      const rechecked = await validateRecipient(connection, publicKey, route);
+      if (!publicKey && sdkWalletRef.current?.accounts[0]?.address !== owner)
+        throw new Error("MetaMask Solana account changed before burn");
+      const rechecked = await validateRecipient(connection, solanaOwner, route);
       if (rechecked.ata !== recipient.ata || ownerRef.current !== owner) throw new Error("Solana owner or Safe changed before burn");
       const requote = await fetchFeeQuote(route);
       setQuote(requote);
@@ -259,13 +292,15 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   return <main className="mx-auto max-w-2xl space-y-5 p-5 text-sm">
     <h1 className="text-2xl font-semibold">Yield AI v2 · CCTP to Safe ({route.destinationName})</h1>
     <p>{route.sourceName} {routeMode === "mainnet" ? "real" : "test"} USDC → {route.destinationName} Safe. Circle forwards the mint to the Safe&apos;s USDC account. Each EVM transaction requires your MetaMask confirmation.</p>
-    <p>Base and Solana need separate wallet permissions. Connecting the Base account will also request MetaMask&apos;s Solana address if no Solana owner is connected. MetaMask already generates that address for each account; this app reads it from the wallet.</p>
+    <p>Base and Solana need separate wallet permissions. Connect the Solana Safe owner first, then connect the Base USDC source. MetaMask already has a Solana address for each account; this app reads it from the wallet.</p>
     {routeMode === "mainnet" && <p className="rounded border border-amber-500 p-3 text-amber-200">Real USDC. Recipient is the Safe USDC ATA derived from your connected Solana owner, not your MetaMask Solana wallet ATA. Review the source, Safe and fee before signing.</p>}
     {routeMode === "mainnet" && !sendEnabled && <p className="rounded border border-amber-500 p-3 text-amber-200">Mainnet sending is disabled for this Preview. Recipient verification, fee quote and recovery are read-only.</p>}
     <div className="space-y-2 rounded border p-3">
       <div>Solana Safe owner <WalletMultiButton /></div>
-      <div>Selected Solana wallet: {solanaWallet?.adapter.name ?? "none"}</div>
-      <div className="break-all">Owner: {publicKey?.toBase58() ?? "connect a Solana wallet"}</div>
+      {routeMode === "mainnet" && !publicKey && <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={solanaConnecting} onClick={() => void connectMetaMaskSolana()}>{solanaConnecting ? "Connecting MetaMask Solana..." : "Connect MetaMask Solana directly"}</button>}
+      {solanaConnectError && <p role="alert" className="text-amber-200">MetaMask Solana connection failed: {solanaConnectError}</p>}
+      <div>Selected Solana wallet: {publicKey ? solanaWallet?.adapter.name ?? "connected" : sdkOwner ? "MetaMask Connect" : "none"}</div>
+      <div className="break-all">Owner: {solanaOwner?.toBase58() ?? "connect a Solana wallet"}</div>
       <div className="break-all">Safe: {recipient?.safe ?? derived?.safe.toBase58() ?? "—"}{!recipient && derived ? " (derived, not verified)" : ""}</div>
       <div className="break-all">USDC recipient ATA: {recipient?.ata ?? derived?.ata.toBase58() ?? "—"}{!recipient && derived ? " (derived, not verified)" : ""}</div>
       <p className={recipient ? "text-green-300" : "text-amber-200"}>{recipient ? `Recipient verified on ${route.destinationName}` : recipientError || `Connect the wallet that owns an existing ${route.destinationName} v2 Safe.`}</p>
@@ -286,9 +321,10 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
       <button type="button" className="rounded border px-3 py-2 disabled:opacity-40" disabled={busy} onClick={() => {
         void fetchFeeQuote(route).then(setQuote).catch((error) => setLog(`Circle quote failed: ${String(error)}`));
       }}>Refresh Circle quote</button>
-      <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={busy} onClick={() => void connectEvm()}>Connect MetaMask ({route.sourceName} + Solana)</button>
+      <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={busy} onClick={() => void connectEvm()}>Connect MetaMask {route.sourceName} source</button>
       <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={!canBurn} onClick={() => void burnToSafe()}>Approve + burn to Safe</button>
     </div>
+    {evmError && <p role="alert" className="text-amber-200">MetaMask {route.sourceName} connection failed: {evmError}</p>}
     {pending && <p className="text-amber-200">Finish tracking the pending burn before starting another one to this Safe.</p>}
     <section className="space-y-2 rounded border p-3">
       <h2 className="font-semibold">Recover a burn</h2>

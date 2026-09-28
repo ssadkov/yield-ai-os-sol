@@ -36,6 +36,10 @@ export function SolanaProvider({ children }: { children: ReactNode }) {
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect onError={(error, adapter) => {
+        if (adapter?.name.toLowerCase() === "metamask" && error.name === "WalletAccountError") {
+          setWalletError("MetaMask returned no Solana account to this site. In MetaMask, disconnect this site under Connected sites, reload, then select MetaMask here before connecting the Base account. Check the displayed Solana owner before creating a Safe.");
+          return;
+        }
         const cause = (error as Error & { cause?: unknown }).cause;
         const detail = cause instanceof Error && cause.message !== error.message ? `: ${cause.message}` : "";
         setWalletError(`${adapter?.name ?? "wallet"} ${error.name}: ${error.message}${detail}`);

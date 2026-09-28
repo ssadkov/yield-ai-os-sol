@@ -101,10 +101,15 @@ export type BridgeTransfer = {
   receivedRaw?: string;
 };
 
-export async function validateRecipient(connection: Connection, owner: PublicKey, route: CctpRoute = CCTP_TESTNET): Promise<Recipient> {
-  if (await connection.getGenesisHash() !== route.genesis) throw new Error(`Solana RPC is not ${route.destinationName}`);
+export function deriveSafeRecipient(owner: PublicKey, route: CctpRoute = CCTP_TESTNET) {
   const [safe] = PublicKey.findProgramAddressSync([Buffer.from("vault"), owner.toBuffer()], route.program);
   const ata = getAssociatedTokenAddressSync(route.destinationUsdc, safe, true);
+  return { safe, ata };
+}
+
+export async function validateRecipient(connection: Connection, owner: PublicKey, route: CctpRoute = CCTP_TESTNET): Promise<Recipient> {
+  if (await connection.getGenesisHash() !== route.genesis) throw new Error(`Solana RPC is not ${route.destinationName}`);
+  const { safe, ata } = deriveSafeRecipient(owner, route);
   const [safeInfo, ataInfo] = await connection.getMultipleAccountsInfo([safe, ata], "confirmed");
   if (!safeInfo || !safeInfo.owner.equals(route.program) ||
     !safeInfo.data.subarray(0, 8).equals(VAULT_DISCRIMINATOR) ||

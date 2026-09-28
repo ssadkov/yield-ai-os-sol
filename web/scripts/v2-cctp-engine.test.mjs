@@ -6,7 +6,7 @@ import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData } from "viem";
 import {
   CCTP_MAINNET, CCTP_TESTNET, FORWARD_HOOK, ZERO_BYTES32, CCTP_JOURNAL_KEY,
-  decodeSourceBurn, decodeSourceBurnReceipt, maxFeeRaw, messengerAbi, mintedToAta, mintRecipientBytes32,
+  decodeSourceBurn, decodeSourceBurnReceipt, deriveSafeRecipient, maxFeeRaw, messengerAbi, mintedToAta, mintRecipientBytes32,
   readJournal, saveJournal, validateRecipient,
 } from "../src/lib/v2CctpEngine.ts";
 
@@ -69,8 +69,11 @@ test("mainnet derives the existing owner's Safe ATA and refuses a Devnet RPC", a
   const mainOwner = new PublicKey("EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2");
   const [mainSafe] = PublicKey.findProgramAddressSync([Buffer.from("vault"), mainOwner.toBuffer()], CCTP_MAINNET.program);
   const mainAta = getAssociatedTokenAddressSync(CCTP_MAINNET.destinationUsdc, mainSafe, true);
+  const derived = deriveSafeRecipient(mainOwner, CCTP_MAINNET);
   assert.equal(mainSafe.toBase58(), "FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ");
   assert.equal(mainAta.toBase58(), "B9LQ5JfXnXAt5QVXqC7zR2WqZJab38XLt71qHyWQQ9r6");
+  assert.equal(derived.safe.toBase58(), mainSafe.toBase58());
+  assert.equal(derived.ata.toBase58(), mainAta.toBase58());
   const data = Buffer.alloc(50);
   Buffer.from([211, 8, 232, 43, 2, 152, 117, 119]).copy(data);
   mainOwner.toBuffer().copy(data, 9);

@@ -7,7 +7,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { createWalletClient, custom, formatUnits, parseUnits, type EIP1193Provider, type Hex } from "viem";
 import {
   CCTP_MAINNET, CCTP_TESTNET, FORWARD_HOOK, ZERO_BYTES32, erc20Abi, messengerAbi, sourceClientFor,
-  fetchFeeQuote, inspectSourceBurn, isTxHash, maxFeeRaw, mintRecipientBytes32,
+  deriveSafeRecipient, fetchFeeQuote, inspectSourceBurn, isTxHash, maxFeeRaw, mintRecipientBytes32,
   readJournal, refreshTransfer, saveJournal, validateRecipient,
   type BridgeTransfer, type CctpRoute, type FeeQuote, type Recipient,
 } from "@/lib/v2CctpEngine";
@@ -42,7 +42,8 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   const connection = routeMode === "mainnet" ? appConnection : devnetConnection;
   const sourceClient = useMemo(() => sourceClientFor(route), [route]);
   const sendEnabled = routeMode !== "mainnet" || process.env.NEXT_PUBLIC_V2_CCTP_MAINNET_SEND_ENABLED === "1";
-  const { publicKey } = useWallet();
+  const { publicKey, wallet: solanaWallet, wallets, select } = useWallet();
+  const derived = useMemo(() => publicKey ? deriveSafeRecipient(publicKey, route) : null, [publicKey, route]);
   const ownerRef = useRef(publicKey?.toBase58());
   ownerRef.current = publicKey?.toBase58();
   const [recipient, setRecipient] = useState<Recipient | null>(null);
@@ -149,6 +150,15 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
       if (!address) throw new Error("No MetaMask EVM account selected");
       if (Number(await provider.request({ method: "eth_chainId" })) !== route.sourceChain.id) throw new Error(`MetaMask is not on ${route.sourceName}`);
       setEvm({ provider, address });
+      if (!publicKey) {
+        const metaMaskSolana = wallets.find((item) => item.adapter.name.toLowerCase() === "metamask");
+        if (metaMaskSolana) {
+          select(metaMaskSolana.adapter.name);
+          setLog("Base account connected. Approve the separate Solana connection in MetaMask to identify your Safe owner.");
+        } else {
+          setLog("Base account connected. Select MetaMask in the Solana Safe owner wallet picker above to identify your Safe owner.");
+        }
+      }
       setUsdc(await sourceClient.readContract({ address: route.sourceUsdc, abi: erc20Abi, functionName: "balanceOf", args: [address] }));
     } catch (error) { setLog(`EVM connect failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { setBusy(false); }
@@ -249,13 +259,15 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   return <main className="mx-auto max-w-2xl space-y-5 p-5 text-sm">
     <h1 className="text-2xl font-semibold">Yield AI v2 · CCTP to Safe ({route.destinationName})</h1>
     <p>{route.sourceName} {routeMode === "mainnet" ? "real" : "test"} USDC → {route.destinationName} Safe. Circle forwards the mint to the Safe&apos;s USDC account. Each EVM transaction requires your MetaMask confirmation.</p>
+    <p>Base and Solana need separate wallet permissions. Connecting the Base account will also request MetaMask&apos;s Solana address if no Solana owner is connected. MetaMask already generates that address for each account; this app reads it from the wallet.</p>
     {routeMode === "mainnet" && <p className="rounded border border-amber-500 p-3 text-amber-200">Real USDC. Recipient is the Safe USDC ATA derived from your connected Solana owner, not your MetaMask Solana wallet ATA. Review the source, Safe and fee before signing.</p>}
     {routeMode === "mainnet" && !sendEnabled && <p className="rounded border border-amber-500 p-3 text-amber-200">Mainnet sending is disabled for this Preview. Recipient verification, fee quote and recovery are read-only.</p>}
     <div className="space-y-2 rounded border p-3">
       <div>Solana Safe owner <WalletMultiButton /></div>
+      <div>Selected Solana wallet: {solanaWallet?.adapter.name ?? "none"}</div>
       <div className="break-all">Owner: {publicKey?.toBase58() ?? "connect a Solana wallet"}</div>
-      <div className="break-all">Safe: {recipient?.safe ?? "—"}</div>
-      <div className="break-all">USDC recipient ATA: {recipient?.ata ?? "—"}</div>
+      <div className="break-all">Safe: {recipient?.safe ?? derived?.safe.toBase58() ?? "—"}{!recipient && derived ? " (derived, not verified)" : ""}</div>
+      <div className="break-all">USDC recipient ATA: {recipient?.ata ?? derived?.ata.toBase58() ?? "—"}{!recipient && derived ? " (derived, not verified)" : ""}</div>
       <p className={recipient ? "text-green-300" : "text-amber-200"}>{recipient ? `Recipient verified on ${route.destinationName}` : recipientError || `Connect the wallet that owns an existing ${route.destinationName} v2 Safe.`}</p>
       {routeMode === "mainnet" && !recipient && <a className="underline" href="/v2/safe">Open Safe page to create or inspect your Mainnet Safe</a>}
     </div>
@@ -264,16 +276,17 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
     </label>
     <dl className="grid gap-2 break-all">
       <div><dt>Circle live fast quote</dt><dd>{quote ? `${quote.protocolBps} bps + ${formatUnits(quote.forwardRaw, 6)} USDC forwarding` : "loading"}</dd></div>
-      <div><dt>Maximum Circle fee</dt><dd>{ceiling !== null ? `${formatUnits(ceiling, 6)} USDC (ceiling, actual may be less)` : "—"}</dd></div>
-      <div><dt>Minimum received</dt><dd>{ceiling !== null && amountRaw > ceiling ? `${formatUnits(amountRaw - ceiling, 6)} USDC` : "amount must exceed fees"}</dd></div>
+      <div><dt>Maximum Circle fee</dt><dd>{ceiling !== null ? `${formatUnits(ceiling, 6)} USDC (includes a 20% forwarding buffer; actual may be less)` : "—"}</dd></div>
+      <div><dt>Minimum received</dt><dd>{ceiling !== null && amountRaw > ceiling ? `${formatUnits(amountRaw - ceiling, 6)} USDC${recipient ? "" : " · preliminary until Safe recipient is verified"}` : "amount must exceed fees"}</dd></div>
       <div><dt>{route.sourceName} source</dt><dd>{evm ? `${evm.address} · ${usdc === null ? "?" : formatUnits(usdc, 6)} USDC` : "connect MetaMask"}</dd></div>
       <div><dt>Safe USDC balance</dt><dd>{recipient ? `${formatUnits(recipient.balanceRaw, 6)} USDC at recipient check` : "—"}</dd></div>
     </dl>
+    {evm && usdc === BigInt(0) && <p className="text-amber-200">This Base account currently has 0 USDC. A bridge burn needs native Base USDC and ETH for gas.</p>}
     <div className="flex flex-wrap gap-3">
       <button type="button" className="rounded border px-3 py-2 disabled:opacity-40" disabled={busy} onClick={() => {
         void fetchFeeQuote(route).then(setQuote).catch((error) => setLog(`Circle quote failed: ${String(error)}`));
       }}>Refresh Circle quote</button>
-      <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={busy} onClick={() => void connectEvm()}>Connect MetaMask ({route.sourceName})</button>
+      <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={busy} onClick={() => void connectEvm()}>Connect MetaMask ({route.sourceName} + Solana)</button>
       <button type="button" className="rounded bg-white px-3 py-2 text-black disabled:opacity-40" disabled={!canBurn} onClick={() => void burnToSafe()}>Approve + burn to Safe</button>
     </div>
     {pending && <p className="text-amber-200">Finish tracking the pending burn before starting another one to this Safe.</p>}

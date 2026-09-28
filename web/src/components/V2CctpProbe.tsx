@@ -43,7 +43,7 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   const connection = routeMode === "mainnet" ? appConnection : devnetConnection;
   const sourceClient = useMemo(() => sourceClientFor(route), [route]);
   const sendEnabled = routeMode !== "mainnet" || process.env.NEXT_PUBLIC_V2_CCTP_MAINNET_SEND_ENABLED === "1";
-  const { publicKey, wallet: solanaWallet } = useWallet();
+  const { publicKey, wallet: solanaWallet, wallets } = useWallet();
   const [sdkOwner, setSdkOwner] = useState<PublicKey | null>(null);
   const sdkWalletRef = useRef<{ accounts: readonly { address: string }[] } | null>(null);
   const solanaOwner = publicKey ?? sdkOwner;
@@ -146,16 +146,22 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
     setSolanaConnecting(true);
     setSolanaConnectError("");
     try {
-      const { createSolanaClient } = await import("@metamask/connect-solana");
-      const client = await createSolanaClient({
-        dapp: { name: "Yield AI v2 CCTP", url: window.location.origin },
-        api: { supportedNetworks: { mainnet: connection.rpcEndpoint } },
-        skipAutoRegister: true,
-      });
-      const wallet = client.getWallet() as StandardWalletAdapter["wallet"];
+      // MetaMask Extension already registers a Wallet Standard wallet. Prefer
+      // that provider, which previously signed Mainnet transactions in this app.
+      const registered = wallets.find(({ adapter }) => adapter.name.toLowerCase() === "metamask" && "wallet" in adapter);
+      let wallet = registered ? (registered.adapter as StandardWalletAdapter).wallet : null;
+      if (!wallet) {
+        const { createSolanaClient } = await import("@metamask/connect-solana");
+        const client = await createSolanaClient({
+          dapp: { name: "Yield AI v2 CCTP", url: window.location.origin },
+          api: { supportedNetworks: { mainnet: connection.rpcEndpoint } },
+          skipAutoRegister: true,
+        });
+        wallet = client.getWallet() as StandardWalletAdapter["wallet"];
+      }
       const { accounts } = await wallet.features["standard:connect"].connect();
       const account = accounts[0];
-      if (!account) throw new Error("MetaMask returned no Solana account");
+      if (!account) throw new Error("MetaMask returned no Solana account to this site. This does not prove the address is absent in MetaMask. Check this site's Solana permission, then retry or connect the wallet that owns your Safe.");
       const owner = new PublicKey(account.address);
       sdkWalletRef.current = wallet;
       setSdkOwner(owner);
@@ -292,7 +298,7 @@ export function V2CctpProbe({ routeMode = "testnet" }: { routeMode?: CctpRoute["
   return <main className="mx-auto max-w-2xl space-y-5 p-5 text-sm">
     <h1 className="text-2xl font-semibold">Yield AI v2 · CCTP to Safe ({route.destinationName})</h1>
     <p>{route.sourceName} {routeMode === "mainnet" ? "real" : "test"} USDC → {route.destinationName} Safe. Circle forwards the mint to the Safe&apos;s USDC account. Each EVM transaction requires your MetaMask confirmation.</p>
-    <p>Base and Solana need separate wallet permissions. Connect the Solana Safe owner first, then connect the Base USDC source. MetaMask already has a Solana address for each account; this app reads it from the wallet.</p>
+    <p>Base and Solana need separate wallet permissions. Connect the Solana Safe owner first, then connect the Base USDC source. This app reads a Solana address returned by the wallet; it cannot derive one from an EVM 0x address.</p>
     {routeMode === "mainnet" && <p className="rounded border border-amber-500 p-3 text-amber-200">Real USDC. Recipient is the Safe USDC ATA derived from your connected Solana owner, not your MetaMask Solana wallet ATA. Review the source, Safe and fee before signing.</p>}
     {routeMode === "mainnet" && !sendEnabled && <p className="rounded border border-amber-500 p-3 text-amber-200">Mainnet sending is disabled for this Preview. Recipient verification, fee quote and recovery are read-only.</p>}
     <div className="space-y-2 rounded border p-3">

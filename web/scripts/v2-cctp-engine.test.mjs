@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { encodeAbiParameters, encodeEventTopics, encodeFunctionData } from "viem";
 import {
-  CCTP_TESTNET, FORWARD_HOOK, ZERO_BYTES32, CCTP_JOURNAL_KEY,
+  CCTP_MAINNET, CCTP_TESTNET, FORWARD_HOOK, ZERO_BYTES32, CCTP_JOURNAL_KEY,
   decodeSourceBurn, decodeSourceBurnReceipt, maxFeeRaw, messengerAbi, mintedToAta, mintRecipientBytes32,
-  readJournal, saveJournal,
+  readJournal, saveJournal, validateRecipient,
 } from "../src/lib/v2CctpEngine.ts";
 
 const owner = new PublicKey("2twCpxj6cqztdXwgV7EabmtDnC7W7xGr12hNrEuxpcdj");
@@ -63,6 +63,60 @@ test("smart-account wrapper is tracked by the authentic Circle burn event", () =
     /exactly one Circle burn/);
   assert.throws(() => decodeSourceBurnReceipt({ status: "success", logs: [log, log] }, hash, recipient),
     /exactly one Circle burn/);
+});
+
+test("mainnet derives the existing owner's Safe ATA and refuses a Devnet RPC", async () => {
+  const mainOwner = new PublicKey("EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2");
+  const [mainSafe] = PublicKey.findProgramAddressSync([Buffer.from("vault"), mainOwner.toBuffer()], CCTP_MAINNET.program);
+  const mainAta = getAssociatedTokenAddressSync(CCTP_MAINNET.destinationUsdc, mainSafe, true);
+  assert.equal(mainSafe.toBase58(), "FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ");
+  assert.equal(mainAta.toBase58(), "B9LQ5JfXnXAt5QVXqC7zR2WqZJab38XLt71qHyWQQ9r6");
+  const data = Buffer.alloc(50);
+  Buffer.from([211, 8, 232, 43, 2, 152, 117, 119]).copy(data);
+  mainOwner.toBuffer().copy(data, 9);
+  const rpc = {
+    getGenesisHash: async () => CCTP_MAINNET.genesis,
+    getMultipleAccountsInfo: async () => [
+      { owner: CCTP_MAINNET.program, data }, { owner: TOKEN_PROGRAM_ID },
+    ],
+    getParsedAccountInfo: async () => ({ value: { data: { parsed: { info: {
+      mint: CCTP_MAINNET.destinationUsdc.toBase58(), owner: mainSafe.toBase58(), tokenAmount: { amount: "1998997" },
+    } } } } }),
+  };
+  const recipient = await validateRecipient(rpc, mainOwner, CCTP_MAINNET);
+  assert.equal(recipient.ata, mainAta.toBase58());
+  assert.equal(recipient.balanceRaw, BigInt(1_998_997));
+  await assert.rejects(validateRecipient({ ...rpc, getGenesisHash: async () => CCTP_TESTNET.genesis },
+    mainOwner, CCTP_MAINNET), /not Solana Mainnet/);
+  await assert.rejects(validateRecipient({ ...rpc, getMultipleAccountsInfo: async () => [
+    { owner: CCTP_TESTNET.program, data }, { owner: TOKEN_PROGRAM_ID },
+  ] }, mainOwner, CCTP_MAINNET), /does not own/);
+});
+
+test("mainnet burn event and journal cannot be interpreted as Devnet", () => {
+  const depositor = "0x2222222222222222222222222222222222222222";
+  const mainOwner = new PublicKey("EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2");
+  const [mainSafe] = PublicKey.findProgramAddressSync([Buffer.from("vault"), mainOwner.toBuffer()], CCTP_MAINNET.program);
+  const mainAta = getAssociatedTokenAddressSync(CCTP_MAINNET.destinationUsdc, mainSafe, true);
+  const mainRecipient = { owner: mainOwner.toBase58(), safe: mainSafe.toBase58(), ata: mainAta.toBase58(), balanceRaw: BigInt(0) };
+  const log = { address: CCTP_MAINNET.tokenMessenger,
+    topics: encodeEventTopics({ abi: messengerAbi, eventName: "DepositForBurn",
+      args: { burnToken: CCTP_MAINNET.sourceUsdc, depositor, minFinalityThreshold: CCTP_MAINNET.finalityThreshold } }),
+    data: encodeAbiParameters([
+      { type: "uint256" }, { type: "bytes32" }, { type: "uint32" }, { type: "bytes32" },
+      { type: "bytes32" }, { type: "uint256" }, { type: "bytes" },
+    ], [BigInt(2_000_000), mintRecipientBytes32(mainRecipient.ata), CCTP_MAINNET.destinationDomain,
+      ZERO_BYTES32, ZERO_BYTES32, BigInt(170_000), FORWARD_HOOK]),
+  };
+  const transfer = decodeSourceBurnReceipt({ status: "success", logs: [log] }, hash, mainRecipient, CCTP_MAINNET);
+  assert.equal(transfer.ata, mainRecipient.ata);
+  assert.throws(() => decodeSourceBurnReceipt({ status: "success", logs: [log] }, hash, mainRecipient,
+    CCTP_TESTNET), /exactly one Circle burn/);
+  const map = new Map();
+  const storage = { getItem: (key) => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) };
+  saveJournal(storage, transfer, CCTP_MAINNET);
+  assert.equal(readJournal(storage, CCTP_MAINNET).length, 1);
+  assert.equal(readJournal(storage, CCTP_TESTNET).length, 0);
 });
 
 test("journal deduplicates by source tx and rejects malformed records", () => {

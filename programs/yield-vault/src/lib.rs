@@ -9,7 +9,17 @@ use anchor_spl::token_interface::{
     TokenInterface, TransferChecked,
 };
 
+mod evm_owner;
+
+#[cfg(feature = "devnet")]
+declare_id!("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
+#[cfg(not(feature = "devnet"))]
 declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
+
+#[cfg(feature = "devnet")]
+const EVM_USDC_MINT: Pubkey = pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+#[cfg(not(feature = "devnet"))]
+const EVM_USDC_MINT: Pubkey = pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;
@@ -316,6 +326,43 @@ pub mod yield_vault {
         vault.allocation_bps = [0; MAX_ROUTES];
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         vault.allowed_programs = Vec::new();
+        Ok(())
+    }
+
+    /// First EVM-owner slice: sponsored empty Safe creation and its canonical USDC ATA.
+    /// The owner can configure it only through an EIP-712 signature, never a Solana signer key.
+    pub fn create_evm_safe(ctx: Context<CreateEvmSafe>, eth_address: [u8; 20]) -> Result<()> {
+        require!(eth_address != [0; 20], evm_owner::EvmOwnerError::ZeroAddress);
+        let vault = &mut ctx.accounts.evm_vault;
+        vault.bump = ctx.bumps.evm_vault;
+        vault.eth_address = eth_address;
+        vault.rent_payer = ctx.accounts.payer.key();
+        vault.nonce = 0;
+        vault.agent = Pubkey::default();
+        vault.allocation_bps = [0; MAX_ROUTES];
+        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+        vault.allowed_programs = Vec::new();
+        vault.route_principal = [0; MAX_ROUTES];
+        Ok(())
+    }
+
+    /// Devnet authorization probe. This changes only the EVM Safe's target allocation;
+    /// no tokens, shares, or SOL move. The transaction fee payer cannot alter signed values.
+    pub fn evm_set_allocation(
+        ctx: Context<EvmSetAllocation>,
+        allocation_bps: [u16; MAX_ROUTES],
+        nonce: u64,
+        deadline: u64,
+        signature: [u8; 65],
+    ) -> Result<()> {
+        validate_allocation(&allocation_bps)?;
+        let vault = &mut ctx.accounts.evm_vault;
+        evm_owner::verify_set_allocation(
+            &vault.eth_address, &vault.key(), vault.nonce, &allocation_bps,
+            nonce, deadline, &signature, Clock::get()?.unix_timestamp,
+        )?;
+        vault.allocation_bps = allocation_bps;
+        vault.nonce = nonce;
         Ok(())
     }
 
@@ -809,6 +856,23 @@ pub struct Vault {
     pub route_principal: [u64; MAX_ROUTES],
 }
 
+/// Separate namespace and discriminator keep every existing Solana-owned Vault byte-for-byte intact.
+/// Funds cannot be moved through legacy owner instructions: they require ["vault", Solana owner].
+#[account]
+#[derive(InitSpace)]
+pub struct EvmVault {
+    pub bump: u8,
+    pub eth_address: [u8; 20],
+    pub rent_payer: Pubkey,
+    pub nonce: u64,
+    pub agent: Pubkey,
+    pub allocation_bps: [u16; MAX_ROUTES],
+    pub last_rebalance_ts: i64,
+    #[max_len(16)]
+    pub allowed_programs: Vec<Pubkey>,
+    pub route_principal: [u64; MAX_ROUTES],
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -919,6 +983,41 @@ pub struct CreateSafeFor<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(eth_address: [u8; 20])]
+pub struct CreateEvmSafe<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + EvmVault::INIT_SPACE,
+        seeds = [b"vault_evm", eth_address.as_ref()],
+        bump,
+    )]
+    pub evm_vault: Account<'info, EvmVault>,
+    #[account(address = EVM_USDC_MINT)]
+    pub usdc_mint: Account<'info, Mint>,
+    #[account(
+        init_if_needed,
+        payer = payer,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = evm_vault,
+    )]
+    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct EvmSetAllocation<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [b"vault_evm", evm_vault.eth_address.as_ref()], bump = evm_vault.bump)]
+    pub evm_vault: Account<'info, EvmVault>,
 }
 
 #[derive(Accounts)]

@@ -1,0 +1,32 @@
+# Yield AI v2: integration handoff for web and mobile
+
+Status: 2026-09-28. This document distinguishes the deployed Solana-owner Safe from the experimental EVM-owner Safe. Do not route real or test USDC into the EVM-owner Safe until owner-authorized withdrawal is implemented and tested.
+
+## Connect now
+
+| Area | Contract for the UI | Source |
+| --- | --- | --- |
+| Networks | Explicit environment selection: Base Sepolia + Solana Devnet for tests; Base Mainnet + Solana Mainnet for production. Reject a wallet/RPC network mismatch before a signature. | `web/src/lib/v2CctpEngine.ts` (`CCTP_TESTNET`, `CCTP_MAINNET`) |
+| Existing Solana-owner Safe | Owner is a **Solana public key**. Safe PDA seeds are `['vault', owner.toBytes()]`; USDC recipient is the associated token account of that PDA. Never use a raw wallet address as CCTP `mintRecipient`. | `web/src/lib/safeV2.ts` (`readSafe`), `web/src/lib/v2CctpEngine.ts` (`deriveSafeRecipient`, `validateRecipient`) |
+| Safe state | Render existence, agent, allocation in basis points, route principal in raw USDC units, SOL/rent, and token balances. One USDC = 1,000,000 raw units. `ROUTES[0]` is Kamino USDC and `ROUTES[1]` is ONyc. | `web/src/lib/safeV2.ts` (`SafeState`, `ROUTES`) |
+| Executor policy | Show whether enabled and the three independent USDC limits: per action, rolling 24-hour volume, and principal. These are settings of the **Solana-owner** Safe. | `web/src/lib/safeV2.ts` (`readExecutorLimits`, `ExecutorLimitsState`) |
+| Bridge progress | Persist source transaction hash, recipient Safe and ATA, source amount, fee ceiling, Circle/message identifiers, destination mint and final received amount. Use `BridgeStage` for pending/failed/settled UI; support recovery by source hash after reload. | `web/src/lib/v2CctpEngine.ts` (`BridgeTransfer`, `readJournal`, `refreshTransfer`) |
+| Fee review | Request a fresh Circle quote before each burn. Display amount, `maxFee`, minimum received, Base gas estimate, exact recipient ATA and source/destination networks. Quotes and gas are dynamic. | `web/src/lib/v2CctpEngine.ts` (`fetchFeeQuote`, `maxFeeRaw`) |
+
+Program IDs and USDC mints are environment config, not user-derived addresses: Devnet `8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5` with test USDC `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`; Mainnet `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` with native USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`. Confirm deployed binary/config and RPC genesis at runtime. The testnet bridge route previously completed a Base Sepolia burn and Solana Devnet Safe ATA mint; that test does not validate the new EVM-owner Safe.
+
+## EVM-owner Safe: devnet prototype only
+
+The planned owner identity is the EVM 20-byte address returned by the connected EIP-1193 wallet. Never derive a Solana owner from an EVM address and never require a MetaMask Solana account for this route. The proposed Safe PDA uses `['vault_evm', evmAddress20]` under the Devnet program. A relayer pays Solana rent and fees; the EVM wallet signs a typed intent. The first intent changes allocation only. It has no custody or withdrawal path yet. See `docs/yield-ai-v2-evm-owner.md` for the exact signature payload and current test gate.
+
+The frontend can build the EVM account selector, read-only Safe preview, typed-signature request abstraction, relayer status screen, and test fixtures now. Keep the EVM Safe creation/burn button feature-gated until the program is on Devnet, the signature probe passes, owner-authorized withdrawal exists, and the recipient ATA is validated immediately before a burn. Rabby, MetaMask imported accounts, and hardware wallets should all enter through EIP-1193 `eth_requestAccounts` and `eth_signTypedData_v4` capability checks, with explicit unsupported-wallet errors.
+
+## Acceptance fixtures
+
+- Existing Mainnet program: `https://solscan.io/account/yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`.
+- Existing Solana-owner Safe withdrawal: Kamino step `5wXWkCcmZBAzj7QDuvhPytrSqAZK44uqmmpxstBcPikRo7yo9TvmvKEaoCrZWSqCv6qmPv9HDAetguhzQkn9DVZM`, then USDC step `2atdNN4G9FauvvuTqhQbhF4LkmV7Hq5ioA6K9YeAY1L79ZRRfBitjerrWcmo2YJwdXt1VfufsbEdLhur97bZG5sC`.
+- Testnet CCTP source `0x76dc3e6f7fdd21e28a051b466a0b6211ab9858cda7e6b5ec3468426fd9186cb7`; destination mint `zCaBdro25KDzN2n388zmwabGqN9LXyAEwSJDWZz8m2uxoHZoMjks95qjcrV2HmMafkhTWaYrkQbt2H8pjsfdqJg` (1.825754 test USDC received from a 2 USDC burn, per the bridge journal).
+
+## Do not assume stable yet
+
+The EVM-owner instruction set, relayer API, sponsor/rent accounting, exact fee policy, and ability to use the EVM Safe with Kamino/ONyc are still pending. The existing Solana-owner `Vault` IDL and `readSafe` parser do not decode `EvmVault`. Mainnet CCTP sending to an EVM Safe stays disabled.

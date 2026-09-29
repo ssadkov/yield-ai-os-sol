@@ -29,16 +29,25 @@ function signerFromExistingFile(): Keypair {
 
 async function main() {
   const devnet = process.argv.includes("--send-devnet");
-  if (!devnet && !process.argv.includes("--local")) throw new Error("Use --local or --send-devnet");
+  const preflightDevnet = process.argv.includes("--preflight-devnet");
+  if (!devnet && !preflightDevnet && !process.argv.includes("--local")) {
+    throw new Error("Use --local, --preflight-devnet or --send-devnet");
+  }
   if (devnet && process.env.V2_EVM_DEVNET_ACK !== "APPROVED_EMPTY_SAFE_AND_ALLOCATION") {
     throw new Error("Devnet sends require the reviewed transaction-specific acknowledgement");
   }
-  const connection = new Connection(devnet ? "https://api.devnet.solana.com" : "http://127.0.0.1:8899", "confirmed");
+  const networkDevnet = devnet || preflightDevnet;
+  const connection = new Connection(networkDevnet
+    ? (process.env.V2_DEVNET_RPC_URL ?? "https://api.devnet.solana.com")
+    : "http://127.0.0.1:8899", "confirmed");
   const genesis = await connection.getGenesisHash();
-  assert.equal(genesis, devnet ? "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG" : genesis);
+  assert.equal(genesis, networkDevnet ? "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG" : genesis);
   const payer = devnet ? signerFromExistingFile() : Keypair.generate();
   if (devnet) assert.equal(payer.publicKey.toBase58(), "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A");
-  if (!devnet) {
+  const payerPublicKey = preflightDevnet
+    ? new PublicKey("8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A")
+    : payer.publicKey;
+  if (!networkDevnet) {
     const air = await connection.requestAirdrop(payer.publicKey, 1_000_000_000);
     await connection.confirmTransaction(air, "confirmed");
   }
@@ -47,10 +56,29 @@ async function main() {
   assert(program.programId.equals(programId), "Devnet IDL program ID mismatch");
 
   const create = program.methods.createEvmSafe([...owner]).accountsStrict({
-    payer: payer.publicKey, evmVault: safe, usdcMint: mint, vaultUsdcAta: ata,
+    payer: payerPublicKey, evmVault: safe, usdcMint: mint, vaultUsdcAta: ata,
     tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     systemProgram: SystemProgram.programId,
   });
+  if (preflightDevnet) {
+    assert.equal(await connection.getAccountInfo(safe), null, "EVM Safe already exists");
+    const createIx = await create.instruction();
+    const setIx = await program.methods.evmSetAllocation(allocation, new BN(1), deadline, [...signature])
+      .accountsStrict({ payer: payerPublicKey, evmVault: safe }).instruction();
+    const tx = new Transaction().add(createIx, setIx);
+    tx.feePayer = payerPublicKey;
+    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+    const fee = await connection.getFeeForMessage(tx.compileMessage());
+    const rent = await connection.getMinimumBalanceForRentExemption(705) +
+      await connection.getMinimumBalanceForRentExemption(165);
+    const sim = await connection.simulateTransaction(tx);
+    console.log(JSON.stringify({ cluster: "devnet", safe: safe.toBase58(), ata: ata.toBase58(),
+      evmOwner: `0x${owner.toString("hex")}`, payer: payerPublicKey.toBase58(),
+      rentLamports: rent, feeLamports: fee.value, computeUnits: sim.value.unitsConsumed,
+      simulationError: sim.value.err }));
+    assert.equal(sim.value.err, null, `combined Devnet simulation: ${JSON.stringify(sim.value.err)} ${sim.value.logs?.join("\n")}`);
+    return;
+  }
   let createSig: string | null = null;
   const before = await connection.getAccountInfo(safe, "confirmed");
   if (!before) {
@@ -59,7 +87,7 @@ async function main() {
     assert(rent <= 10_000_000, `unexpected account rent: ${rent} lamports`);
     const createIx = await create.instruction();
     const createTx = new Transaction().add(createIx);
-    createTx.feePayer = payer.publicKey;
+    createTx.feePayer = payerPublicKey;
     createTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
     const fee = await connection.getFeeForMessage(createTx.compileMessage());
     assert(fee.value !== null && fee.value <= 100_000, `unexpected creation fee: ${fee.value}`);
@@ -76,7 +104,7 @@ async function main() {
 
   const accounts = program.account as unknown as { evmVault: { fetch(address: PublicKey): Promise<unknown> } };
   const set = () => program.methods.evmSetAllocation(allocation, new BN(1), deadline, [...signature]).accountsStrict({
-    payer: payer.publicKey, evmVault: safe,
+    payer: payerPublicKey, evmVault: safe,
   });
   const initial = await accounts.evmVault.fetch(safe) as { nonce: BN; allocationBps: number[]; ethAddress: number[] };
   assert.equal(Buffer.from(initial.ethAddress).toString("hex"), owner.toString("hex"));

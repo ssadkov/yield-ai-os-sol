@@ -1,6 +1,6 @@
 # Yield AI v2: integration handoff for web and mobile
 
-Status: 2026-09-28. This document distinguishes the deployed Solana-owner Safe from the experimental EVM-owner Safe. Do not route real or test USDC into the EVM-owner Safe until owner-authorized withdrawal is implemented and tested.
+Status: 2026-09-30. This document distinguishes the deployed Solana-owner Safe from the experimental EVM-owner Safe. Do not route real or test USDC into the EVM-owner Safe until owner-authorized withdrawal is implemented and tested.
 
 ## Connect now
 
@@ -19,7 +19,9 @@ Program IDs and USDC mints are environment config, not user-derived addresses: D
 
 The planned owner identity is the EVM 20-byte address returned by the connected EIP-1193 wallet. Never derive a Solana owner from an EVM address and never require a MetaMask Solana account for this route. The proposed Safe PDA uses `['vault_evm', evmAddress20]` under the Devnet program. A relayer pays Solana rent and fees; the EVM wallet signs a typed intent. The first intent changes allocation only. It has no custody or withdrawal path yet. See `docs/yield-ai-v2-evm-owner.md` for the exact signature payload and current test gate.
 
-The frontend can build the EVM account selector, read-only Safe preview, typed-signature request abstraction, relayer status screen, and test fixtures now. The Devnet program upgrade and live EVM-owner EIP-712 allocation probe passed; see `docs/yield-ai-v2-evm-owner.md` for finalized transaction and state evidence. The current `/v2/safe` page still supports only the Solana-owner Safe. Gate the EVM Safe creation UI on a tested sponsor/relayer path, and keep any USDC funding or burn disabled until owner-authorized withdrawal exists and the recipient ATA is validated immediately before a burn. Rabby, MetaMask imported accounts, and hardware wallets should all enter through EIP-1193 `eth_requestAccounts` and `eth_signTypedData_v4` capability checks, with explicit unsupported-wallet errors.
+The first EVM-owner lab is at `/v2/evm-devnet`. It discovers EIP-6963 wallets, connects an EVM account, derives the Safe and test-USDC ATA, reads Devnet state, and signs a route-0 allocation target using EIP-712. `/api/v2/evm-devnet` GET reads and checks the account; POST checks the signature and returns a canonical intent. Neither endpoint sends a transaction. The operator relay CLI simulates and, only after separate approval, sends the Devnet transaction. There is no automatic relay service or production EVM Safe creation flow yet. The Devnet program upgrade and live fixture EIP-712 allocation probe passed; see `docs/yield-ai-v2-evm-owner.md` for finalized transaction and state evidence. The current `/v2/safe` page still supports only the Solana-owner Safe. Keep any USDC funding or burn disabled until owner-authorized withdrawal exists and the recipient ATA is validated immediately before a burn. Rabby, MetaMask imported accounts, and hardware wallets should all enter through EIP-1193 account selection and typed-signature capability checks, with explicit unsupported-wallet errors.
+
+For mobile, the stable part is the account model and typed intent: take the actual 20-byte EVM address from the connected account, derive `['vault_evm', address20]` with the **Devnet** program for this lab, show the derived Safe and ATA, and sign the exact `SetAllocation` EIP-712 payload in `web/src/lib/v2EvmDevnet.ts`. Treat nonce/deadline as fresh values and verify the chain state again before relay. Do not derive an EVM-owned Safe from a MetaMask Solana address or use the Solana-owner Safe IDL/parser for this account. The relay transport and custody operations are still experimental and should not be embedded as fixed mobile assumptions.
 
 ## Acceptance fixtures
 
@@ -29,4 +31,4 @@ The frontend can build the EVM account selector, read-only Safe preview, typed-s
 
 ## Do not assume stable yet
 
-The EVM-owner instruction set, relayer API, sponsor/rent accounting, exact fee policy, and ability to use the EVM Safe with Kamino/ONyc are still pending. The existing Solana-owner `Vault` IDL and `readSafe` parser do not decode `EvmVault`. Mainnet CCTP sending to an EVM Safe stays disabled.
+Owner-authorized custody instructions, automatic relayer API, sponsor/rent accounting, exact fee policy, and ability to use the EVM Safe with Kamino/ONyc are still pending. The existing Solana-owner `Vault` IDL and `readSafe` parser do not decode `EvmVault`. Mainnet CCTP sending to an EVM Safe stays disabled.

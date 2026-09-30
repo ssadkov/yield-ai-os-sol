@@ -1,6 +1,6 @@
 import { BN, BorshAccountsCoder, BorshInstructionCoder, type Idl } from "@coral-xyz/anchor";
 import { ACCOUNT_SIZE, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync, unpackAccount, unpackMint } from "@solana/spl-token";
-import { ComputeBudgetProgram, Connection, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction, type AccountInfo } from "@solana/web3.js";
+import { AddressLookupTableAccount, ComputeBudgetProgram, Connection, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction, type AccountInfo } from "@solana/web3.js";
 import { createHash } from "node:crypto";
 import idlJson from "../idl/yield_vault.json" with { type: "json" };
 
@@ -173,18 +173,21 @@ export async function creationPlan(connection: Connection, network: MobileNetwor
   return { ...plan, defaults: { executor: defaultExecutor.toBase58(), executorLimits: DEFAULT_LIMITS, allocationBps: Array(8).fill(0) } };
 }
 
-async function ownerPlan(connection: Connection, network: MobileNetwork, owner: PublicKey, state: Awaited<ReturnType<typeof inspectSafe>>["state"], rent: number, instructions: TransactionInstruction[], kind: string, title: string) {
+async function ownerPlan(connection: Connection, network: MobileNetwork, owner: PublicKey, state: Awaited<ReturnType<typeof inspectSafe>>["state"], rent: number, instructions: TransactionInstruction[], kind: string, title: string, lookupTables: AddressLookupTableAccount[] = [], computeLimit = COMPUTE_LIMIT) {
   const latest = await connection.getLatestBlockhash("confirmed");
-  const message = new TransactionMessage({ payerKey: owner, recentBlockhash: latest.blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_LIMIT }), ...instructions] }).compileToV0Message();
+  const message = new TransactionMessage({ payerKey: owner, recentBlockhash: latest.blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: computeLimit }), ...instructions] }).compileToV0Message(lookupTables);
+  if (message.header.numRequiredSignatures !== 1 || !message.staticAccountKeys[0].equals(owner)) fail("INVALID_TRANSACTION", "Plan must require only the owner's signature");
+  const tx = new VersionedTransaction(message);
+  let serialized: Buffer;
+  try { serialized = Buffer.from(tx.serialize()); } catch { return fail("TRANSACTION_TOO_LARGE", "Operation cannot fit into one transaction", 422); }
+  if (serialized.length > 1232) fail("TRANSACTION_TOO_LARGE", "Operation cannot fit into one transaction", 422);
   const fee = (await connection.getFeeForMessage(message, "confirmed")).value;
   if (fee === null) fail("BLOCKHASH_UNAVAILABLE", "Cannot estimate the fee; request a new plan");
   const required = rent + fee;
   const cost = { rentLamports: String(rent), networkFeeLamports: String(fee), totalLamports: String(required), walletSolLamports: state.walletSolLamports, feePayer: owner.toBase58(), priorityFeeLamports: "0" };
   if (BigInt(state.walletSolLamports) < BigInt(required)) throw new MobileApiError("INSUFFICIENT_SOL", "Owner needs SOL for account rent and the network fee", 422, { cost, network, safe: state.safe });
-  const tx = new VersionedTransaction(message);
   const simulation = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "confirmed", minContextSlot: state.slot });
   if (simulation.value.err) fail("SIMULATION_FAILED", "Safe operation was rejected by the configured cluster; refresh state and retry", 422);
-  const serialized = Buffer.from(tx.serialize());
   const planId = createHash("sha256").update(network.genesis).update(serialized).digest("hex");
   return {
     status: "ready" as const, planId, state, cost,
@@ -193,6 +196,122 @@ async function ownerPlan(connection: Connection, network: MobileNetwork, owner: 
     simulation: { slot: simulation.context.slot, unitsConsumed: simulation.value.unitsConsumed ?? null },
     steps: [{ id: kind, kind: kind === "create_safe" ? "setup" : kind, title, transaction: serialized.toString("base64"), transactionVersion: 0, requiredSigners: [owner.toBase58()] }],
     createdAt: Date.now(),
+  };
+}
+
+// Mainnet-only typed route already supported by the deployed Safe and its owner UI.
+export const MOBILE_KAMINO = {
+  vault: "91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy",
+  program: "KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd",
+  sharesMint: "B9t9wg8r39Lxm2D9Gmqn2rJ5pVQQwjtGBfSsHAXSEnVe",
+  minimumDepositUsdc: "1.000000",
+} as const;
+type KaminoMeta = { pubkey: PublicKey; isSigner: false; isWritable: boolean };
+/** Use only the typed deposit's account list; never forward KTX setup/farm/raw instructions. */
+export function checkedKaminoDeposit(payload: unknown, safe: PublicKey, owner: PublicKey, amount: bigint) {
+  const invalid = () => fail("INVALID_KAMINO_RESPONSE", "Kamino returned an unexpected deposit layout", 502);
+  if (!payload || typeof payload !== "object") return invalid();
+  const p = payload as { instructions?: { programAddress?: string; data?: string; accounts?: { address?: string; role?: string }[] }[]; lutsByAddress?: Record<string, unknown> };
+  if (!Array.isArray(p.instructions) || p.instructions.length > 64) return invalid();
+  const deposits = p.instructions.filter((ix) => ix?.programAddress === MOBILE_KAMINO.program);
+  if (deposits.length !== 1) return invalid();
+  const ix = deposits[0];
+  if (typeof ix.data !== "string") return invalid();
+  const data = Buffer.from(ix.data, "base64");
+  if (data.length !== 16 || data.toString("base64") !== ix.data || data.subarray(0, 8).toString("hex") !== "f223c68952e1f2b6" || data.readBigUInt64LE(8) !== amount) return invalid();
+  if (!Array.isArray(ix.accounts) || ix.accounts.length < 13 || ix.accounts.length > 64) return invalid();
+  const sharesAta = getAssociatedTokenAddressSync(new PublicKey(MOBILE_KAMINO.sharesMint), safe, true);
+  const usdcAta = getAssociatedTokenAddressSync(new PublicKey(MOBILE_NETWORKS.mainnet.usdcMint), safe, true);
+  const fixed: Record<number, string> = {
+    0: safe.toBase58(), 1: MOBILE_KAMINO.vault, 3: MOBILE_NETWORKS.mainnet.usdcMint,
+    5: MOBILE_KAMINO.sharesMint, 6: usdcAta.toBase58(), 7: sharesAta.toBase58(),
+    8: "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",
+    9: TOKEN_PROGRAM_ID.toBase58(), 10: TOKEN_PROGRAM_ID.toBase58(), 12: MOBILE_KAMINO.program,
+  };
+  const accounts: KaminoMeta[] = ix.accounts.map((a, index) => {
+    if (!a || typeof a.address !== "string" || !["WRITABLE_SIGNER", "READONLY_SIGNER", "WRITABLE", "READONLY"].includes(a.role ?? "")) return invalid();
+    let pubkey: PublicKey;
+    try { pubkey = new PublicKey(a.address); } catch { return invalid(); }
+    if (pubkey.toBase58() !== a.address || pubkey.equals(owner) || (index !== 0 && pubkey.equals(safe)) ||
+        (fixed[index] && a.address !== fixed[index]) || (index === 0 ? !a.role!.includes("SIGNER") : a.role!.includes("SIGNER"))) return invalid();
+    if ([0, 1, 5, 6, 7].includes(index) && !a.role!.includes("WRITABLE")) return invalid();
+    return { pubkey, isSigner: false, isWritable: a.role!.includes("WRITABLE") };
+  });
+  if (p.lutsByAddress !== undefined && (!p.lutsByAddress || Array.isArray(p.lutsByAddress) || typeof p.lutsByAddress !== "object")) return invalid();
+  const tables = Object.keys(p.lutsByAddress ?? {});
+  if (tables.length > 4) return invalid();
+  const lookupTables = tables.map((key) => {
+    try { const pk = new PublicKey(key); if (pk.toBase58() !== key) return invalid(); return pk; } catch { return invalid(); }
+  });
+  return { accounts, lookupTables, sharesAta };
+}
+
+/** One owner signature: Safe -> Kamino, or wallet -> Safe -> Kamino, with allocation restored atomically. */
+export async function kaminoDepositPlan(connection: Connection, network: MobileNetwork, owner: PublicKey, source: unknown, input: unknown, fetcher: typeof fetch = fetch) {
+  if (source !== "safe" && source !== "wallet") fail("INVALID_SOURCE", "source must be safe or wallet", 400);
+  const amount = usdcAmount(input);
+  if (network.cluster !== "mainnet") fail("PROTOCOL_UNAVAILABLE", "This Kamino route is supported only on Solana Mainnet", 409);
+  if (amount < BigInt(1_000_000)) fail("AMOUNT_BELOW_MINIMUM", "Use at least 1 USDC for the current Kamino vault", 422);
+  const inspected = await inspectSafe(connection, network, owner);
+  const { state, addresses: a, infos } = inspected;
+  if (!state.exists) fail("SAFE_NOT_CREATED", "Create the Safe and confirm it before investing", 409);
+  const available = source === "wallet" ? inspected.walletUsdc : inspected.balanceUsdc;
+  if (amount > available) throw new MobileApiError("INSUFFICIENT_USDC", "Selected source does not hold enough USDC", 422, { availableUsdc: usdc(available), source });
+  let response: Response;
+  try {
+    response = await fetcher("https://api.kamino.finance/ktx/kvault/deposit-instructions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store", signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({ wallet: a.safe.toBase58(), kvault: MOBILE_KAMINO.vault, amount: usdc(amount) }),
+    });
+  } catch { return fail("KAMINO_UNAVAILABLE", "Could not request Kamino deposit accounts; retry later", 502); }
+  if (!response.ok) fail("KAMINO_UNAVAILABLE", "Kamino could not build this deposit; retry later", 502);
+  let payload: unknown;
+  try { payload = await response.json(); } catch { return fail("INVALID_KAMINO_RESPONSE", "Kamino returned invalid JSON", 502); }
+  const checked = checkedKaminoDeposit(payload, a.safe, owner, amount);
+  const sharesMint = new PublicKey(MOBILE_KAMINO.sharesMint);
+  const snapshot = await connection.getMultipleAccountsInfoAndContext([new PublicKey(MOBILE_KAMINO.program), new PublicKey(MOBILE_KAMINO.vault), sharesMint, checked.sharesAta], { commitment: "confirmed", minContextSlot: state.slot });
+  const [programInfo, vaultInfo, sharesMintInfo, sharesInfo] = snapshot.value;
+  if (!programInfo?.executable || !programInfo.owner.equals(UPGRADEABLE_LOADER) || !vaultInfo?.owner.equals(new PublicKey(MOBILE_KAMINO.program)) || vaultInfo.executable) fail("PROTOCOL_UNAVAILABLE", "Kamino program or vault is unavailable", 503);
+  try { if (!unpackMint(sharesMint, sharesMintInfo).isInitialized) throw new Error(); } catch { fail("INVALID_ACCOUNT", "Kamino shares mint is invalid"); }
+  tokenBalance(checked.sharesAta, sharesInfo, a.safe, sharesMint, true);
+  const lookupTables = await Promise.all(checked.lookupTables.map(async (key) => {
+    const table = (await connection.getAddressLookupTable(key, { commitment: "confirmed", minContextSlot: state.slot })).value;
+    if (!table || !table.key.equals(key) || !table.isActive()) return fail("LOOKUP_TABLE_UNAVAILABLE", "Kamino lookup table is unavailable; retry later", 503);
+    return table;
+  }));
+  const original = state.allocationBps!;
+  const temporary = [10_000, 0, 0, 0, 0, 0, 0, 0];
+  const needsTemporary = original.some((bps, i) => bps !== temporary[i]);
+  const allocation = (bps: number[]) => new TransactionInstruction({ programId: a.program, data: instructionCoder.encode("set_allocation", { allocation_bps: bps }), keys: [
+    { pubkey: owner, isSigner: true, isWritable: false }, { pubkey: a.safe, isSigner: false, isWritable: true },
+  ] });
+  const instructions: TransactionInstruction[] = [];
+  let rent = 0;
+  const ataRent = await connection.getMinimumBalanceForRentExemption(ACCOUNT_SIZE);
+  if (!state.usdcAccountExists) {
+    rent += Math.max(0, ataRent - (infos.ataInfo?.lamports ?? 0));
+    instructions.push(createAssociatedTokenAccountIdempotentInstruction(owner, a.ata, a.safe, a.mint));
+  }
+  if (needsTemporary) instructions.push(allocation(temporary));
+  if (source === "wallet") instructions.push(new TransactionInstruction({ programId: a.program, data: instructionCoder.encode("deposit", { amount: new BN(amount.toString()) }), keys: [
+    { pubkey: owner, isSigner: true, isWritable: true }, { pubkey: a.safe, isSigner: false, isWritable: true },
+    { pubkey: a.mint, isSigner: false, isWritable: false }, { pubkey: a.ownerAta, isSigner: false, isWritable: true },
+    { pubkey: a.ata, isSigner: false, isWritable: true }, { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ] }));
+  if (uninitialized(sharesInfo)) {
+    rent += Math.max(0, ataRent - (sharesInfo?.lamports ?? 0));
+    instructions.push(createAssociatedTokenAccountIdempotentInstruction(owner, checked.sharesAta, a.safe, sharesMint));
+  }
+  instructions.push(new TransactionInstruction({ programId: a.program, data: instructionCoder.encode("kamino_deposit", { amount: new BN(amount.toString()) }), keys: [
+    { pubkey: owner, isSigner: true, isWritable: false }, { pubkey: a.safe, isSigner: false, isWritable: true },
+    { pubkey: a.registry, isSigner: false, isWritable: false },
+    { pubkey: new PublicKey(MOBILE_KAMINO.program), isSigner: false, isWritable: false }, ...checked.accounts,
+  ] }));
+  if (needsTemporary) instructions.push(allocation(original));
+  const plan = await ownerPlan(connection, network, owner, { ...state, slot: Math.max(state.slot, snapshot.context.slot) }, rent, instructions, "kamino_deposit", "Invest USDC in Kamino", lookupTables, 400_000);
+  return { ...plan, scope: "kamino_usdc", source, amount: usdc(amount), amountRaw: amount.toString(), amountMeaning: "maximum_kamino_input",
+    sourceAccount: (source === "wallet" ? a.ownerAta : a.ata).toBase58(), destinationSharesAta: checked.sharesAta.toBase58(),
+    route: MOBILE_KAMINO, allocationBpsAfter: original, atomic: true,
   };
 }
 

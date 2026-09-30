@@ -1,10 +1,10 @@
-# Yield AI v2: Solana wallet Safe API v1 — idle USDC cycle
+# Yield AI v2: Solana wallet Safe API v1 — USDC cycle and Kamino deposits
 
-Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, and withdraw idle USDC back to the owner. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Protocol investments, allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
+Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, withdraw idle USDC back to the owner, and owner-deposit into the current Mainnet Kamino USDC vault from either Safe or wallet. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Kamino withdrawal plans, standalone allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
 ## Deployment and trust boundary
 
-Base branch: `codex/yield-ai-v2-cctp-mainnet`. `main` does not yet contain the complete tested executor policy. Keep this API and EVM work in separate branches/worktrees.
+Kamino API branch: `codex/yield-ai-v2-kamino-api`, based on the Solana API from `codex/yield-ai-v2-cctp-mainnet`. PR target after merging #22: `codex/yield-ai-v2-cctp-engine`. `main` does not yet contain the complete tested executor policy. Keep this API and EVM work in separate branches/worktrees.
 
 The server chooses one cluster with `V2_MOBILE_CLUSTER=devnet|mainnet` (default `devnet`). The caller must explicitly repeat that cluster. Private RPC variables: `V2_DEVNET_RPC_URL` for Devnet; `V2_MAINNET_RPC_URL` for Mainnet, with existing server-only Supanode header support. No program, mint, executor, signing key or arbitrary instruction is accepted from the caller. Do not put RPC credentials or server credentials in the mobile bundle.
 
@@ -13,7 +13,7 @@ The server chooses one cluster with `V2_MOBILE_CLUSTER=devnet|mainnet` (default 
 | Devnet | `8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5` | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
 | Mainnet | `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
 
-Read and unsigned-plan endpoints are public. Only an actual owner signature on the Solana transaction changes chain state. Rate limits belong at the deployment ingress before opening this API broadly. Native mobile HTTP calls do not require browser CORS. Separate web origins will need an explicit CORS policy.
+Read and unsigned-plan endpoints are public. Only an actual owner signature on the Solana transaction changes chain state. Rate limits belong at the deployment ingress before opening this API broadly. Native mobile HTTP calls (native React Native/Flutter/Swift/Kotlin networking) do not require browser CORS. If HTTP calls instead run inside a WebView/browser, its actual Origin must be explicitly allowed along with `GET`, `POST`, `OPTIONS` and `Content-Type`; this branch adds no CORS middleware because no web origin has been specified. CORS is not wallet authorization. Vercel Preview access protection is separate and may block a native client too: do not bundle an operator/Vercel token in the app. Use an approved externally accessible test deployment for partner testing. [CORS reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS).
 
 ## API contract
 
@@ -21,7 +21,7 @@ Base URL: the deployment origin, followed by `/api/mobile/v1`. JSON responses ha
 
 ### GET /config
 
-Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits`, `allocation` and `evmOwner` are false, `withdrawalScope` is `idle_usdc`. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
+Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits` is true on Mainnet only, `allocation` and `evmOwner` remain false, `withdrawalScope` is `idle_usdc`. `protocolRoutes` lists `kamino_usdc`, its fixed vault/program/shares mint, minimum deposit and `depositSources: ["safe", "wallet"]`; it is empty on Devnet. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
 
 ### GET /safes?ownerType=solana&address=OWNER&cluster=mainnet
 
@@ -90,6 +90,48 @@ Amounts are parsed with integer arithmetic: positive strings only, at most six d
 
 The contract accepts an eight-route allocation at initialization and an owner-signed `set_allocation` later (sum <= 10000 basis points). It is not permanently fixed. This API deliberately initializes zero allocation so new deposits stay idle during the first wallet/Safe cycle. Product defaults such as Kamino 50% can later be included in the owner's creation transaction once the investment flow is enabled. Existing allocation is not changed by these deposit/withdraw plans.
 
+### POST /protocols/kamino/deposits/plan
+
+Mainnet-only owner deposit into the current allowlisted Kamino USDC vault. Both sources require an existing initialized Solana-owned Safe. It does not create a Safe, accept an executor signature, or change the saved allocation target.
+
+```json
+{
+  "cluster": "mainnet",
+  "owner": { "type": "solana", "address": "YOUR_SOLANA_WALLET" },
+  "source": "wallet",
+  "amount": "2.000000"
+}
+```
+
+Use `source: "safe"` to invest idle USDC already in the Safe, or `source: "wallet"` to transfer wallet USDC to the Safe and invest in Kamino atomically. `amount` is a positive decimal string with at most six decimals, minimum `1.000000`; no numeric JSON, percentages or `all`. The route is `91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy` under program `KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd`; shares mint is `B9t9wg8r39Lxm2D9Gmqn2rJ5pVQQwjtGBfSsHAXSEnVe`. The caller cannot override vault, mint, recipient, allocation, executor, instruction data or compute price. [Kamino deposit reference](https://kamino.com/docs/build/developers/earn/operations/deposit).
+
+The response retains the creation/idle plan envelope (`state`, `cost`, `blockhash`, `lastValidBlockHeight`, `simulation`, `planId`, `steps`). It adds:
+
+```json
+{
+  "status": "ready",
+  "scope": "kamino_usdc",
+  "source": "wallet",
+  "amount": "2.000000",
+  "amountRaw": "2000000",
+  "amountMeaning": "maximum_kamino_input",
+  "sourceAccount": "CANONICAL_OWNER_USDC_ATA",
+  "destinationSharesAta": "CANONICAL_SAFE_KAMINO_SHARES_ATA",
+  "allocationBpsAfter": [5000, 0, 0, 0, 0, 0, 0, 0],
+  "atomic": true
+}
+```
+
+`route` contains the fixed vault/program/shares mint/minimum. `steps` contains exactly one unsigned v0 transaction (`kind: "kamino_deposit"`), with owner as sole signer and fee payer. LUT addresses are built into that transaction; the client does not insert instructions or lookup tables. The server loads the actual lookup tables from the configured RPC, not the KTX-provided address contents.
+
+Instruction order: create a missing Safe USDC ATA if necessary; temporarily set 100% Kamino if needed; for `wallet` transfer the requested USDC into the Safe; create a missing Safe shares ATA; run the deployed typed `kamino_deposit`; restore the allocation observed at plan time. The owner approves this one-time investment irrespective of the saved executor target. There is no intermediate confirmation or persistent temporary 100% target: failure rolls back the whole transaction. If saved allocation is already 100% Kamino, both temporary allocation instructions are omitted. This does not grant the executor an exception to its limits; the endpoint only builds owner-signed actions.
+
+The amount is Kamino's maximum input, not a guaranteed shares quote; the wallet path transfers that amount into the Safe and any amount not consumed by Kamino remains idle. The ABI has no `minSharesOut` argument. This API does **not** promise a share count, fixed APY or a slippage guarantee; the server simulation is a snapshot, not a reservation. Only the account list of a validated KTX deposit is used: setup, farm, and other raw KTX instructions are not forwarded. Shares stay unstaked in the Safe, matching the tested exit route; farm rewards are not included. The Safe contract records actual USDC spent as route principal. Before signing, show the source, amount, network, Safe, Kamino vault, missing-account rent and network fee. On confirmation, refresh the Safe and read the resulting shares through the existing position reader; `routePrincipalUsdc` is cost basis, not live NAV.
+
+The compute limit is 400,000 CU, priority price zero. Quote includes current network fee and missing SPL ATA rent (including existing lamport top-ups). Fees/rent are paid in SOL by the owner. Do not assume zero rent on a new position. Follow the same signature persistence/timeout/expiry rules as ordinary deposits. If another device changes the allocation after this plan is built, a successful signed transaction restores the allocation in this plan; request a fresh plan after any settings change and serialize owner actions.
+
+**Exit boundary:** `/withdrawals/plan` still withdraws only idle USDC. It does not sell Kamino shares. Until a mobile Kamino withdrawal endpoint is added, owners use the existing `/v2/safe` interface for Kamino redemption and full exit. The mobile app must not label idle withdrawal as full portfolio withdrawal. Do not hide this exit route when enabling investment.
+
 ## Mobile flow
 
 1. Connect Seeker/Seed Vault, Phantom, Solflare, Backpack or another supported Solana signer via the existing mobile wallet bridge.
@@ -124,6 +166,12 @@ Error envelope: `{"error":{"code":"CODE","message":"...","details":{}}}` (`detai
 | CLUSTER_MISMATCH | 400 | Reload config and select the correct network |
 | INSUFFICIENT_SOL | 422 | Show funding cost; request a fresh plan after funding |
 | INVALID_AMOUNT | 400 | Use a positive decimal string with <= 6 decimal places; all only for withdrawal |
+| INVALID_SOURCE | 400 | Use safe or wallet for Kamino |
+| AMOUNT_BELOW_MINIMUM | 422 | Current Kamino route requires at least 1 USDC |
+| PROTOCOL_UNAVAILABLE | 409/503 | Kamino is Mainnet-only; stop if its program/vault is unavailable |
+| INVALID_KAMINO_RESPONSE / KAMINO_UNAVAILABLE | 502 | No plan returned; retry or operator checks upstream |
+| LOOKUP_TABLE_UNAVAILABLE | 503 | Refresh/retry; do not construct replacement tables |
+| TRANSACTION_TOO_LARGE | 422 | No plan returned; operator checks route, do not split it in the client |
 | SAFE_NOT_CREATED | 409 | Complete and confirm creation first |
 | INSUFFICIENT_USDC | 422 | Refresh the source balance; protocol assets are outside idle withdrawal |
 | SIMULATION_FAILED | 422 | Refresh state; no transaction is returned |
@@ -143,7 +191,11 @@ Run with Node 24 (native TypeScript stripping), from `web`: `npm run test:mobile
 
 For local HTTP integration checks start the app on port 3231 with `V2_MOBILE_CLUSTER=mainnet` and the private Mainnet RPC, then run `node --test scripts/mobile-safe-http.test.mjs`. The HTTP checks send only read/build requests and cover configuration, the existing Safe, creation/deposit/partial/full withdrawal simulations and invalid/oversized requests. Set `MOBILE_TEST_BASE` to override the API base URL. The positive transfer checks require the pilot owner to have at least 1 USDC in wallet and Safe; the current fixture is not a universally repeatable funded test.
 
-The read-only probe supports `MOBILE_PROBE_OPERATION=create|deposit|withdraw`, `MOBILE_PROBE_OWNER`, and `MOBILE_PROBE_AMOUNT` (default `1` for transfers, or `all` for withdrawal). No live wallet round trip was submitted in this API change; the next acceptance check is owner-signed deposit, confirmation, then owner-signed withdrawal on the test interface/mobile app.
+The read-only probe supports `MOBILE_PROBE_OPERATION=create|deposit|withdraw|kamino_deposit`, `MOBILE_PROBE_OWNER`, `MOBILE_PROBE_SOURCE=safe|wallet` for Kamino, and `MOBILE_PROBE_AMOUNT` (default `1` for transfers, or `all` for idle withdrawal). No live wallet round trip was submitted in this API change; the next acceptance check is owner-signed deposit, confirmation, then owner-signed withdrawal on the test interface/mobile app.
+
+- Kamino deposit extension: 27 deterministic tests passed, including both funding sources, allocation restoration, missing-ATA rent, sole owner signature, upstream amount/vault/mint/account/signer substitution, RPC lookup-table loading, source balances, SOL, network restrictions and simulation failure. TypeScript passed.
+- Four local HTTP integration tests passed: existing creation/idle cycle, both Kamino sources, config capabilities and rejection of vault/recipient overrides, invalid source/amount and network mismatch.
+- Read-only Mainnet unsigned simulations on `FuDC…`, 1 USDC: Safe source slot `452040526`, `136568` CU; wallet source slot `452040533`, `149472` CU. Existing ATAs required no new rent; each network fee quote was `5000` lamports (`0.000005 SOL`), priority fee zero. Nothing signed/sent, no funds moved. These are independent snapshot simulations, not a newly funded full cycle.
 
 ## EVM extension and parallel work
 

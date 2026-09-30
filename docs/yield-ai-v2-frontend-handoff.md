@@ -23,6 +23,8 @@ The first EVM-owner lab is at `/v2/evm-devnet`. It discovers EIP-6963 wallets, c
 
 For mobile, the stable part is the account model and typed intent: take the actual 20-byte EVM address from the connected account, derive `['vault_evm', address20]` with the **Devnet** program for this lab, show the derived Safe and ATA, and sign the exact `SetAllocation` EIP-712 payload in `web/src/lib/v2EvmDevnet.ts`. Treat nonce/deadline as fresh values and verify the chain state again before relay. Do not derive an EVM-owned Safe from a MetaMask Solana address or use the Solana-owner Safe IDL/parser for this account. The relay transport and custody operations are still experimental and should not be embedded as fixed mobile assumptions.
 
+The first user-wallet Devnet transaction finalized: EVM owner `0x70d5d723Ba7f39Cfb676C67Bbd4b5D6aE8047f4B` now has Safe `B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu`, nonce `1`, and route-0 allocation `5000` bps; see the transaction and fee evidence in `docs/yield-ai-v2-evm-owner.md`. The EIP-712 domain binds the Solana program by `salt` and the message includes Devnet genesis, Safe, action, nonce and deadline. **No browser hostname is signed.** The wallet presents the requesting origin, but the contract does not verify a website domain. This lab proves setup authorization only; keep the Safe unfunded until custody and withdrawal are implemented.
+
 ## Acceptance fixtures
 
 - Existing Mainnet program: `https://solscan.io/account/yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`.

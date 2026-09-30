@@ -195,6 +195,7 @@ The read-only probe supports `MOBILE_PROBE_OPERATION=create|deposit|withdraw|kam
 
 - Kamino deposit extension: 27 deterministic tests passed, including both funding sources, allocation restoration, missing-ATA rent, sole owner signature, upstream amount/vault/mint/account/signer substitution, RPC lookup-table loading, source balances, SOL, network restrictions and simulation failure. TypeScript passed.
 - Four local HTTP integration tests passed: existing creation/idle cycle, both Kamino sources, config capabilities and rejection of vault/recipient overrides, invalid source/amount and network mismatch.
+- Full Next.js production compilation passed, including the new dynamic Kamino route. Local legacy static generation initially hit `429` on the default public Solana RPC; rebuilding with `NEXT_PUBLIC_RPC_URL=https://solana-rpc.publicnode.com` succeeded. This public RPC override was local only; Production environment was not changed. The mobile API simulations used the configured private Mainnet RPC.
 - Read-only Mainnet unsigned simulations on `FuDC…`, 1 USDC: Safe source slot `452040526`, `136568` CU; wallet source slot `452040533`, `149472` CU. Existing ATAs required no new rent; each network fee quote was `5000` lamports (`0.000005 SOL`), priority fee zero. Nothing signed/sent, no funds moved. These are independent snapshot simulations, not a newly funded full cycle.
 
 ## EVM extension and parallel work

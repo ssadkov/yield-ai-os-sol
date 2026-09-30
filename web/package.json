@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs",
+    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-kamino.test.mjs",
     "probe:mobile-safe": "node --experimental-strip-types scripts/mobile-safe-probe.mjs"
   },
   "dependencies": {

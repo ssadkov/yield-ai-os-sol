@@ -16,7 +16,8 @@ test("HTTP config, owner Safe state and unsigned creation plan", async () => {
   assert.deepEqual(config.supportedOwnerTypes, ["solana"]);
   assert.equal(config.capabilities.deposits, true);
   assert.equal(config.capabilities.withdrawals, true);
-  assert.equal(config.capabilities.protocolDeposits, false);
+  assert.equal(config.capabilities.protocolDeposits, true);
+  assert.equal(config.protocolRoutes[0].id, "kamino_usdc");
   const stateResponse = await fetch(`${base}/safes?ownerType=solana&cluster=mainnet&address=EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2`);
   assert.equal(stateResponse.status, 200);
   const state = await stateResponse.json();
@@ -28,6 +29,29 @@ test("HTTP config, owner Safe state and unsigned creation plan", async () => {
   assert.equal(plan.status, "ready"); assert.equal(plan.steps.length, 1);
   assert.equal(plan.cost.feePayer, owner);
   assert.ok(plan.simulation.unitsConsumed > 0);
+});
+test("HTTP builds both owner Kamino deposits and rejects recipient/vault/amount overrides", async () => {
+  const request = { cluster: "mainnet", owner: { type: "solana", address: "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2" }, amount: "1.000000", source: "safe" };
+  const postKamino = (data) => fetch(`${base}/protocols/kamino/deposits/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+  for (const source of ["safe", "wallet"]) {
+    const response = await postKamino({ ...request, source });
+    assert.equal(response.status, 200);
+    const plan = await response.json();
+    assert.equal(plan.status, "ready"); assert.equal(plan.steps.length, 1);
+    assert.equal(plan.source, source); assert.equal(plan.scope, "kamino_usdc"); assert.equal(plan.atomic, true);
+    assert.deepEqual(plan.allocationBpsAfter, plan.state.allocationBps);
+    assert.deepEqual(plan.steps[0].requiredSigners, [request.owner.address]);
+    assert.ok(plan.simulation.unitsConsumed > 0);
+  }
+  for (const [extra, code] of [
+    [{ source: "executor" }, "INVALID_SOURCE"], [{ amount: "0.5" }, "AMOUNT_BELOW_MINIMUM"],
+    [{ amount: "1.0000001" }, "INVALID_AMOUNT"], [{ recipient: owner }, "INVALID_REQUEST"],
+    [{ vault: owner }, "INVALID_REQUEST"], [{ cluster: "devnet" }, "CLUSTER_MISMATCH"],
+  ]) {
+    const response = await postKamino({ ...request, ...extra });
+    assert.ok(response.status >= 400);
+    assert.equal((await response.json()).error.code, code);
+  }
 });
 test("HTTP deposit, partial and all-idle withdrawal are unsigned and owner-bound", async () => {
   const transferBody = { cluster: "mainnet", owner: { type: "solana", address: "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2" }, amount: "1.000000" };
@@ -64,5 +88,15 @@ test("HTTP rejects EVM, cluster mismatch, arbitrary fields, malformed JSON and o
     const error = (await response.json()).error;
     assert.equal(error.code, code);
     assert.doesNotMatch(JSON.stringify(error), /api-key|Authorization|Bearer/);
+  }
+});
+
+test("HTTP Kamino exit reads an empty position and rejects malformed selectors or receipts", async () => {
+  const request = { cluster: "mainnet", owner: { type: "solana", address: "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2" }, phase: "redeem", shares: "all" };
+  const postExit = (data) => fetch(`${base}/protocols/kamino/withdrawals/plan`, { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data) });
+  const response = await postExit(request); assert.equal(response.status,200);
+  const p = await response.json(); assert.equal(p.status,"redeemed"); assert.equal(p.sharesRaw,"0"); assert.equal(p.next.endpoint,"/api/mobile/v1/withdrawals/plan");
+  for (const [extra,code] of [[{percent:"50"},"INVALID_REQUEST"],[{recipient:owner},"INVALID_REQUEST"],[{phase:"return",shares:undefined,redemptionSignature:"bad"},"INVALID_SIGNATURE"],[{shares:"0"},"INVALID_SHARES"]]) {
+    const rejected = await postExit({...request,...extra}); assert.ok(rejected.status>=400);assert.equal((await rejected.json()).error.code,code);
   }
 });

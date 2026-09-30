@@ -1,10 +1,10 @@
-# Yield AI v2: Solana wallet Safe API v1 — USDC cycle and Kamino deposits
+# Yield AI v2: Solana wallet Safe API v1 — USDC and Kamino cycle
 
-Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, withdraw idle USDC back to the owner, and owner-deposit into the current Mainnet Kamino USDC vault from either Safe or wallet. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Kamino withdrawal plans, standalone allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
+Updated: 2026-10-01. Scope: read/create a personal Safe, deposit wallet USDC into it, withdraw idle USDC back to the owner, owner-deposit into the current Mainnet Kamino USDC vault from Safe or wallet, redeem shares partially/fully and return confirmed net proceeds. Each ready action returns one unsigned transaction. The existing Solana contract ABI is retained. Standalone allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
 ## Deployment and trust boundary
 
-Kamino API branch: `codex/yield-ai-v2-kamino-api`, based on the Solana API from `codex/yield-ai-v2-cctp-mainnet`. PR target after merging #22: `codex/yield-ai-v2-cctp-engine`. `main` does not yet contain the complete tested executor policy. Keep this API and EVM work in separate branches/worktrees.
+Withdrawal branch: `codex/yield-ai-v2-kamino-withdraw-api`, stacked on deposit PR #26 (`codex/yield-ai-v2-kamino-api`). Withdrawal PR #27 targets that deposit branch; #26 targets `codex/yield-ai-v2-cctp-engine`. The broader API stack is not yet in `main`. Merge dependencies in order and keep EVM work in its separate branch/worktree.
 
 The server chooses one cluster with `V2_MOBILE_CLUSTER=devnet|mainnet` (default `devnet`). The caller must explicitly repeat that cluster. Private RPC variables: `V2_DEVNET_RPC_URL` for Devnet; `V2_MAINNET_RPC_URL` for Mainnet, with existing server-only Supanode header support. No program, mint, executor, signing key or arbitrary instruction is accepted from the caller. Do not put RPC credentials or server credentials in the mobile bundle.
 
@@ -21,7 +21,7 @@ Base URL: the deployment origin, followed by `/api/mobile/v1`. JSON responses ha
 
 ### GET /config
 
-Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits` is true on Mainnet only, `allocation` and `evmOwner` remain false, `withdrawalScope` is `idle_usdc`. `protocolRoutes` lists `kamino_usdc`, its fixed vault/program/shares mint, minimum deposit and `depositSources: ["safe", "wallet"]`; it is empty on Devnet. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
+Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits` and `protocolWithdrawals` are true on Mainnet only, `allocation` and `evmOwner` remain false, ordinary `withdrawalScope` is `idle_usdc`. `protocolRoutes` lists `kamino_usdc`, its fixed vault/program/shares mint, minimum deposit, `depositSources: ["safe", "wallet"]`, `withdrawalSelectors: ["shares", "percent"]` and `withdrawalPhases: ["redeem", "return"]`; it is empty on Devnet. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
 
 ### GET /safes?ownerType=solana&address=OWNER&cluster=mainnet
 
@@ -130,7 +130,7 @@ The amount is Kamino's maximum input, not a guaranteed shares quote; the wallet 
 
 The compute limit is 400,000 CU, priority price zero. Quote includes current network fee and missing SPL ATA rent (including existing lamport top-ups). Fees/rent are paid in SOL by the owner. Do not assume zero rent on a new position. Follow the same signature persistence/timeout/expiry rules as ordinary deposits. If another device changes the allocation after this plan is built, a successful signed transaction restores the allocation in this plan; request a fresh plan after any settings change and serialize owner actions.
 
-**Exit boundary:** `/withdrawals/plan` still withdraws only idle USDC. It does not sell Kamino shares. Until a mobile Kamino withdrawal endpoint is added, owners use the existing `/v2/safe` interface for Kamino redemption and full exit. The mobile app must not label idle withdrawal as full portfolio withdrawal. Do not hide this exit route when enabling investment.
+**Exit boundary:** `/withdrawals/plan` still withdraws only idle USDC. Use the protocol withdrawal endpoint's redeem/return phases below for Kamino shares. The existing `/v2/safe` interface remains an owner exit route. A complete supported USDC/Kamino exit does not sell other token positions; show their remaining balances separately.
 
 ## Mobile flow
 
@@ -174,6 +174,10 @@ Error envelope: `{"error":{"code":"CODE","message":"...","details":{}}}` (`detai
 | TRANSACTION_TOO_LARGE | 422 | No plan returned; operator checks route, do not split it in the client |
 | SAFE_NOT_CREATED | 409 | Complete and confirm creation first |
 | INSUFFICIENT_USDC | 422 | Refresh the source balance; protocol assets are outside idle withdrawal |
+| INVALID_SHARES / INVALID_PERCENT / INVALID_SIGNATURE | 400 | Fix the withdrawal selector or receipt signature |
+| INSUFFICIENT_SHARES | 422 | Refresh shares; do not increase the target silently |
+| REDEMPTION_NOT_CONFIRMED / RPC_BEHIND_REDEMPTION | 409 | Wait/check the original signature and refresh RPC state |
+| INVALID_REDEMPTION | 422 | Do not sign; inspect the unsuccessful or unrelated receipt |
 | SIMULATION_FAILED | 422 | Refresh state; no transaction is returned |
 | RPC_CLUSTER_MISMATCH / PROGRAM_UNAVAILABLE / INVALID_ACCOUNT | 503 | Stop signing; operator investigates configuration/state |
 | EXECUTOR_UNAVAILABLE | 503 | Admin must initialize/unpause the approved default |

@@ -1,6 +1,6 @@
-# Yield AI v2: Solana wallet Safe API v1
+# Yield AI v2: Solana wallet Safe API v1 — idle USDC cycle
 
-Date: 2026-09-30. Scope: read a personal Safe and construct one unsigned creation transaction. The existing Solana contract ABI is retained. This is the first API slice for the mobile/backend specification, not the complete deposits/portfolio/agent API.
+Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, and withdraw idle USDC back to the owner. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Protocol investments, allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
 ## Deployment and trust boundary
 
@@ -21,11 +21,11 @@ Base URL: the deployment origin, followed by `/api/mobile/v1`. JSON responses ha
 
 ### GET /config
 
-Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Capability flags describe implemented endpoint features; a creation plan still checks the live program and registry. Deposits, withdrawals and EVM-owner capabilities are false in this slice.
+Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits`, `allocation` and `evmOwner` are false, `withdrawalScope` is `idle_usdc`. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
 
 ### GET /safes?ownerType=solana&address=OWNER&cluster=mainnet
 
-Returns canonical `safe`, `usdcAta`, `executorLimitsAddress`, `exists`, `usdcAccountExists`, wallet SOL, **idle** USDC, allocation, assigned executor, its current approval, current default executor, and on-chain executor limits. `idleUsdc` is not total portfolio NAV and excludes Kamino shares and other assets. An existing legacy Safe can have `executorLimits: null`; reading it does not migrate or reset it.
+Returns canonical `safe`, `usdcAta`, `ownerUsdcAta`, `executorLimitsAddress`, existence flags, wallet SOL, `walletUsdc`, **idle** Safe USDC, allocation, route principal, assigned executor, its current approval, current default executor, and on-chain executor limits. `idleUsdc` is not total portfolio NAV and excludes Kamino shares and other assets; `routePrincipalUsdc` is cost basis, not NAV. An existing legacy Safe can have `executorLimits: null`; reading it does not migrate or reset it.
 
 Owner addresses must be canonical on-curve Solana wallet addresses. The API validates the RPC genesis, executable program loader, account owners/discriminators, Safe owner/PDA bump, registry, limits binding and USDC ATA mint/authority/state. It fails closed on malformed or substituted accounts.
 
@@ -58,6 +58,38 @@ If the Safe already exists, returns `status: "already_exists"`, current `state`,
 
 Insufficient owner SOL returns HTTP 422 `INSUFFICIENT_SOL` with `error.details.cost`, network and Safe, so mobile can show the exact funding requirement. Estimated rent and fee are a snapshot, not a reservation. Wallet-added priority fees change the final cost.
 
+### POST /deposits/plan
+
+```json
+{
+  "cluster": "mainnet",
+  "owner": { "type": "solana", "address": "YOUR_SOLANA_WALLET" },
+  "amount": "2.000000"
+}
+```
+
+The Safe must already exist and its creation must be confirmed. The API constructs `deposit` using the owner's canonical USDC ATA as source and the Safe's canonical USDC ATA as destination. If the Safe ATA was closed, its idempotent recreation is included in the same transaction and rent is quoted. Owner signs and pays SOL. This moves USDC into the Safe; it does not invest into Kamino or set allocation.
+
+### POST /withdrawals/plan
+
+Same request, with `amount` as a positive decimal USDC string or `"all"`. `all` means **all idle USDC at plan time**, not all assets held in protocol positions. It becomes an exact u64 amount in the signed transaction. New deposits after planning are not included; if the executor moves funds before execution, the transaction may fail and state must be refreshed.
+
+The destination is always the same owner's canonical USDC ATA. There is no `recipient` field: attempts to override it are rejected. Missing owner ATA is created atomically with withdrawal, paid by the owner. No protocol redemption is performed. An empty `all` request returns `status: "empty"`, `scope: "idle_usdc"`, current state and `steps: []`.
+
+The Safe stays open after withdrawal; this endpoint does not close its accounts or refund their rent. `walletUsdc` and the deposit source refer to the owner's canonical ATA, not a sum across arbitrary secondary USDC token accounts.
+
+Ready deposit/withdraw plans share the creation-plan fields (`planId`, `state`, `cost`, `blockhash`, `lastValidBlockHeight`, `simulation`, `steps`, `createdAt`) and also return:
+
+- `scope: "idle_usdc"`, `amount` (six decimal digits), `amountRaw` (u64 integer string).
+- `source`, `destination` (canonical token account addresses).
+- `allIdleAtPlanTime` (true only for `withdraw` with `amount: "all"`).
+
+Amounts are parsed with integer arithmetic: positive strings only, at most six decimal places, no exponents/signs/whitespace/leading zeroes, and no u64 overflow. Numeric JSON values are rejected. `all` is not valid for deposits. Source token mint/authority/state, available USDC, required SOL and unsigned simulation are checked before returning a payload. Missing Safe returns `SAFE_NOT_CREATED` (409); insufficient source USDC returns `INSUFFICIENT_USDC` (422).
+
+### Default allocation
+
+The contract accepts an eight-route allocation at initialization and an owner-signed `set_allocation` later (sum <= 10000 basis points). It is not permanently fixed. This API deliberately initializes zero allocation so new deposits stay idle during the first wallet/Safe cycle. Product defaults such as Kamino 50% can later be included in the owner's creation transaction once the investment flow is enabled. Existing allocation is not changed by these deposit/withdraw plans.
+
 ## Mobile flow
 
 1. Connect Seeker/Seed Vault, Phantom, Solflare, Backpack or another supported Solana signer via the existing mobile wallet bridge.
@@ -67,6 +99,10 @@ Insufficient owner SOL returns HTTP 422 `INSUFFICIENT_SOL` with `error.details.c
 5. Ask the wallet to sign and send once. Alternatively use its `signTransaction` then submit through the application's trusted Solana transport. This API version does not provide a generic broadcaster or hold a server key.
 6. Keep the signature and `lastValidBlockHeight`. Confirm it through the wallet/RPC, then refresh `/safes` until the initialized Safe appears. On timeout first check signature status and state: do not blindly sign again. A missing signature alone does not prove failure.
 7. On expired blockhash, request a fresh plan. If another device has already created the Safe, the fresh response is `already_exists`. For an on-chain failed creation, present the failure and rebuild only after refreshing state.
+8. Request `/deposits/plan` with a decimal amount, show the exact source/destination/fee, sign/send the single step through the wallet, confirm its signature, then refresh wallet and Safe balances.
+9. Request `/withdrawals/plan` with an amount or `all`, sign/send the single step, confirm and refresh both balances. This completes the wallet -> idle Safe -> wallet USDC cycle.
+
+Deposits are not idempotent across differently signed transactions. Persist the signature locally. After a timeout, check the original transaction status before requesting/signing a fresh plan; use block height to determine expiry. Do not infer completion solely from a balance change, which could come from another operation. Rebuilding an unsigned payload does not itself transfer funds.
 
 Signing/submission rejection or timeout is handled locally by the wallet flow; there is no backend withdrawal job or persisted portfolio record to fabricate. Transaction status and a plan-bound signed-submission endpoint are subsequent API slices.
 
@@ -87,6 +123,9 @@ Error envelope: `{"error":{"code":"CODE","message":"...","details":{}}}` (`detai
 | INVALID_REQUEST / INVALID_OWNER / UNSUPPORTED_OWNER_TYPE | 400 | Fix input; do not sign |
 | CLUSTER_MISMATCH | 400 | Reload config and select the correct network |
 | INSUFFICIENT_SOL | 422 | Show funding cost; request a fresh plan after funding |
+| INVALID_AMOUNT | 400 | Use a positive decimal string with <= 6 decimal places; all only for withdrawal |
+| SAFE_NOT_CREATED | 409 | Complete and confirm creation first |
+| INSUFFICIENT_USDC | 422 | Refresh the source balance; protocol assets are outside idle withdrawal |
 | SIMULATION_FAILED | 422 | Refresh state; no transaction is returned |
 | RPC_CLUSTER_MISMATCH / PROGRAM_UNAVAILABLE / INVALID_ACCOUNT | 503 | Stop signing; operator investigates configuration/state |
 | EXECUTOR_UNAVAILABLE | 503 | Admin must initialize/unpause the approved default |
@@ -98,10 +137,13 @@ Error envelope: `{"error":{"code":"CODE","message":"...","details":{}}}` (`detai
 - Live Mainnet **unsigned simulation only**: owner `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`, derived Safe `ETYmZNRkRbHfpfHVkhTiNQtRYDRf7T5CS4i4cXUkVWyE`, default executor `3ayNPp7MoihfbnTQ4q6Ge5PVNe9tJsY5betKqKX7C8aH`, slot `451992204`, `47559` CU. Missing rent `8595360`, fee `5000`, total `8600360` lamports (`0.00860036` SOL). No transaction signed/sent and no funds moved.
 - Live Devnet check found the executor registry missing for program `8xa1…`; the API returns `EXECUTOR_UNAVAILABLE`. Devnet creation with default executor/limits needs an admin registry initialization before a live wallet test. This API does not silently fall back to a no-executor or no-limits creation path.
 - Production compilation and TypeScript check passed. Local HTTP routes returned the simulated Mainnet creation plan and confirmed the existing owner's Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`.
+- Idle cycle extension: 17 deterministic tests and 3 local HTTP tests passed, including amount/u64 precision, both transaction directions, canonical owner destination, missing-ATA creation, full/partial withdrawal, balance/SOL errors and simulation rejection. Mainnet unsigned simulations for existing `FuDC…`: deposit 1 USDC at slot `452023520`, `11733` CU; withdrawal 1 USDC at slot `452023524`, `11799` CU. Each quoted rent 0 and fee 5000 lamports (`0.000005 SOL`). These are separate simulations on existing balances, not a newly sent round trip. No keys used, no funds moved.
 
 Run with Node 24 (native TypeScript stripping), from `web`: `npm run test:mobile-safe`, `node node_modules/typescript/bin/tsc --noEmit --incremental false`, `npm run build`. Read-only live probe: set `V2_MOBILE_CLUSTER`, the matching private RPC variable, optionally `MOBILE_PROBE_OWNER`, then `npm run probe:mobile-safe`. The probe has no signing/send methods.
 
-For local HTTP integration checks start the app on port 3231 with `V2_MOBILE_CLUSTER=mainnet` and the private Mainnet RPC, then run `node --test scripts/mobile-safe-http.test.mjs`. The HTTP checks also send only read/build requests and cover configuration, the existing Safe, successful creation simulation and invalid/oversized requests. Set `MOBILE_TEST_BASE` to override the API base URL.
+For local HTTP integration checks start the app on port 3231 with `V2_MOBILE_CLUSTER=mainnet` and the private Mainnet RPC, then run `node --test scripts/mobile-safe-http.test.mjs`. The HTTP checks send only read/build requests and cover configuration, the existing Safe, creation/deposit/partial/full withdrawal simulations and invalid/oversized requests. Set `MOBILE_TEST_BASE` to override the API base URL. The positive transfer checks require the pilot owner to have at least 1 USDC in wallet and Safe; the current fixture is not a universally repeatable funded test.
+
+The read-only probe supports `MOBILE_PROBE_OPERATION=create|deposit|withdraw`, `MOBILE_PROBE_OWNER`, and `MOBILE_PROBE_AMOUNT` (default `1` for transfers, or `all` for withdrawal). No live wallet round trip was submitted in this API change; the next acceptance check is owner-signed deposit, confirmation, then owner-signed withdrawal on the test interface/mobile app.
 
 ## EVM extension and parallel work
 

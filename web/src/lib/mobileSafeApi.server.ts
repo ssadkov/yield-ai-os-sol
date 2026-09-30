@@ -1,5 +1,5 @@
 import { Connection } from "@solana/web3.js";
-import { creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner } from "./mobileSafe";
+import { creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan } from "./mobileSafe";
 import { v2MainnetRpcHeaders, V2_MAINNET_RPC_URL } from "./v2MainnetRpc.server";
 
 // Deployment selects one cluster. Requests cannot choose a program, mint, RPC or executor.
@@ -30,7 +30,7 @@ export async function mobileApi(action: () => Promise<unknown>) {
 export async function mobileConfig() {
   const { network, connection } = mobileSafeRuntime();
   if (await connection.getGenesisHash() !== network.genesis) throw new MobileApiError("RPC_CLUSTER_MISMATCH", "Configured RPC points to a different Solana cluster", 503);
-  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, evmOwner: false, deposits: false, withdrawals: false } };
+  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: false, allocation: false, withdrawalScope: "idle_usdc" } };
 }
 export async function mobileReadSafe(request: Request) {
   const url = new URL(request.url);
@@ -46,6 +46,22 @@ export function parseCreationRequest(body: unknown) {
   return { owner: solanaOwner(value.owner), cluster: value.cluster };
 }
 export async function mobileCreationPlan(request: Request) {
+  const input = parseCreationRequest(await planBody(request));
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(input.cluster, network);
+  return creationPlan(connection, network, input.owner);
+}
+export async function mobileUsdcPlan(request: Request, kind: "deposit" | "withdraw") {
+  const body = await planBody(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new MobileApiError("INVALID_REQUEST", "Expected a JSON object");
+  const value = body as Record<string, unknown>;
+  if (Object.keys(value).some((key) => !["owner", "cluster", "amount"].includes(key))) throw new MobileApiError("INVALID_REQUEST", "Unexpected transfer-plan field");
+  const owner = solanaOwner(value.owner);
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(value.cluster, network);
+  return usdcTransferPlan(connection, network, owner, kind, value.amount);
+}
+async function planBody(request: Request): Promise<unknown> {
   // No signed payloads accepted and no sender key exists. This endpoint is read-only on chain.
   if (Number(request.headers.get("Content-Length") ?? 0) > 2048) throw new MobileApiError("INVALID_REQUEST", "Request body is too large", 413);
   const chunks: Uint8Array[] = [];
@@ -66,10 +82,5 @@ export async function mobileCreationPlan(request: Request) {
     } finally { reader.releaseLock(); }
   }
   const raw = Buffer.concat(chunks).toString("utf8");
-  let body: unknown;
-  try { body = JSON.parse(raw); } catch { throw new MobileApiError("INVALID_REQUEST", "Expected valid JSON"); }
-  const input = parseCreationRequest(body);
-  const { network, connection } = mobileSafeRuntime();
-  requireCluster(input.cluster, network);
-  return creationPlan(connection, network, input.owner);
+  try { return JSON.parse(raw); } catch { throw new MobileApiError("INVALID_REQUEST", "Expected valid JSON"); }
 }

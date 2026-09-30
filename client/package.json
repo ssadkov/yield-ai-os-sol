@@ -6,21 +6,28 @@
   "scripts": {
     "list-vaults": "tsx src/listVaults.ts",
     "smoke": "tsx src/smoke.ts",
-    "v2-security": "tsx src/v2SecuritySmoke.ts"
+    "v2-security": "tsx src/v2SecuritySmoke.ts",
+    "exponent:test": "tsx src/exponentTest.ts",
+    "exponent:inspect": "tsx src/exponentInspect.ts",
+    "exponent:fork-prepare": "tsx src/exponentForkPrepare.ts",
+    "exponent:fork": "tsx src/v2ExponentFork.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@exponent-labs/exponent-sdk": "0.9.29",
+    "@orca-so/whirlpools-sdk": "0.20.0",
     "@solana/spl-token": "^0.4.13",
-    "bn.js": "^5.2.1",
     "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.1",
     "dotenv": "^16.6.1"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.6",
     "@types/node": "^22.10.0",
+    "litesvm": "1.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

@@ -11,6 +11,10 @@ use anchor_spl::token_interface::{
 
 declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
 
+mod exponent;
+mod exponent_accounts;
+pub use exponent::*;
+
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;
 /// Admin-managed executor keys. The separate PDA avoids changing the deployed Config account size.
@@ -278,6 +282,25 @@ fn invoke_kvault(
 pub mod yield_vault {
     use super::*;
 
+    pub fn init_exponent_position(ctx: Context<InitExponentPosition>, max_loss_bps: u16, max_slippage_bps: u16) -> Result<()> {
+        exponent::init(ctx, max_loss_bps, max_slippage_bps)
+    }
+    pub fn set_exponent_policy(ctx: Context<SetExponentPolicy>, enabled: bool, max_loss_bps: u16, max_slippage_bps: u16) -> Result<()> {
+        exponent::set_policy(ctx, enabled, max_loss_bps, max_slippage_bps)
+    }
+    pub fn exponent_buy_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::buy(ctx, order)
+    }
+    pub fn exponent_sell_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, false)
+    }
+    pub fn exponent_redeem_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, true)
+    }
+    pub fn recover_exponent(ctx: Context<RecoverExponent>, amount: u64) -> Result<()> {
+        exponent::recover(ctx, amount)
+    }
+
     pub fn initialize(
         ctx: Context<Initialize>,
         agent: Pubkey,
@@ -426,6 +449,7 @@ pub mod yield_vault {
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        require!(!exponent::protected_mint(&ctx.accounts.usdc_mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token::transfer(
             CpiContext::new(
@@ -448,6 +472,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token_interface::transfer_checked(
             CpiContext::new(
@@ -468,6 +493,7 @@ pub mod yield_vault {
 
     /// Owner pulls USDC from the vault ATA. Authority on the vault token account is the vault PDA (`invoke_signed`).
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        require!(!exponent::protected_mint(&ctx.accounts.usdc_mint.key()), exponent::ExponentError::ProtectedAsset);
         require!(amount > 0, ErrorCode::ZeroAmount);
         require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
@@ -498,6 +524,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
@@ -527,6 +554,7 @@ pub mod yield_vault {
     pub fn execute_swap_cpi(ctx: Context<ExecuteSwap>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
+        exponent::protect_generic(vault, ctx.remaining_accounts)?;
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();
@@ -570,6 +598,7 @@ pub mod yield_vault {
     pub fn execute_protocol_cpi(ctx: Context<ExecuteProtocol>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
+        exponent::protect_generic(vault, ctx.remaining_accounts)?;
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();

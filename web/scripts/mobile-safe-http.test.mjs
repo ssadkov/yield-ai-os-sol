@@ -14,6 +14,9 @@ test("HTTP config, owner Safe state and unsigned creation plan", async () => {
   const config = await configResponse.json();
   assert.equal(config.network.cluster, "mainnet");
   assert.deepEqual(config.supportedOwnerTypes, ["solana"]);
+  assert.equal(config.capabilities.deposits, true);
+  assert.equal(config.capabilities.withdrawals, true);
+  assert.equal(config.capabilities.protocolDeposits, false);
   const stateResponse = await fetch(`${base}/safes?ownerType=solana&cluster=mainnet&address=EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2`);
   assert.equal(stateResponse.status, 200);
   const state = await stateResponse.json();
@@ -25,6 +28,28 @@ test("HTTP config, owner Safe state and unsigned creation plan", async () => {
   assert.equal(plan.status, "ready"); assert.equal(plan.steps.length, 1);
   assert.equal(plan.cost.feePayer, owner);
   assert.ok(plan.simulation.unitsConsumed > 0);
+});
+test("HTTP deposit, partial and all-idle withdrawal are unsigned and owner-bound", async () => {
+  const transferBody = { cluster: "mainnet", owner: { type: "solana", address: "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2" }, amount: "1.000000" };
+  for (const [route, amount] of [["deposits", "1.000000"], ["withdrawals", "1.000000"], ["withdrawals", "all"]]) {
+    const response = await fetch(`${base}/${route}/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...transferBody, amount }) });
+    assert.equal(response.status, 200);
+    const plan = await response.json();
+    assert.equal(plan.status, "ready"); assert.equal(plan.steps.length, 1);
+    assert.equal(plan.scope, "idle_usdc"); assert.equal(plan.cost.feePayer, transferBody.owner.address);
+    assert.equal(plan.destination, route === "deposits" ? plan.state.usdcAta : plan.state.ownerUsdcAta);
+    assert.ok(plan.simulation.unitsConsumed > 0);
+  }
+  for (const [route, data, status, code] of [
+    ["deposits", { ...transferBody, amount: "all" }, 400, "INVALID_AMOUNT"],
+    ["withdrawals", { ...transferBody, recipient: owner }, 400, "INVALID_REQUEST"],
+    ["deposits", { ...transferBody, amount: 1 }, 400, "INVALID_AMOUNT"],
+    ["withdrawals", { ...transferBody, amount: "1.0000001" }, 400, "INVALID_AMOUNT"],
+    ["withdrawals", { ...transferBody, amount: "18446744073709.551615" }, 422, "INSUFFICIENT_USDC"],
+  ]) {
+    const response = await fetch(`${base}/${route}/plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    assert.equal(response.status, status); assert.equal((await response.json()).error.code, code);
+  }
 });
 test("HTTP rejects EVM, cluster mismatch, arbitrary fields, malformed JSON and oversized bodies", async () => {
   for (const [data, status, code] of [

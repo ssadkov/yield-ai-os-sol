@@ -4,7 +4,7 @@ import { BorshAccountsCoder, BorshInstructionCoder, BN } from "@coral-xyz/anchor
 import { AccountLayout, MintLayout, TOKEN_PROGRAM_ID, AccountState } from "@solana/spl-token";
 import { PublicKey, SystemProgram, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } from "@solana/web3.js";
 import idl from "../src/idl/yield_vault.json" with { type: "json" };
-import { creationPlan, inspectSafe, MOBILE_NETWORKS, solanaOwner, safeAddresses, requireCluster, SAFE_SPACE, LIMITS_SPACE } from "../src/lib/mobileSafe.ts";
+import { creationPlan, inspectSafe, MOBILE_NETWORKS, solanaOwner, safeAddresses, requireCluster, SAFE_SPACE, LIMITS_SPACE, usdcTransferPlan, usdcAmount } from "../src/lib/mobileSafe.ts";
 
 const network = MOBILE_NETWORKS.devnet;
 const owner = new PublicKey("2twCpxj6cqztdXwgV7EabmtDnC7W7xGr12hNrEuxpcdj");
@@ -21,12 +21,12 @@ async function fixture() {
   const accounts = [
     { ...info(Buffer.alloc(0), new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111")), executable: true },
     info(await coder.encode("ExecutorRegistry", { bump: addresses.registryBump, default_executor: executor, approved: [executor] })),
-    info(mint, TOKEN_PROGRAM_ID), null, null, null,
+    info(mint, TOKEN_PROGRAM_ID), null, null, null, null,
   ];
   const calls = [];
   const connection = {
     getGenesisHash: async () => network.genesis,
-    getMultipleAccountsInfoAndContext: async (keys) => { assert.deepEqual(keys.map(String), [addresses.program, addresses.registry, addresses.mint, addresses.safe, addresses.limits, addresses.ata].map(String)); return { context: { slot: 42 }, value: accounts }; },
+    getMultipleAccountsInfoAndContext: async (keys) => { assert.deepEqual(keys.map(String), [addresses.program, addresses.registry, addresses.mint, addresses.safe, addresses.limits, addresses.ata, addresses.ownerAta].map(String)); return { context: { slot: 42 }, value: accounts }; },
     getBalance: async () => 1_000_000_000,
     getMinimumBalanceForRentExemption: async (size) => { calls.push(size); return size * 6960 + 890880; },
     getLatestBlockhash: async () => ({ blockhash: other.toBase58(), lastValidBlockHeight: 567 }),
@@ -38,10 +38,10 @@ async function fixture() {
 async function setVault(f, wallet = owner) {
   f.accounts[3] = info(padded(await coder.encode("Vault", { bump: addresses.safeBump, owner: wallet, agent: executor, allocation_bps: [5000,0,0,0,0,0,0,0], last_rebalance_ts: new BN(1), allowed_programs: [], route_principal: Array.from({ length: 8 }, () => new BN(0)) }), SAFE_SPACE));
 }
-function setAta(f, mint = addresses.mint, authority = addresses.safe) {
+function setAta(f, mint = addresses.mint, authority = addresses.safe, index = 5, amount = BigInt(1_000_001)) {
   const data = Buffer.alloc(AccountLayout.span);
-  AccountLayout.encode({ mint, owner: authority, amount: BigInt(1_000_001), delegateOption: 0, delegate: PublicKey.default, state: AccountState.Initialized, isNativeOption: 0, isNative: BigInt(0), delegatedAmount: BigInt(0), closeAuthorityOption: 0, closeAuthority: PublicKey.default }, data);
-  f.accounts[5] = info(data, TOKEN_PROGRAM_ID);
+  AccountLayout.encode({ mint, owner: authority, amount, delegateOption: 0, delegate: PublicKey.default, state: AccountState.Initialized, isNativeOption: 0, isNative: BigInt(0), delegatedAmount: BigInt(0), closeAuthorityOption: 0, closeAuthority: PublicKey.default }, data);
+  f.accounts[index] = info(data, TOKEN_PROGRAM_ID);
 }
 const rejects = (action, code) => assert.rejects(action, (err) => err.code === code);
 
@@ -131,4 +131,69 @@ test("expired fee lookup and failed unsigned simulation do not produce a plan", 
   f.connection.getFeeForMessage = async () => ({ value: 5000 });
   f.connection.simulateTransaction = async () => ({ context: { slot: 44 }, value: { err: { InstructionError: [1, "Custom"] } } });
   await rejects(() => creationPlan(f.connection, network, owner), "SIMULATION_FAILED");
+});
+
+test("amount parsing is exact at six decimals and u64 boundary", () => {
+  assert.equal(usdcAmount("0.000001"), BigInt(1));
+  assert.equal(usdcAmount("1000.5"), BigInt(1_000_500_000));
+  assert.equal(usdcAmount("18446744073709.551615"), (BigInt(1) << BigInt(64)) - BigInt(1));
+  for (const amount of [0, -1, "0", "0.000000", "1e3", "-1", "01", " 1", ".5", "1.", "1.0000001", "18446744073709.551616", "all"]) assert.throws(() => usdcAmount(amount));
+});
+test("deposit and partial withdrawal bind exact amounts, owner signer and canonical USDC accounts", async () => {
+  const f = await fixture(); await setVault(f); setAta(f); setAta(f, addresses.mint, owner, 6, BigInt(2_000_000));
+  for (const kind of ["deposit", "withdraw"]) {
+    const plan = await usdcTransferPlan(f.connection, network, owner, kind, "0.100001");
+    assert.equal(plan.amountRaw, "100001"); assert.equal(plan.amount, "0.100001");
+    assert.equal(plan.scope, "idle_usdc"); assert.equal(plan.cost.rentLamports, "0");
+    assert.equal(plan.steps.length, 1); assert.equal(plan.cost.feePayer, String(owner));
+    const tx = VersionedTransaction.deserialize(Buffer.from(plan.steps[0].transaction, "base64"));
+    assert.equal(tx.message.header.numRequiredSignatures, 1); assert.ok(tx.signatures[0].every((byte) => byte === 0));
+    const instructions = TransactionMessage.decompile(tx.message).instructions;
+    assert.equal(instructions.length, 2);
+    const ix = instructions[1]; const decoded = ixCoder.decode(ix.data);
+    assert.equal(decoded.name, kind); assert.equal(decoded.data.amount.toString(), "100001");
+    assert.deepEqual(ix.keys.map((key) => String(key.pubkey)), [owner, addresses.safe, addresses.mint, addresses.ownerAta, addresses.ata, TOKEN_PROGRAM_ID].map(String));
+    assert.equal(plan.destination, String(kind === "deposit" ? addresses.ata : addresses.ownerAta));
+    assert.equal(plan.state.allocationBps[0], 5000); // Wallet ingress/egress never changes allocation.
+  }
+});
+test("full idle withdrawal uses the snapshot balance and creates missing owner ATA atomically", async () => {
+  const f = await fixture(); await setVault(f); setAta(f);
+  const plan = await usdcTransferPlan(f.connection, network, owner, "withdraw", "all");
+  assert.equal(plan.amountRaw, "1000001"); assert.equal(plan.allIdleAtPlanTime, true);
+  assert.equal(plan.cost.rentLamports, "2039280");
+  const instructions = TransactionMessage.decompile(VersionedTransaction.deserialize(Buffer.from(plan.steps[0].transaction, "base64")).message).instructions;
+  assert.equal(instructions.length, 3);
+  assert.equal(String(instructions[1].programId), "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+  assert.equal(String(instructions[1].keys[1].pubkey), String(addresses.ownerAta));
+  assert.equal(ixCoder.decode(instructions[2].data).name, "withdraw");
+});
+test("deposit recreates missing Safe ATA in the owner transaction", async () => {
+  const f = await fixture(); await setVault(f); setAta(f, addresses.mint, owner, 6);
+  const plan = await usdcTransferPlan(f.connection, network, owner, "deposit", "1");
+  const instructions = TransactionMessage.decompile(VersionedTransaction.deserialize(Buffer.from(plan.steps[0].transaction, "base64")).message).instructions;
+  assert.equal(String(instructions[1].keys[1].pubkey), String(addresses.ata));
+  assert.equal(String(instructions[1].keys[2].pubkey), String(addresses.safe));
+  assert.equal(plan.cost.rentLamports, "2039280");
+});
+test("missing Safe, insufficient wallet/Safe USDC and insufficient SOL fail before signing", async () => {
+  const f = await fixture();
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "deposit", "1"), "SAFE_NOT_CREATED");
+  await setVault(f); setAta(f); setAta(f, addresses.mint, owner, 6);
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "deposit", "2"), "INSUFFICIENT_USDC");
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "withdraw", "2"), "INSUFFICIENT_USDC");
+  f.connection.getBalance = async () => 0;
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "withdraw", "1"), "INSUFFICIENT_SOL");
+});
+test("empty full withdrawal returns no transaction; owner ATA substitution is rejected", async () => {
+  const f = await fixture(); await setVault(f);
+  const empty = await usdcTransferPlan(f.connection, network, owner, "withdraw", "all");
+  assert.equal(empty.status, "empty"); assert.deepEqual(empty.steps, []);
+  setAta(f, addresses.mint, other, 6);
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "deposit", "1"), "INVALID_ACCOUNT");
+});
+test("transfer simulation failure produces no payload", async () => {
+  const f = await fixture(); await setVault(f); setAta(f); setAta(f, addresses.mint, owner, 6);
+  f.connection.simulateTransaction = async () => ({ context: { slot: 44 }, value: { err: "AccountNotFound" } });
+  await rejects(() => usdcTransferPlan(f.connection, network, owner, "withdraw", "1"), "SIMULATION_FAILED");
 });

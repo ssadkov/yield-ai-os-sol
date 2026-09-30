@@ -40,6 +40,13 @@ const nextConfig: NextConfig = {
       "./node_modules/@kamino-finance/scope-sdk/**/*",
       "./node_modules/@orca-so/whirlpools-core/**/*",
     ],
+    "/api/mobile/v1/protocols/kamino/withdrawals/plan": [
+      "./node_modules/@kamino-finance/klend-sdk/**/*",
+      "./node_modules/@kamino-finance/kliquidity-sdk/**/*",
+      "./node_modules/@kamino-finance/farms-sdk/**/*",
+      "./node_modules/@kamino-finance/scope-sdk/**/*",
+      "./node_modules/@orca-so/whirlpools-core/**/*",
+    ],
   },
   images: {
     remotePatterns: [

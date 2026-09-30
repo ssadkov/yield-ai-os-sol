@@ -90,3 +90,13 @@ test("HTTP rejects EVM, cluster mismatch, arbitrary fields, malformed JSON and o
     assert.doesNotMatch(JSON.stringify(error), /api-key|Authorization|Bearer/);
   }
 });
+
+test("HTTP Kamino exit reads an empty position and rejects malformed selectors or receipts", async () => {
+  const request = { cluster: "mainnet", owner: { type: "solana", address: "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2" }, phase: "redeem", shares: "all" };
+  const postExit = (data) => fetch(`${base}/protocols/kamino/withdrawals/plan`, { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data) });
+  const response = await postExit(request); assert.equal(response.status,200);
+  const p = await response.json(); assert.equal(p.status,"redeemed"); assert.equal(p.sharesRaw,"0"); assert.equal(p.next.endpoint,"/api/mobile/v1/withdrawals/plan");
+  for (const [extra,code] of [[{percent:"50"},"INVALID_REQUEST"],[{recipient:owner},"INVALID_REQUEST"],[{phase:"return",shares:undefined,redemptionSignature:"bad"},"INVALID_SIGNATURE"],[{shares:"0"},"INVALID_SHARES"]]) {
+    const rejected = await postExit({...request,...extra}); assert.ok(rejected.status>=400);assert.equal((await rejected.json()).error.code,code);
+  }
+});

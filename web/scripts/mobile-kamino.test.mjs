@@ -4,7 +4,8 @@ import { BorshAccountsCoder, BorshInstructionCoder, BN } from "@coral-xyz/anchor
 import { AccountLayout, MintLayout, TOKEN_PROGRAM_ID, AccountState, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { AddressLookupTableAccount, PublicKey, TransactionMessage, VersionedTransaction, SystemProgram } from "@solana/web3.js";
 import idl from "../src/idl/yield_vault.json" with { type: "json" };
-import { MOBILE_NETWORKS, MOBILE_KAMINO, safeAddresses, kaminoDepositPlan, checkedKaminoDeposit } from "../src/lib/mobileSafe.ts";
+import { MOBILE_NETWORKS, MOBILE_KAMINO, safeAddresses, kaminoDepositPlan, checkedKaminoDeposit, kaminoWithdrawalPlan, kaminoReturnPlan, checkedKaminoWithdrawal } from "../src/lib/mobileSafe.ts";
+import bs58 from "bs58";
 
 const network = MOBILE_NETWORKS.mainnet;
 const owner = new PublicKey("EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2");
@@ -179,4 +180,89 @@ test("failed unsigned simulation and upstream errors return no signed/sendable p
   await rejects(() => plan(f), "KAMINO_UNAVAILABLE");
   f.fetcher = async () => new Response("upstream secret", { status: 500 });
   await rejects(() => plan(f), "KAMINO_UNAVAILABLE");
+});
+
+function withdrawalBundle(shares = "5000000", reserve = false) {
+  const keys = [a.safe, new PublicKey(MOBILE_KAMINO.vault), other, other, other, a.ata, a.mint, sharesAta, sharesMint, TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"), other, new PublicKey(MOBILE_KAMINO.program)];
+  if (reserve) keys.push(new PublicKey(MOBILE_KAMINO.vault), ...Array(9).fill(other), new PublicKey(MOBILE_KAMINO.program));
+  return { safe: String(a.safe), withdrawals: [{ shares, discriminator: reserve ? "b712469c946da122" : "1383709baadc2239", accounts: keys.map((key, i) => ({ address: String(key), writable: [1,3,5,6,7,8,14,15,16,19,20].includes(i) })) }], lookupTables: [] };
+}
+async function withdrawalFixture() {
+  const f = await fixture();
+  const [config, bump] = PublicKey.findProgramAddressSync([Buffer.from("config")], a.program);
+  f.config = info(await coder.encode("Config", { admin: other, treasury: other, performance_fee_bps: 500, bump }));
+  f.treasury = tokenInfo(a.mint, other);
+  f.bundle = withdrawalBundle();
+  const treasuryAta = getAssociatedTokenAddressSync(a.mint, other);
+  const originalRead = f.connection.getMultipleAccountsInfoAndContext;
+  f.connection.getMultipleAccountsInfoAndContext = async (keys, options) => {
+    if (keys.length === 5) { assert.deepEqual(keys.map(String), [MOBILE_KAMINO.program,MOBILE_KAMINO.vault,sharesMint,sharesAta,config].map(String)); return { context: { slot: 44 }, value: [...f.kamino, f.config] }; }
+    if (keys.length === 1) { assert.equal(String(keys[0]), String(treasuryAta)); return { context: { slot: 44 }, value: [f.treasury] }; }
+    return originalRead(keys, options);
+  };
+  f.builder = async (safe, target) => { f.target = target; assert.equal(String(safe), String(a.safe)); return f.bundle; };
+  return f;
+}
+const redeem = (f, selection = { percent: "50" }) => kaminoWithdrawalPlan(f.connection, network, owner, selection, f.builder);
+test("partial and full redemption use a single bounded typed owner instruction and keep allocation", async () => {
+  for (const reserve of [false,true]) {
+    const f = await withdrawalFixture(); f.bundle = withdrawalBundle("5000000",reserve);
+    const p = await redeem(f);
+    assert.equal(p.targetSharesRaw, "5000000"); assert.equal(p.legSharesRaw, "5000000"); assert.equal(p.remainingTargetSharesRaw,"0"); assert.equal(p.destination,String(a.ata)); assert.equal(p.performanceFeeBps,500);
+    assert.deepEqual(p.allocationBpsAfter,p.state.allocationBps);
+    const typed = instructions(p).filter((ix) => ix.programId.equals(a.program));
+    assert.equal(typed.length,1); assert.equal(ixCoder.decode(typed[0].data).name,"kamino_withdraw"); assert.equal(ixCoder.decode(typed[0].data).data.from_reserve,reserve);
+    assert.equal(String(ixCoder.decode(typed[0].data).data.shares),"5000000"); assert.ok(!typed[0].keys.some((meta) => meta.pubkey.equals(a.limits)));
+  }
+  const f = await withdrawalFixture(); f.bundle = withdrawalBundle("18446744073709551615",true);
+  const p = await redeem(f,{ shares:"all" }); assert.equal(p.targetSharesRaw,"10000000"); assert.equal(p.legSharesRaw,"10000000");
+  // SDK redeem-all cannot consume shares beyond a partial snapshot target.
+  assert.equal((await redeem(f,{ shares:"1234567" })).legSharesRaw,"1234567");
+});
+test("split liquidity returns only the first leg and an exact remaining target, not a repeated percentage", async () => {
+  const f = await withdrawalFixture(); f.bundle = withdrawalBundle("2000000"); f.bundle.withdrawals.push(withdrawalBundle("3000000",true).withdrawals[0]);
+  const p = await redeem(f); assert.equal(p.legSharesRaw,"2000000"); assert.equal(p.remainingTargetSharesRaw,"3000000"); assert.equal(p.steps.length,1);
+  f.treasury=null; assert.equal((await redeem(f)).cost.rentLamports,"2039280");
+});
+test("withdrawal rejects invalid percentages, shares, insufficient balances and route substitution", async () => {
+  const f = await withdrawalFixture();
+  for (const selection of [{},{ shares:"all",percent:"50" },{ percent:"0" },{ percent:"100.01" },{ percent:50 },{ percent:"0.001" },{ shares:"0" },{ shares:"18446744073709551616" }]) await assert.rejects(() => redeem(f,selection));
+  await rejects(() => redeem(f,{ shares:"10000001" }),"INSUFFICIENT_SHARES");
+  await rejects(() => kaminoWithdrawalPlan({},MOBILE_NETWORKS.devnet,owner,{shares:"all"},f.builder),"PROTOCOL_UNAVAILABLE");
+  const changes = [(b)=>b.withdrawals[0].shares="5000001",(b)=>b.withdrawals[0].discriminator="wrong",...[0,1,5,6,7,8,9,10,11,13].map(i=>(b)=>b.withdrawals[0].accounts[i].address=String(other)),(b)=>b.withdrawals[0].accounts[2].address=String(owner),(b)=>b.withdrawals[0].accounts[5].writable=false];
+  for(const mutate of changes){ const b=withdrawalBundle();mutate(b);assert.throws(()=>checkedKaminoWithdrawal(b,a.safe,owner,BigInt(5000000)),err=>err.code==="INVALID_KAMINO_RESPONSE"); }
+});
+test("zero shares, tiny percentage, wrong treasury state and failed simulation are explicit",async()=>{
+  const f=await withdrawalFixture();f.kamino[3]=tokenInfo(sharesMint,a.safe,BigInt(0));
+  const empty=await redeem(f,{shares:"all"});assert.equal(empty.status,"redeemed");assert.equal(empty.steps.length,0);assert.equal(empty.next.amount,"all");
+  await rejects(()=>redeem(f,{percent:"50"}),"AMOUNT_BELOW_MINIMUM");
+  f.kamino[3]=tokenInfo(sharesMint,a.safe);f.treasury=tokenInfo(a.mint,executor);
+  await rejects(()=>redeem(f),"INVALID_ACCOUNT");
+  f.treasury=tokenInfo(a.mint,other);f.connection.simulateTransaction=async()=>({context:{slot:45},value:{err:{InstructionError:[2,"Custom"]}}});
+  await rejects(()=>redeem(f),"SIMULATION_FAILED");
+});
+const signature=bs58.encode(new Uint8Array(64).fill(7));
+async function receiptFixture(){
+  const f=await withdrawalFixture(),p=await redeem(f);
+  const message=VersionedTransaction.deserialize(Buffer.from(p.steps[0].transaction,"base64")).message;
+  const index=(key)=>message.staticAccountKeys.findIndex(k=>k.equals(key));
+  const balance=(key,mint,amount)=>({accountIndex:index(key),mint:String(mint),owner:String(a.safe),uiTokenAmount:{amount:String(amount),decimals:6,uiAmount:null,uiAmountString:"0"}});
+  f.receipt={slot:40,transaction:{message,signatures:[signature]},meta:{err:null,loadedAddresses:{writable:[],readonly:[]},preTokenBalances:[balance(a.ata,a.mint,10000000),balance(sharesAta,sharesMint,10000000)],postTokenBalances:[balance(a.ata,a.mint,14999500),balance(sharesAta,sharesMint,5000000)]}};
+  f.connection.getTransaction=async()=>f.receipt;
+  f.connection.simulateTransaction=async(tx)=>{f.tx=tx;return{context:{slot:45},value:{err:null,unitsConsumed:12000}}};
+  return f;
+}
+test("partial return uses confirmed net USDC after fees and only the same owner's ATA",async()=>{
+  const f=await receiptFixture();const p=await kaminoReturnPlan(f.connection,network,owner,signature);
+  assert.equal(p.netUsdc,"4.999500");assert.equal(p.amountRaw,"4999500");assert.equal(p.burnedSharesRaw,"5000000");assert.equal(p.destination,String(a.ownerAta));
+  const ix=instructions(p).find(ix=>ix.programId.equals(a.program));assert.equal(ixCoder.decode(ix.data).name,"withdraw");assert.equal(String(ixCoder.decode(ix.data).data.amount),"4999500");
+});
+test("return refuses missing, failed, unrelated, incomplete and stale receipts",async()=>{
+  const f=await receiptFixture();await rejects(()=>kaminoReturnPlan(f.connection,network,owner,"bad"),"INVALID_SIGNATURE");
+  const good=structuredClone(f.receipt.meta);
+  f.receipt.meta.err={InstructionError:[1,"Custom"]};await rejects(()=>kaminoReturnPlan(f.connection,network,owner,signature),"INVALID_REDEMPTION");
+  f.receipt.meta=structuredClone(good);f.receipt.meta.postTokenBalances=[];await rejects(()=>kaminoReturnPlan(f.connection,network,owner,signature),"INVALID_REDEMPTION");
+  f.receipt.meta=structuredClone(good);f.receipt.slot=100;await rejects(()=>kaminoReturnPlan(f.connection,network,owner,signature),"RPC_BEHIND_REDEMPTION");
+  f.receipt=null;await rejects(()=>kaminoReturnPlan(f.connection,network,owner,signature),"REDEMPTION_NOT_CONFIRMED");
+  const wrong=await receiptFixture();await rejects(()=>kaminoReturnPlan(wrong.connection,network,other,signature),"INVALID_REDEMPTION");
 });

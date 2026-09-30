@@ -1,10 +1,10 @@
-# Yield AI v2: Solana wallet Safe API v1 — USDC cycle and Kamino deposits
+# Yield AI v2: Solana wallet Safe API v1 — USDC and Kamino cycle
 
-Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, withdraw idle USDC back to the owner, and owner-deposit into the current Mainnet Kamino USDC vault from either Safe or wallet. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Kamino withdrawal plans, standalone allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
+Updated: 2026-10-01. Scope: read/create a personal Safe, deposit wallet USDC into it, withdraw idle USDC back to the owner, owner-deposit into the current Mainnet Kamino USDC vault from Safe or wallet, redeem shares partially/fully and return confirmed net proceeds. Each ready action returns one unsigned transaction. The existing Solana contract ABI is retained. Standalone allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
 ## Deployment and trust boundary
 
-Kamino API branch: `codex/yield-ai-v2-kamino-api`, based on the Solana API from `codex/yield-ai-v2-cctp-mainnet`. PR target after merging #22: `codex/yield-ai-v2-cctp-engine`. `main` does not yet contain the complete tested executor policy. Keep this API and EVM work in separate branches/worktrees.
+Withdrawal branch: `codex/yield-ai-v2-kamino-withdraw-api`, stacked on deposit PR #26 (`codex/yield-ai-v2-kamino-api`). Withdrawal PR #27 targets that deposit branch; #26 targets `codex/yield-ai-v2-cctp-engine`. The broader API stack is not yet in `main`. Merge dependencies in order and keep EVM work in its separate branch/worktree.
 
 The server chooses one cluster with `V2_MOBILE_CLUSTER=devnet|mainnet` (default `devnet`). The caller must explicitly repeat that cluster. Private RPC variables: `V2_DEVNET_RPC_URL` for Devnet; `V2_MAINNET_RPC_URL` for Mainnet, with existing server-only Supanode header support. No program, mint, executor, signing key or arbitrary instruction is accepted from the caller. Do not put RPC credentials or server credentials in the mobile bundle.
 
@@ -21,7 +21,7 @@ Base URL: the deployment origin, followed by `/api/mobile/v1`. JSON responses ha
 
 ### GET /config
 
-Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits` is true on Mainnet only, `allocation` and `evmOwner` remain false, `withdrawalScope` is `idle_usdc`. `protocolRoutes` lists `kamino_usdc`, its fixed vault/program/shares mint, minimum deposit and `depositSources: ["safe", "wallet"]`; it is empty on Devnet. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
+Returns `version`, `network` (`cluster`, `chain`, `genesis`, `programId`, `usdcMint`), `supportedOwnerTypes: ["solana"]`, wallet signing/submission, and capabilities. Safe creation, wallet deposits and idle USDC withdrawals are enabled; `protocolDeposits` and `protocolWithdrawals` are true on Mainnet only, `allocation` and `evmOwner` remain false, ordinary `withdrawalScope` is `idle_usdc`. `protocolRoutes` lists `kamino_usdc`, its fixed vault/program/shares mint, minimum deposit, `depositSources: ["safe", "wallet"]`, `withdrawalSelectors: ["shares", "percent"]` and `withdrawalPhases: ["redeem", "return"]`; it is empty on Devnet. Capability flags describe implemented endpoint features; each plan still checks live state and simulates.
 
 ### GET /safes?ownerType=solana&address=OWNER&cluster=mainnet
 
@@ -130,7 +130,7 @@ The amount is Kamino's maximum input, not a guaranteed shares quote; the wallet 
 
 The compute limit is 400,000 CU, priority price zero. Quote includes current network fee and missing SPL ATA rent (including existing lamport top-ups). Fees/rent are paid in SOL by the owner. Do not assume zero rent on a new position. Follow the same signature persistence/timeout/expiry rules as ordinary deposits. If another device changes the allocation after this plan is built, a successful signed transaction restores the allocation in this plan; request a fresh plan after any settings change and serialize owner actions.
 
-**Exit boundary:** `/withdrawals/plan` still withdraws only idle USDC. It does not sell Kamino shares. Until a mobile Kamino withdrawal endpoint is added, owners use the existing `/v2/safe` interface for Kamino redemption and full exit. The mobile app must not label idle withdrawal as full portfolio withdrawal. Do not hide this exit route when enabling investment.
+**Exit boundary:** `/withdrawals/plan` still withdraws only idle USDC. Use the protocol withdrawal endpoint's redeem/return phases below for Kamino shares. The existing `/v2/safe` interface remains an owner exit route. A complete supported USDC/Kamino exit does not sell other token positions; show their remaining balances separately.
 
 ## Mobile flow
 
@@ -174,6 +174,10 @@ Error envelope: `{"error":{"code":"CODE","message":"...","details":{}}}` (`detai
 | TRANSACTION_TOO_LARGE | 422 | No plan returned; operator checks route, do not split it in the client |
 | SAFE_NOT_CREATED | 409 | Complete and confirm creation first |
 | INSUFFICIENT_USDC | 422 | Refresh the source balance; protocol assets are outside idle withdrawal |
+| INVALID_SHARES / INVALID_PERCENT / INVALID_SIGNATURE | 400 | Fix the withdrawal selector or receipt signature |
+| INSUFFICIENT_SHARES | 422 | Refresh shares; do not increase the target silently |
+| REDEMPTION_NOT_CONFIRMED / RPC_BEHIND_REDEMPTION | 409 | Wait/check the original signature and refresh RPC state |
+| INVALID_REDEMPTION | 422 | Do not sign; inspect the unsuccessful or unrelated receipt |
 | SIMULATION_FAILED | 422 | Refresh state; no transaction is returned |
 | RPC_CLUSTER_MISMATCH / PROGRAM_UNAVAILABLE / INVALID_ACCOUNT | 503 | Stop signing; operator investigates configuration/state |
 | EXECUTOR_UNAVAILABLE | 503 | Admin must initialize/unpause the approved default |
@@ -197,6 +201,61 @@ The read-only probe supports `MOBILE_PROBE_OPERATION=create|deposit|withdraw|kam
 - Four local HTTP integration tests passed: existing creation/idle cycle, both Kamino sources, config capabilities and rejection of vault/recipient overrides, invalid source/amount and network mismatch.
 - Full Next.js production compilation passed, including the new dynamic Kamino route. Local legacy static generation initially hit `429` on the default public Solana RPC; rebuilding with `NEXT_PUBLIC_RPC_URL=https://solana-rpc.publicnode.com` succeeded. This public RPC override was local only; Production environment was not changed. The mobile API simulations used the configured private Mainnet RPC.
 - Read-only Mainnet unsigned simulations on `FuDC…`, 1 USDC: Safe source slot `452040526`, `136568` CU; wallet source slot `452040533`, `149472` CU. Existing ATAs required no new rent; each network fee quote was `5000` lamports (`0.000005 SOL`), priority fee zero. Nothing signed/sent, no funds moved. These are independent snapshot simulations, not a newly funded full cycle.
+
+## Kamino withdrawal API: partial and full supported USDC exit
+
+`POST /api/mobile/v1/protocols/kamino/withdrawals/plan` is Mainnet-only and owner-signed. It issues **one current step**, not a batch of transactions based on balances that do not yet exist. The deployed contract needs no upgrade for these owner operations. `/withdrawals/plan` still means idle USDC only; `/config` now advertises `protocolWithdrawals` and the Kamino selectors/phases separately.
+
+### 1. Redeem a snapshot share target
+
+```json
+{
+  "cluster": "mainnet",
+  "owner": { "type": "solana", "address": "YOUR_SOLANA_WALLET" },
+  "phase": "redeem",
+  "percent": "50"
+}
+```
+
+Use exactly one selector: `percent` (decimal string >0 and <=100, at most two decimals), or `shares` (positive raw u64 string, or `"all"`). Percentage refers to **Kamino shares**, excluding idle USDC and other positions; its raw target rounds down. A percentage rounding to zero returns `AMOUNT_BELOW_MINIMUM`. This version does not promise an exact USDC exit amount from an unvalued share balance.
+
+The ready response includes `sharesBeforeRaw`, `targetSharesRaw`, `legSharesRaw`, `remainingTargetSharesRaw`, `performanceFeeBps`, `destination` (Safe USDC ATA), `allocationBpsAfter`, the usual cost/simulation/blockhash fields and one `kamino_redeem` step. SDK liquidity can require several reserve legs; only its first checked leg is included. All-share sentinels are replaced by the bounded snapshot target, preventing a later deposit from silently increasing the signed redemption amount. The contract's positive-profit fee is paid to its configured treasury; allocation is not changed.
+
+If `shares:"all"` finds zero shares, response is `status:"redeemed"`, `steps:[]`, with `next` pointing to the existing idle `/withdrawals/plan` using `amount:"all"`. This means the Kamino position is empty; it does **not** mean USDC was transferred to the owner or other assets were sold.
+
+### 2. Return the confirmed net proceeds to the wallet
+
+Confirm the redemption signature first, then request:
+
+```json
+{
+  "cluster": "mainnet",
+  "owner": { "type": "solana", "address": "YOUR_SOLANA_WALLET" },
+  "phase": "return",
+  "redemptionSignature": "CONFIRMED_SOLANA_TRANSACTION_SIGNATURE"
+}
+```
+
+The API reads the confirmed receipt and verifies success, sole owner signer, the typed Safe Kamino withdrawal, Safe identity, permitted outer instructions, and Safe USDC/shares pre/post balances. `netUsdc` is the actual Safe USDC increase **after** the performance fee; `burnedSharesRaw` is the actual share decrease. It builds one fixed-amount owner `withdraw` to the same owner's canonical USDC ATA, creating that ATA if absent and quoting its rent. It never accepts a destination override or a client-supplied receipt balance. A zero net amount returns `empty` with no transaction. Missing receipt is `REDEMPTION_NOT_CONFIRMED` (409); stale RPC state is `RPC_BEHIND_REDEMPTION` (409); failed/unrelated/incomplete receipts are `INVALID_REDEMPTION` (422). Insufficient current idle USDC returns the existing `INSUFFICIENT_USDC`, not an invented successful return.
+
+### Continuation and recovery
+
+Persist an operation journal on the device: network, owner, Safe, the **initial target raw shares**, outstanding raw shares, every redemption signature, actual burned shares, and every return signature with its blockhash/last-valid height. Reuse the same owner/network throughout.
+
+1. After a redemption confirms, build its return using the receipt signature. Persist the return signature immediately after submission and confirm it.
+2. Subtract **confirmed** `burnedSharesRaw` from the outstanding target. Request the next redemption with `shares:"REMAINING_RAW_SHARES"`. Do not repeat a percentage; it would calculate a different target from the smaller position. A returned `remainingTargetSharesRaw` is only the unsigned plan's expectation, until its receipt proves the burn.
+3. Stop if shares do not decrease; cap automatic redemption attempts at eight and present remaining holdings for manual recovery. Changing liquidity or the exact bounded final-leg simulation can prevent an immediate complete exit; do not bypass checks with an unbounded all-shares instruction.
+4. For a full supported exit, once the initial Kamino target is exhausted, separately request `/withdrawals/plan` with `amount:"all"` to return idle USDC that existed before the redemptions or any remaining USDC dust. Read fresh state and confirm that transfer. Other token positions remain outside this scope.
+5. Partial exit returns only each redemption's net proceeds. Existing idle USDC stays in Safe. Its amount can instead be withdrawn explicitly through `/withdrawals/plan` when the owner requests it.
+
+These plans are **not idempotent across newly signed transactions**. A receipt identifies the redemption, not whether a later wallet return has already occurred. Never automatically resubmit `phase:"return"` after a timeout or on restart: first check the persisted return signature and its expiry. Returning again after a successful return could consume other idle USDC if the owner signs it again. If a journal was lost, inspect the owner's transaction history before rebuilding a return; the API does not maintain a durable job ledger. A failed/declined return leaves redeemed USDC in Safe, available through the existing idle withdrawal API.
+
+### Withdrawal verification (2026-10-01)
+
+- 33 deterministic tests passed, including available/reserve legs, partial percentages, exact raw target continuation, bounded all-share sentinel, one owner signer, legacy account layout, unchanged allocation, treasury rent, SDK account substitution, invalid selectors, insufficient shares, simulation failures, net-after-fee return, missing/failed/unrelated/incomplete receipts and stale RPC state.
+- Read-only current SDK probe for `FuDC…`, requested `1000000` raw shares: one available-liquidity leg, 18 accounts and one lookup table; the new validator accepted its current layout. The pilot currently has no shares, so this is an SDK account-layout check, **not a successful funded withdrawal simulation or live round trip**. Run `V2_MAINNET_RPC_URL=... node --experimental-strip-types scripts/mobile-kamino-withdraw-probe.mjs` from `web`, keeping the RPC secret in the environment.
+- Wallet-signed funded partial/full API exit and interruption recovery remain acceptance checks before calling the new mobile flow tested with real funds. Existing earlier owner UI Mainnet withdrawals do not establish this API's new receipt-return flow.
+- TypeScript and the full Next.js production build passed. Five local HTTP integration tests passed, including both existing deposit sources, the idle wallet cycle, a zero-shares Kamino exit and invalid exit selectors/receipt input. These HTTP requests did not sign or send transactions.
 
 ## EVM extension and parallel work
 

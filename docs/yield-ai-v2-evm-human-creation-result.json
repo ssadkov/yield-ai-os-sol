@@ -1,0 +1,61 @@
+{
+  "status": "creation_finalized_independently_verified",
+  "cluster": "devnet",
+  "signature": "2ShNecBfiDZMDW8NUKN1mAJFHkTUW71RDuyMzWQ8s9T4hzWBaLXFBCnAaCLk4ABKrVkD8Gyo1bLxiJrEyrnBoXtJ",
+  "finalizedSlot": 506217071,
+  "blockTime": 1790844747,
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "owner": "0xb659DA13418527601C52D4220536C12397F20855",
+  "safe": "bn4KYuYg6fvbqPEh13rC1Exr5HuPCC455KiC1dTEnEr",
+  "ata": "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+  "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "rentPayer": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "layoutBytes": 705,
+  "creationNonce": "1",
+  "currentNonce": "1",
+  "usdcRaw": "0",
+  "allocationBps": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "feeLamports": 5000,
+  "rentLamports": 5720080,
+  "totalSponsorDebitLamports": 5725080,
+  "sponsorBeforeLamports": 50000000,
+  "sponsorAfterLamports": 44274920,
+  "sponsorCurrentLamports": 44274920,
+  "sourceFinalizedReadSlot": 506217357,
+  "instructions": [
+    {
+      "name": "create_evm_safe_authorized",
+      "nonce": "1",
+      "deadline": "1790845340",
+      "accounts": [
+        "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+        "bn4KYuYg6fvbqPEh13rC1Exr5HuPCC455KiC1dTEnEr",
+        "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+        "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "11111111111111111111111111111111"
+      ]
+    }
+  ],
+  "verifiedAt": "2026-10-01T08:53:36.059Z",
+  "signerFilesRead": false,
+  "relayer": {
+    "id": "0xbad2712e251ac087aed37a34a145cf093bb41db35ad41dc360927683628dca6d",
+    "state": "finalized",
+    "signature": "2ShNecBfiDZMDW8NUKN1mAJFHkTUW71RDuyMzWQ8s9T4hzWBaLXFBCnAaCLk4ABKrVkD8Gyo1bLxiJrEyrnBoXtJ",
+    "slot": 506217071,
+    "actualCostLamports": 5725080,
+    "planHash": "463452cc5a677dde26b7b8399c13133196aa565152f300e716466a6768aaacf9",
+    "deployedSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98"
+  }
+}

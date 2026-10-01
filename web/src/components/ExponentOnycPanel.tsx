@@ -95,6 +95,10 @@ export function ExponentOnycPanel() {
 
   async function prepare() {
     if (!owner || !mainnet || (action !== "setup" && !raw) || (trade && !currentQuote)) return;
+    if (trade && currentQuote?.position === null) {
+      setStatus("Set up the Exponent position first, then refresh this quote.");
+      return;
+    }
     setBusy(true); setPrepared(null); setStatus("Building and simulating an unsigned transaction…");
     try {
       const body = action === "setup" ? { action, owner }
@@ -193,6 +197,7 @@ export function ExponentOnycPanel() {
         {currentQuote.lossFloorUsdc && <><dt>Executor loss floor</dt><dd>{fromRaw(currentQuote.lossFloorUsdc, 6)} USDC</dd></>}
       </dl>
       {currentQuote.maturityPreview && <p className="text-muted-foreground">At current NAV/liquidity: {fromRaw(currentQuote.maturityPreview.onycRaw, 9)} ONyc or {fromRaw(currentQuote.maturityPreview.usdcAtCurrentDexRaw, 6)} USDC. Future redemption value is unknown.</p>}
+      {currentQuote.position === null && <p className="text-amber-200">This Safe has no Exponent position yet. Select <button className="underline" type="button" onClick={() => setAction("setup")}>Set up position</button>, prepare and sign it, then request a fresh quote.</p>}
       {currentQuote.previewOnly && <p className="text-amber-200">Redemption is unavailable until {new Date(MATURITY * 1000).toUTCString()}.</p>}
       {!currentQuote.executionReady && <p className="text-amber-200">The reviewed Safe upgrade is not deployed yet. Quote is read-only.</p>}
     </section>}

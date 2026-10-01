@@ -28,7 +28,7 @@ type Quote = {
 };
 type Prepared = {
   unsignedTransaction: string; blockhash: string; lastValidBlockHeight: number; requiredSigners: string[];
-  simulation: { error: unknown; unitsConsumed: number | null }; executionReady: boolean;
+  simulation: { error: unknown; unitsConsumed: number | null; logs?: string[] }; executionReady: boolean;
   deploymentStatus: string; networkFeeLamports: number | null; quote?: Quote; minimumOutputRaw?: string; intentKey?: string;
 };
 
@@ -72,6 +72,7 @@ export function ExponentOnycPanel() {
   const intentKey = `${owner}|${action}|${asset}|${raw ?? ""}`;
   const currentQuote = quote?.owner === owner && quote.action === action && quote.asset === asset && quote.input.raw === raw ? quote : null;
   const currentPrepared = prepared?.intentKey === intentKey ? prepared : null;
+  const routeDisabled = currentPrepared?.simulation.logs?.some((line) => line.includes("Error Code: RouteDisabled")) ?? false;
   const mainnet = genesis === MAINNET_GENESIS;
   const card = "rounded-lg border border-border bg-card p-5 space-y-4";
   const button = "rounded-md border border-border px-3 py-2 text-sm disabled:opacity-40 disabled:cursor-not-allowed";
@@ -223,7 +224,8 @@ export function ExponentOnycPanel() {
       <h2 className="text-lg font-semibold">Transaction review</h2>
       <p>Wallet: {owner} · Network fee: {currentPrepared.networkFeeLamports ?? "unknown"} lamports · Simulation: {currentPrepared.simulation.error === null ? "passed" : "failed"} ({currentPrepared.simulation.unitsConsumed ?? "?"} CU).</p>
       {currentPrepared.quote && <p>Fresh expected: {fromRaw(currentPrepared.quote.output.expectedRaw, action === "buy" ? 9 : asset === "USDC" ? 6 : 9)} {action === "buy" ? "PT" : asset}; enforced minimum: {fromRaw(currentPrepared.minimumOutputRaw ?? currentPrepared.quote.output.minRaw, action === "buy" ? 9 : asset === "USDC" ? 6 : 9)}.</p>}
-      <p className="text-muted-foreground">{currentPrepared.deploymentStatus}. Your wallet will show the final signature request. Rent for new token accounts may be additional.</p>
+      <p className="text-muted-foreground">{currentPrepared.deploymentStatus}. {currentPrepared.executionReady && currentPrepared.simulation.error === null ? "Your wallet will show the final signature request. Rent for new token accounts may be additional." : "Signing remains disabled until the simulation passes."}</p>
+      {routeDisabled && <p className="text-amber-200">ONyc allocation is 0%. On the <Link className="underline" href="/v2/safe">Safe screen</Link>, set ONyc above 0% in Allocation, sign Save allocation, then prepare a fresh buy. No transaction was sent.</p>}
       <button className={`${button} bg-primary text-primary-foreground`} type="button" disabled={busy || !signTransaction || !currentPrepared.executionReady || currentPrepared.simulation.error !== null || !mainnet}
         onClick={() => void signAndSend()}>Sign in {wallet?.adapter.name ?? "Solana wallet"} and send</button>
     </section>}

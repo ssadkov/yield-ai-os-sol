@@ -35,11 +35,12 @@ async function serialize(connection:Connection,payer:PublicKey,ixs:TransactionIn
     instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:1_400_000}),ComputeBudgetProgram.setComputeUnitPrice({microLamports:10_000}),...ixs]}).compileToV0Message(tables));
   const bytes=tx.serialize();if(bytes.length>1232)throw Error('atomic route exceeds Solana transaction size');
   const sim=await connection.simulateTransaction(tx,{sigVerify:false,replaceRecentBlockhash:true,commitment:'confirmed'});
-  const executionReady=sim.value.err===null&&await exponentDeploymentReady(connection);
+  const deployed=await exponentDeploymentReady(connection);
+  const executionReady=sim.value.err===null&&deployed;
   return {unsignedTransaction:Buffer.from(bytes).toString('base64'),blockhash,lastValidBlockHeight,serializedBytes:bytes.length,requiredSigners:[payer.toBase58()],
     simulation:{error:sim.value.err,unitsConsumed:sim.value.unitsConsumed??null,logs:sim.value.logs??[]},
     networkFeeLamports:(await connection.getFeeForMessage(tx.message,'confirmed')).value,executionReady,
-    deploymentStatus:executionReady?'Reviewed Safe ELF verified on Mainnet':'Reviewed Safe ELF not deployed or transaction simulation failed'};
+    deploymentStatus:!deployed?'Reviewed Safe ELF not deployed on Mainnet':sim.value.err===null?'Reviewed Safe ELF verified on Mainnet':'Transaction simulation failed; Safe ELF verified on Mainnet'};
 }
 /** Preparation is separate; neither SDK nor this API ever signs or sends a transaction. */
 export async function unsignedSetup(connection:Connection,ownerString:string,lossBps=500,slippageBps=50) {

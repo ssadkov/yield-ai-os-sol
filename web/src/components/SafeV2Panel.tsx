@@ -446,7 +446,7 @@ export function SafeV2Panel() {
 
       {showPilotAllocation && safe?.exists && <section className={card}>
         <h2 className="flex items-center gap-2 text-lg font-semibold"><SlidersHorizontal className="h-4 w-4" /> Allocation</h2>
-        <p className="text-muted-foreground">Your target split, stored in the Safe. For the executor pilot, set Kamino USDC to 50% and ONyc to 0%; saving only updates the target and moves no USDC.</p>
+        <p className="text-muted-foreground">Your target split, stored in the Safe. Set ONyc above 0% to enable PT purchases; you can keep a Kamino share as long as the total is at most 100%. Saving only updates targets and moves no USDC.</p>
         {!safe.allocationBps && <p className="text-amber-200">This Safe was created before allocation targets existed; saving will initialise them.</p>}
         {ROUTES.map((route, i) => <label key={route.key} className="block space-y-1">
           <span className="flex justify-between"><span>{route.label}</span><span className="tabular-nums">{allocationDraft[i]}%</span></span>

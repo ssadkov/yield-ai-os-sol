@@ -1,4 +1,4 @@
-import { PublicKey, VersionedTransaction } from "@solana/web3.js";
+import { PublicKey, VersionedMessage, VersionedTransaction } from "@solana/web3.js";
 
 /** Accept wallet-specific transaction objects only after re-parsing and verifying their bytes. */
 export async function verifyOwnerSignedTransaction(
@@ -15,7 +15,15 @@ export async function verifyOwnerSignedTransaction(
   const message = signed.message.serialize();
   if (message.length !== expectedMessage.length
     || message.some((byte, index) => byte !== expectedMessage[index])) {
-    throw new Error("Wallet changed the transaction message");
+    const expected = VersionedMessage.deserialize(expectedMessage);
+    const firstByte = message.findIndex((byte, index) => byte !== expectedMessage[index]);
+    const accountsChanged = signed.message.staticAccountKeys.map((key) => key.toBase58()).join(",")
+      !== expected.staticAccountKeys.map((key) => key.toBase58()).join(",");
+    throw new Error(
+      `Wallet changed the transaction message (first byte ${firstByte < 0 ? Math.min(message.length, expectedMessage.length) : firstByte}; `
+      + `length ${expectedMessage.length}→${message.length}; blockhash changed: ${signed.message.recentBlockhash !== expected.recentBlockhash}; `
+      + `accounts changed: ${accountsChanged}). Nothing was sent.`,
+    );
   }
   if (signed.message.header.numRequiredSignatures !== 1 || signed.signatures.length !== 1) {
     throw new Error("Wallet returned an unexpected signer count");

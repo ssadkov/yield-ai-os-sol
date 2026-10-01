@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import type { StandardWalletAdapter } from "@solana/wallet-adapter-base";
 import { ComputeBudgetProgram, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PROGRAM_ID } from "@/lib/constants";
@@ -14,6 +15,7 @@ const WalletMultiButton = dynamic(
   { ssr: false },
 );
 const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+const SOLANA_SIGN_TRANSACTION = "solana:signTransaction";
 const MATURITY = Date.parse("2027-01-10T13:00:00Z") / 1000;
 type Action = "setup" | "deposit_onyc" | "withdraw_onyc" | "buy" | "sell" | "redeem";
 type Asset = "USDC" | "ONYC";
@@ -137,8 +139,20 @@ export function ExponentOnycPanel() {
         throw new Error("Unexpected transaction program");
       }
       const message = tx.message.serialize();
-      const walletSigned = await signTransaction(tx);
-      const signed = await verifyOwnerSignedTransaction(walletSigned.serialize(), message, publicKey);
+      const standardAdapter = wallet && "standard" in wallet.adapter && wallet.adapter.standard === true
+        ? wallet.adapter as StandardWalletAdapter : null;
+      const standardWallet = standardAdapter?.wallet;
+      const standardAccount = standardWallet?.accounts.find((account) => account.address === owner);
+      let signedBytes: Uint8Array;
+      if (standardWallet && standardAccount && SOLANA_SIGN_TRANSACTION in standardWallet.features) {
+        const [result] = await standardWallet.features[SOLANA_SIGN_TRANSACTION].signTransaction({
+          account: standardAccount, transaction: tx.serialize(), chain: "solana:mainnet",
+        });
+        signedBytes = result.signedTransaction;
+      } else {
+        signedBytes = (await signTransaction(tx)).serialize();
+      }
+      const signed = await verifyOwnerSignedTransaction(signedBytes, message, publicKey);
       const sent = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
       setSignature(sent); setStatus(`Sent ${sent}. Waiting for confirmation…`);
       for (let attempt = 0; attempt < 30; attempt++) {
@@ -151,8 +165,13 @@ export function ExponentOnycPanel() {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
       setStatus(`Submitted: ${sent}. Confirmation is pending; inspect the signature before retrying.`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
-    finally { setBusy(false); }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const isStandard = wallet && "standard" in wallet.adapter && wallet.adapter.standard === true;
+      setStatus(detail.startsWith("Wallet changed the transaction message")
+        ? `${detail} Adapter: ${wallet?.adapter.name ?? "unknown"}; Wallet Standard: ${isStandard ? "yes" : "no"}.`
+        : detail);
+    } finally { setBusy(false); }
   }
 
   return <main className="mx-auto max-w-3xl space-y-5 p-5 text-sm">

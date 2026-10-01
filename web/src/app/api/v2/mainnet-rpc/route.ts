@@ -17,7 +17,17 @@ export async function POST(request: Request) {
   const origin = request.headers.get("origin");
   if (origin) {
     let sameOrigin = false;
-    try { sameOrigin = new URL(origin).origin === new URL(request.url).origin; } catch { /* reject */ }
+    try {
+      const browser = new URL(origin);
+      const server = new URL(request.url);
+      const loopback = new Set(["localhost", "127.0.0.1"]);
+      // Next dev normalizes request.url to localhost even when the browser uses 127.0.0.1.
+      sameOrigin = browser.origin === server.origin
+        || (process.env.NODE_ENV === "development"
+          && browser.protocol === "http:" && server.protocol === "http:"
+          && browser.port === server.port
+          && loopback.has(browser.hostname) && loopback.has(server.hostname));
+    } catch { /* reject */ }
     if (!sameOrigin) return NextResponse.json({ error: "cross-origin request rejected" }, { status: 403 });
   }
   if (Number(request.headers.get("content-length") || 0) > MAX_REQUEST_BYTES) {

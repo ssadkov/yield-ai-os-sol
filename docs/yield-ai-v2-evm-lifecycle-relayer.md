@@ -9,7 +9,7 @@ After the reviewed lifecycle upgrade and sponsor funding are independently verif
 
 ## Current state and gates
 
-Branch: codex/yield-ai-v2-evm-owner, base commit bbc23fb. This source release is tracked on the EVM branch in PR23. Lifecycle upgrade and sponsor funding finalized; the local bounded automatic service is enabled. Fresh human-wallet creation is finalized; the new deposit/cancellation/recovery steps remain pending. The main checkout and Solana API PR #24 were not edited.
+Branch: codex/yield-ai-v2-evm-owner, base commit bbc23fb. This source release is tracked on the EVM branch in PR23. Lifecycle upgrade and sponsor funding finalized; the local bounded automatic service is enabled. Fresh human-wallet creation, a 1-USDC deposit and full owner-authorized withdrawal through the dedicated relayer are finalized. Current new Safe: 0 USDC, nonce 2. See [completed recovery cycle](yield-ai-v2-evm-new-owner-withdraw-result.md). Live cancellation of a competing pending intent remains unperformed. The main checkout and Solana API PR #24 were not edited.
 
 The deployed Devnet lifecycle ELF is 695488 bytes, SHA256 4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98. The upgrade finalized at slot 506207702; independent readback verified hash, authority, zero padding, buffer refund and unchanged existing Safe. See [release evidence](yield-ai-v2-evm-lifecycle-release-result.md).
 
@@ -74,7 +74,7 @@ Reproduce from WSL in the EVM worktree (NO_DNA=1): cargo test -p yield-vault --f
 
 The lifecycle upgrade and 0.05 test-SOL funding both finalized. See [exact transaction receipts, costs, independent hash/readback and current gates](yield-ai-v2-evm-lifecycle-release-result.md). Six additional live-program simulations passed without sending or creating test accounts. The configured service now pins the new hash/size, allows lifecycle and executes allowlisted owner-signed intents automatically within the existing limits. Its service signer has no upgrade authority.
 
-A second human EVM account has now been added for the fresh create/deposit/cancel/withdraw rehearsal: 0xb659DA13418527601C52D4220536C12397F20855. Its new Safe creation is finalized with nonce 1 and zero USDC; see [human creation receipt](yield-ai-v2-evm-human-creation-result.md). The allowlist remains narrow. The dedicated service finalized the new human-owner creation; previous full recovery used the manual payer path. The new Safe full-recovery rehearsal remains pending. Keep this distinction when reporting readiness.
+A second human EVM account has now been added for the fresh create/deposit/cancel/withdraw rehearsal: 0xb659DA13418527601C52D4220536C12397F20855. Its new Safe creation is finalized with nonce 1 and zero USDC; see [human creation receipt](yield-ai-v2-evm-human-creation-result.md). The allowlist remains narrow. The dedicated service finalized both the new human-owner creation and full 1-USDC withdrawal. The manual operator only supplied the test-USDC deposit. Current new Safe: 0 USDC, nonce 2; recipient 2 USDC. See [completed recovery cycle](yield-ai-v2-evm-new-owner-withdraw-result.md). Live cancellation of a competing pending intent remains unperformed; cancellation and journal restart have local SBF/test evidence.
 
 ## Upgrade governance proposal — not activated
 

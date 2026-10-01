@@ -13,4 +13,4 @@
 
 The first fresh human-wallet creation through the bounded automatic service is now confirmed. No additional Devnet chat approval was required. The EVM owner signature remained mandatory; the service sponsor paid rent/fees and gained no token withdrawal authority. This readback loaded no signer. The previous readiness snapshot recorded absent accounts before this transaction and remains historical.
 
-Next evidence still required for this new Safe: a small test-USDC deposit, next-nonce cancellation/stale-intent rejection, and fresh owner-authorized full recovery through the dedicated relayer. Ordinary funding/CCTP, Mainnet rollout and Safe close/refunds remain disabled.
+The small 1-test-USDC deposit subsequently finalized; see [deposit receipt](yield-ai-v2-evm-new-owner-deposit-result.md). Full owner-authorized withdrawal subsequently finalized through the dedicated relayer: current Safe holds 0 USDC, nonce 2. See [completed recovery cycle](yield-ai-v2-evm-new-owner-withdraw-result.md). Live next-nonce cancellation of a competing intent remains unperformed. Ordinary funding/CCTP, Mainnet rollout and Safe close/refunds remain disabled.

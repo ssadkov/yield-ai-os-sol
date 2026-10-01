@@ -1,0 +1,53 @@
+{
+  "status": "new_owner_full_withdrawal_finalized_independently_verified",
+  "cluster": "devnet",
+  "signature": "4REERRgW9v2E6Dm79RLfCzrdrUEV9a6FqVW9xFncJhwsv96j8UnKCuw4xWwTGdnUypoABp9SmRf265h6XHn5onAW",
+  "finalizedSlot": 506221649,
+  "blockTime": 1790845823,
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "owner": "0xb659DA13418527601C52D4220536C12397F20855",
+  "safe": "bn4KYuYg6fvbqPEh13rC1Exr5HuPCC455KiC1dTEnEr",
+  "sourceAta": "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+  "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "amountRaw": "1000000",
+  "recipientOwner": "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2",
+  "recipientTokenAccount": "eLJeneXAJnyyBanwkQ64JZGaZLGmkVP4x92JBEhzSyw",
+  "intentNonce": "2",
+  "intentDeadline": "1790846411",
+  "safeNonceAfter": "2",
+  "safeUsdcRaw": "0",
+  "recipientUsdcRaw": "2000000",
+  "feePayer": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "feeLamports": 5000,
+  "rentLamports": 0,
+  "sponsorBeforeLamports": 44274920,
+  "sponsorAfterLamports": 44269920,
+  "sourceFinalizedReadSlot": 506222172,
+  "tokenDeltas": [
+    {
+      "account": "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+      "beforeRaw": "1000000",
+      "afterRaw": "0",
+      "deltaRaw": "-1000000"
+    },
+    {
+      "account": "eLJeneXAJnyyBanwkQ64JZGaZLGmkVP4x92JBEhzSyw",
+      "beforeRaw": "1000000",
+      "afterRaw": "2000000",
+      "deltaRaw": "1000000"
+    }
+  ],
+  "deployedElfSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98",
+  "verifiedAt": "2026-10-01T09:12:27.969Z",
+  "signerFilesRead": false,
+  "relayer": {
+    "id": "0x6f3c591504529ffb7cb7f070bb1b9dd1e3121916909dbcb803ff849634368636",
+    "state": "finalized",
+    "signature": "4REERRgW9v2E6Dm79RLfCzrdrUEV9a6FqVW9xFncJhwsv96j8UnKCuw4xWwTGdnUypoABp9SmRf265h6XHn5onAW",
+    "slot": 506221649,
+    "actualCostLamports": 5000,
+    "planHash": "d307a9ead3f31a6c1785bb3c9c690a42d087b37f9cd1496722ff8a1cf503ef2f",
+    "deployedSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98"
+  },
+  "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG"
+}

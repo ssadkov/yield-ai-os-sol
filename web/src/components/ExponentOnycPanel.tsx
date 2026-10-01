@@ -116,7 +116,7 @@ export function ExponentOnycPanel() {
       }
       setPrepared({ ...next, intentKey });
       setStatus(next.executionReady && next.simulation.error === null
-        ? "Simulation passed. Review the values below, then sign in your Solana wallet."
+        ? "Simulation passed, but nothing has been sent. Click Sign in your wallet and send below, then wait for confirmation."
         : `Signing disabled: ${next.deploymentStatus}. Simulation: ${JSON.stringify(next.simulation.error)}.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
@@ -170,14 +170,15 @@ export function ExponentOnycPanel() {
           <option value="setup">Set up position</option><option value="deposit_onyc">Deposit ONyc</option><option value="withdraw_onyc">Withdraw ONyc</option>
           <option value="buy">Buy PT</option><option value="sell">Sell PT early</option><option value="redeem">Redeem PT</option>
         </select></label>
-        <label className="space-y-1"><span className="block">{action === "buy" ? "Input asset" : trade ? "Output asset" : "Asset"}</span>
+        {action !== "setup" && <label className="space-y-1"><span className="block">{action === "buy" ? "Input asset" : trade ? "Output asset" : "Asset"}</span>
           <select className="w-full rounded-md border border-border bg-card p-2" value={trade ? asset : "ONYC"} disabled={!trade || busy} onChange={(event) => setAsset(event.target.value as Asset)}>
             <option value="USDC">USDC</option><option value="ONYC">ONyc</option>
-          </select></label>
-        <label className="space-y-1"><span className="block">{action === "sell" || action === "redeem" ? "PT amount" : action === "setup" ? "Amount" : action === "buy" ? `${asset} amount` : "ONyc amount"}</span>
-          <input className="w-full rounded-md border border-border bg-transparent p-2" inputMode="decimal" value={amount} disabled={action === "setup" || busy}
-            placeholder={action === "setup" ? "Not needed" : "0.00"} onChange={(event) => setAmount(event.target.value)} /></label>
+          </select></label>}
+        {action !== "setup" && <label className="space-y-1"><span className="block">{action === "sell" || action === "redeem" ? "PT amount" : action === "buy" ? `${asset} amount` : "ONyc amount"}</span>
+          <input className="w-full rounded-md border border-border bg-transparent p-2" inputMode="decimal" value={amount} disabled={busy}
+            placeholder="0.00" onChange={(event) => setAmount(event.target.value)} /></label>}
       </div>
+      {action === "setup" && <p className="text-muted-foreground">Setup uses no asset amount. Preparing only simulates; the position is created after you sign, send and receive confirmation.</p>}
       <div className="flex flex-wrap gap-2">
         {trade && <button className={button} type="button" disabled={busy || !owner || !mainnet || !raw} onClick={() => void getQuote()}>Get quote</button>}
         <button className={button} type="button" disabled={busy || !owner || !mainnet || (action !== "setup" && !raw) || (trade && (!currentQuote || currentQuote.previewOnly))}

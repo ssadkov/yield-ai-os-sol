@@ -8,6 +8,7 @@ import Decimal from 'decimal.js';
 export const policyAddress=(seed:string,safe?:PublicKey)=>PublicKey.findProgramAddressSync([Buffer.from(seed),...(safe?[safe.toBuffer()]:[])],SAFE_PROGRAM)[0];
 const meta=(pubkey:PublicKey,isWritable=false,isSigner=false)=>({pubkey,isWritable,isSigner});
 function orcaAccounts(s:Loaded,safe:PublicKey,swap:Awaited<ReturnType<typeof dex>>) {
+  if(!s.pool)throw Error('Orca pool unavailable');
   const d=s.pool.getData();
   return [meta(new PublicKey(EXPONENT.orcaProgram)),meta(TOKEN_PROGRAM_ID),meta(safe),meta(new PublicKey(EXPONENT.whirlpool),true),
     ...[tokenAddress(safe,EXPONENT.onyc),d.tokenVaultA,tokenAddress(safe,EXPONENT.usdc),d.tokenVaultB,swap.tickArray0,swap.tickArray1,swap.tickArray2,
@@ -44,14 +45,28 @@ export async function unsignedSetup(connection:Connection,ownerString:string,los
   const ixs=[...[EXPONENT.usdc,EXPONENT.onyc,EXPONENT.pt,EXPONENT.sy,EXPONENT.yt].map(m=>
     createAssociatedTokenAccountIdempotentInstruction(owner,tokenAddress(safe,m),safe,new PublicKey(m))),
     createAssociatedTokenAccountIdempotentInstruction(owner,tokenAddress(owner,EXPONENT.usdc),owner,new PublicKey(EXPONENT.usdc)),
+    createAssociatedTokenAccountIdempotentInstruction(owner,tokenAddress(owner,EXPONENT.onyc),owner,new PublicKey(EXPONENT.onyc)),
     createAssociatedTokenAccountIdempotentInstruction(owner,tokenAddress(treasury,EXPONENT.usdc),treasury,new PublicKey(EXPONENT.usdc))];
   if(!await connection.getAccountInfo(positionAddress(safe),'confirmed'))ixs.push(positionSetup(owner,lossBps,slippageBps));
   return {action:'setup',safe:safe.toBase58(),position:positionAddress(safe).toBase58(),...await serialize(connection,owner,ixs,false)};
+}
+export async function unsignedOnycTransfer(connection:Connection,ownerString:string,action:'deposit_onyc'|'withdraw_onyc',amountString:string) {
+  const owner=new PublicKey(ownerString),safe=safeAddress(owner),amount=rawAmount(amountString);
+  const safeInfo=await connection.getAccountInfo(safe,'confirmed');
+  if(!safeInfo||!safeInfo.owner.equals(SAFE_PROGRAM)||!new PublicKey(safeInfo.data.subarray(9,41)).equals(owner))throw Error('invalid Safe owner');
+  const ownerToken=tokenAddress(owner,EXPONENT.onyc),safeToken=tokenAddress(safe,EXPONENT.onyc);
+  const accounts=await connection.getMultipleAccountsInfo([ownerToken,safeToken],'confirmed');
+  if(accounts.some(a=>a===null))throw Error('ONyc accounts missing; run setup');
+  const data=Buffer.alloc(8);data.writeBigUInt64LE(amount);
+  const ix=new TransactionInstruction({programId:SAFE_PROGRAM,keys:[meta(owner,false,true),meta(safe),meta(ownerToken,true),meta(safeToken,true),meta(TOKEN_PROGRAM_ID)],
+    data:Buffer.concat([instructionTag(action),data])});
+  return {action,owner:ownerString,safe:safe.toBase58(),amountRaw:amountString,...await serialize(connection,owner,[ix],false)};
 }
 export async function unsignedTransaction(connection:Connection,request:QuoteRequest & {minimumOutput?:string;quotedAt?:number}) {
   if(!request.owner)throw Error('owner required');
   const owner=new PublicKey(request.owner),authority=new PublicKey(request.authority??request.owner),safe=safeAddress(owner);
   const q=await quote(connection,request),p=q.public.position;
+  if(q.public.asset==='ONYC'&&!authority.equals(owner))throw Error('ONyc settlement requires owner signature');
   if(q.public.previewOnly)throw Error('redemption is a forecast until maturity');
   if(!p)throw Error('owner must initialize the Exponent position with action=setup');
   if(!q.public.economicAllowed&&!authority.equals(owner))throw Error('exit exceeds executor loss policy');
@@ -74,12 +89,15 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
     ...[EXPONENT.usdc,EXPONENT.onyc,EXPONENT.pt,EXPONENT.sy,EXPONENT.yt].map(m=>meta(tokenAddress(safe,m),true)),
     meta(tokenAddress(owner,EXPONENT.usdc),true),meta(tokenAddress(treasury,EXPONENT.usdc),true),
     meta(new PublicKey(EXPONENT.coreVault),request.action==='redeem'),meta(new PublicKey(EXPONENT.syMeta),true),meta(TOKEN_PROGRAM_ID)];
-  const missing=await connection.getMultipleAccountsInfo(fixed.slice(6,13).map(a=>a.pubkey),'confirmed');
+  const missing=await connection.getMultipleAccountsInfo([...fixed.slice(6,13).map(a=>a.pubkey),...(q.public.asset==='ONYC'&&request.action!=='buy'?[tokenAddress(owner,EXPONENT.onyc)]:[])],'confirmed');
   if(missing.some(a=>a===null))throw Error('missing token accounts; run action=setup');
   const data=Buffer.alloc(40);data.writeBigUInt64LE(rawAmount(request.amount),0);data.writeBigUInt64LE(BigInt(q.public.intermediate.minRaw),8);
   data.writeBigUInt64LE(minOut,16);data.writeBigUInt64LE(BigInt(q.public.output.expectedRaw),24);data.writeBigInt64LE(BigInt(q.public.expiresAt),32);
-  const exp=exponentAccounts(request.action,safe),orca=orcaAccounts(q.state,safe,q.swap);
-  const action=new TransactionInstruction({programId:SAFE_PROGRAM,keys:[...fixed,...(request.action==='buy'?[...orca,...exp]:[...exp,...orca])],
-    data:Buffer.concat([instructionTag('exponent_'+request.action+'_pt'),data])});
+  const exp=exponentAccounts(request.action,safe),orca=q.swap?orcaAccounts(q.state,safe,q.swap):[];
+  const nativeRecipient=q.public.asset==='ONYC'&&request.action!=='buy'?[meta(tokenAddress(owner,EXPONENT.onyc),true)]:[];
+  const actionName=q.public.asset==='USDC'?'exponent_'+request.action+'_pt':request.action==='buy'?'exponent_buy_pt_with_onyc':
+    'exponent_'+request.action+'_pt_for_onyc';
+  const action=new TransactionInstruction({programId:SAFE_PROGRAM,keys:[...fixed,...nativeRecipient,...(request.action==='buy'?[...orca,...exp]:[...exp,...orca])],
+    data:Buffer.concat([instructionTag(actionName),data])});
   return {quote:q.public,safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[action],true)};
 }

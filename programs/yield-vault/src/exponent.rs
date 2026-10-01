@@ -113,6 +113,30 @@ pub struct RecoverExponent<'info> {
     pub owner_token: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
+#[derive(Accounts)]
+pub struct OnycTransfer<'info> {
+    pub owner: Signer<'info>,
+    #[account(seeds=[b"vault", owner.key().as_ref()], bump=vault.bump, has_one=owner)]
+    pub vault: Account<'info, Vault>,
+    #[account(mut, associated_token::mint=ONYC, associated_token::authority=owner)]
+    pub owner_onyc: Account<'info, TokenAccount>,
+    #[account(mut, associated_token::mint=ONYC, associated_token::authority=vault)]
+    pub safe_onyc: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+pub fn transfer_onyc(ctx: Context<OnycTransfer>, amount: u64, deposit: bool) -> Result<()> {
+    require!(amount>0,ErrorCode::ZeroAmount);
+    let bump=[ctx.accounts.vault.bump];
+    let seeds:&[&[u8]]=&[b"vault",ctx.accounts.vault.owner.as_ref(),&bump];
+    let (from,to)=if deposit {
+        (ctx.accounts.owner_onyc.to_account_info(),ctx.accounts.safe_onyc.to_account_info())
+    } else {
+        (ctx.accounts.safe_onyc.to_account_info(),ctx.accounts.owner_onyc.to_account_info())
+    };
+    let authority=if deposit {ctx.accounts.owner.to_account_info()} else {ctx.accounts.vault.to_account_info()};
+    let cpi=CpiContext::new(ctx.accounts.token_program.to_account_info(),Transfer{from,to,authority});
+    if deposit {token::transfer(cpi,amount)} else {token::transfer(cpi.with_signer(&[seeds]),amount)}
+}
 pub fn recover(ctx: Context<RecoverExponent>, amount: u64) -> Result<()> {
     require!(amount>0,ErrorCode::ZeroAmount);
     // Explicit owner-signed in-kind recovery. Available during pause/market/oracle failure.
@@ -335,27 +359,36 @@ pub fn check_loss(principal:u64, received:u64, max_loss:u16)->Result<()> {
     Ok(())
 }
 
-pub fn buy<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder)->Result<()> {
+pub fn buy<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder, with_onyc:bool)->Result<()> {
     let now=Clock::get()?;
     require_owner_or_agent(&ctx.accounts.vault,&ctx.accounts.authority.key(),&ctx.accounts.executor_registry)?;
     let executor=ctx.accounts.authority.key()!=ctx.accounts.vault.owner;
     validate_state(&ctx.accounts)?; validate_order(&order,&ctx.accounts.position,now.unix_timestamp,executor)?;
     require!(now.unix_timestamp<MATURITY,ExponentError::Matured);
     require!(ctx.accounts.vault.allocation_bps[ROUTE_ONYC]>0,ErrorCode::RouteDisabled);
-    require!(ctx.remaining_accounts.len()==12+1+accounts::BUY.len(),ExponentError::InvalidAccounts);
-    let (orca,exp)=ctx.remaining_accounts.split_at(12);
+    require!(!with_onyc || !executor,ErrorCode::Unauthorized);
+    let orca_len=if with_onyc {0} else {12};
+    require!(ctx.remaining_accounts.len()==orca_len+1+accounts::BUY.len(),ExponentError::InvalidAccounts);
+    let (orca,exp)=ctx.remaining_accounts.split_at(orca_len);
     let usdc_before=ctx.accounts.safe_usdc.amount; let base_before=ctx.accounts.safe_onyc.amount;
     let pt_before=ctx.accounts.safe_pt.amount; let sy_before=ctx.accounts.safe_sy.amount;
-    invoke_orca(&ctx.accounts.vault,orca,true,order.amount,order.min_intermediate)?;
+    if !with_onyc {invoke_orca(&ctx.accounts.vault,orca,true,order.amount,order.min_intermediate)?;}
     ctx.accounts.safe_onyc.reload()?;
-    let base_in=subtract(ctx.accounts.safe_onyc.amount,base_before)?;
+    let base_in=if with_onyc {order.amount} else {subtract(ctx.accounts.safe_onyc.amount,base_before)?};
+    if with_onyc {require!(base_before>=base_in,ErrorCode::InsufficientShares);}
     require!(base_in>=order.min_intermediate,ExponentError::Slippage);
     invoke_exponent(&ctx.accounts.vault,exp,0,base_in,order.min_output)?;
     ctx.accounts.safe_usdc.reload()?;ctx.accounts.safe_onyc.reload()?;ctx.accounts.safe_pt.reload()?;ctx.accounts.safe_sy.reload()?;
-    let spent=subtract(usdc_before,ctx.accounts.safe_usdc.amount)?;
+    let spent=if with_onyc {
+        require!(ctx.accounts.safe_usdc.amount==usdc_before,ExponentError::BalanceDelta);
+        require!(subtract(base_before,ctx.accounts.safe_onyc.amount)?==base_in,ExponentError::BalanceDelta);
+        let nav=scope_nav(exp,now.unix_timestamp)?;
+        let usd=(u128::from(base_in)*u128::from(nav)+999_999_999_999_999)/1_000_000_000_000_000;
+        u64::try_from(usd).map_err(|_| error!(ExponentError::InvalidState))?
+    } else {subtract(usdc_before,ctx.accounts.safe_usdc.amount)?};
     let acquired=subtract(ctx.accounts.safe_pt.amount,pt_before)?;
-    require!(spent==order.amount && acquired>=order.min_output,ExponentError::BalanceDelta);
-    require!(ctx.accounts.safe_onyc.amount==base_before
+    require!((with_onyc || spent==order.amount) && acquired>=order.min_output,ExponentError::BalanceDelta);
+    require!((with_onyc || ctx.accounts.safe_onyc.amount==base_before)
         && subtract(ctx.accounts.safe_sy.amount,sy_before)?<=MAX_SY_DUST,ExponentError::Residual);
     // PT face is indexed USD (9 decimals), while actual redemption delivers ONyc.
     if executor {check_loss(spent,acquired/1000,ctx.accounts.position.max_loss_bps)?;}
@@ -370,10 +403,11 @@ pub fn buy<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, ord
     p.entry_core_rate=precise_at(&ctx.accounts.core_vault.try_borrow_data()?,337)?;
     p.entry_slot=now.slot;p.entry_timestamp=now.unix_timestamp;
     ctx.accounts.vault.route_principal[ROUTE_ONYC]=principal;ctx.accounts.vault.last_rebalance_ts=now.unix_timestamp;
-    emit!(ExponentEntry{safe:ctx.accounts.vault.key(),market:CORE_VAULT,spent_usdc:spent,pt_acquired:acquired,nav:p.entry_nav,core_rate:p.entry_core_rate,slot:now.slot});
+    emit!(ExponentEntry{safe:ctx.accounts.vault.key(),market:CORE_VAULT,input_mint:if with_onyc {ONYC} else {USDC},input_amount:order.amount,
+        basis_usdc:spent,pt_acquired:acquired,nav:p.entry_nav,core_rate:p.entry_core_rate,slot:now.slot});
     Ok(())
 }
-pub fn exit<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder, redeem:bool)->Result<()> {
+pub fn exit<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder, redeem:bool, for_onyc:bool)->Result<()> {
     let now=Clock::get()?;
     require_owner_or_agent(&ctx.accounts.vault,&ctx.accounts.authority.key(),&ctx.accounts.executor_registry)?;
     let executor=ctx.accounts.authority.key()!=ctx.accounts.vault.owner;
@@ -382,42 +416,62 @@ pub fn exit<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, or
     let basis=basis_for_exit(ctx.accounts.position.principal_usdc,ctx.accounts.position.tracked_pt,order.amount)?;
     require!(ctx.accounts.safe_pt.amount>=ctx.accounts.position.tracked_pt,ErrorCode::InsufficientShares);
     let count=if redeem {accounts::REDEEM.len()} else {accounts::SELL.len()};
-    require!(ctx.remaining_accounts.len()==count+1+12,ExponentError::InvalidAccounts);
-    let (exp,orca)=ctx.remaining_accounts.split_at(count+1);
+    require!(!for_onyc || !executor,ErrorCode::Unauthorized);
+    let native_prefix=if for_onyc {1} else {0};
+    require!(ctx.remaining_accounts.len()==native_prefix+count+1+if for_onyc {0} else {12},ExponentError::InvalidAccounts);
+    let owner_onyc=if for_onyc {
+        let info=&ctx.remaining_accounts[0];
+        require_keys_eq!(info.key(),anchor_spl::associated_token::get_associated_token_address(&ctx.accounts.vault.owner,&ONYC),ExponentError::InvalidAccounts);
+        require!(info.is_writable,ExponentError::InvalidAccounts);
+        let account=Account::<TokenAccount>::try_from(info)?;
+        require_keys_eq!(account.mint,ONYC,ExponentError::InvalidAccounts);
+        require_keys_eq!(account.owner,ctx.accounts.vault.owner,ExponentError::InvalidAccounts);
+        Some(info.to_account_info())
+    } else {None};
+    let remaining=&ctx.remaining_accounts[native_prefix..];
+    let (exp,orca)=remaining.split_at(count+1);
     let base_before=ctx.accounts.safe_onyc.amount;let usdc_before=ctx.accounts.safe_usdc.amount;
     let pt_before=ctx.accounts.safe_pt.amount;let sy_before=ctx.accounts.safe_sy.amount;let yt_before=ctx.accounts.safe_yt.amount;
-    invoke_exponent(&ctx.accounts.vault,exp,if redeem {2} else {1},order.amount,order.min_intermediate)?;
+    invoke_exponent(&ctx.accounts.vault,exp,if redeem {2} else {1},order.amount,
+        if for_onyc {order.min_intermediate.max(order.min_output)} else {order.min_intermediate})?;
     ctx.accounts.safe_onyc.reload()?;
     let base_in=subtract(ctx.accounts.safe_onyc.amount,base_before)?;
     require!(base_in>=order.min_intermediate,ExponentError::Slippage);
-    invoke_orca(&ctx.accounts.vault,orca,false,base_in,order.min_output)?;
+    if !for_onyc {invoke_orca(&ctx.accounts.vault,orca,false,base_in,order.min_output)?;}
     ctx.accounts.safe_usdc.reload()?;ctx.accounts.safe_onyc.reload()?;ctx.accounts.safe_pt.reload()?;ctx.accounts.safe_sy.reload()?;ctx.accounts.safe_yt.reload()?;
     let received=subtract(ctx.accounts.safe_usdc.amount,usdc_before)?;
-    require!(subtract(pt_before,ctx.accounts.safe_pt.amount)?==order.amount && received>=order.min_output,ExponentError::BalanceDelta);
-    require!(ctx.accounts.safe_onyc.amount==base_before
+    require!(subtract(pt_before,ctx.accounts.safe_pt.amount)?==order.amount
+        && (if for_onyc {base_in>=order.min_output && received==0} else {received>=order.min_output}),ExponentError::BalanceDelta);
+    require!((for_onyc || ctx.accounts.safe_onyc.amount==base_before)
         && subtract(ctx.accounts.safe_sy.amount,sy_before)?<=MAX_SY_DUST
         && ctx.accounts.safe_yt.amount==yt_before,ExponentError::Residual);
-    if executor {check_loss(basis,received,ctx.accounts.position.max_loss_bps)?;}
-    charge_executor_volume(&ctx.accounts.vault,&ctx.accounts.authority.key(),Some(&mut ctx.accounts.executor_limits),
-        received.max(basis),None,now.unix_timestamp)?;
+    if executor {check_loss(basis,received,ctx.accounts.position.max_loss_bps)?;
+        charge_executor_volume(&ctx.accounts.vault,&ctx.accounts.authority.key(),Some(&mut ctx.accounts.executor_limits),
+            received.max(basis),None,now.unix_timestamp)?;}
     require!(ctx.accounts.vault.route_principal[ROUTE_ONYC]==ctx.accounts.position.principal_usdc,ExponentError::InvalidState);
     let p=&mut ctx.accounts.position;
     p.principal_usdc-=basis;p.tracked_pt-=order.amount;p.realized_basis_usdc=add(p.realized_basis_usdc,basis)?;
     p.total_received_usdc=add(p.total_received_usdc,received)?;
-    // Fee is zero for the pilot. Keep the settlement boundary in USDC; no fee on intermediate ONyc.
+    // Fee is zero for the pilot. ONyc settlement is owner-only until its fee policy is defined.
     let fee=0;
     let bump=[ctx.accounts.vault.bump];let seeds:&[&[u8]]=&[b"vault",ctx.accounts.vault.owner.as_ref(),&bump];
-    token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(),Transfer{
-        from:ctx.accounts.safe_usdc.to_account_info(),to:ctx.accounts.owner_usdc.to_account_info(),authority:ctx.accounts.vault.to_account_info()},&[seeds]),received-fee)?;
+    if for_onyc {
+        token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(),Transfer{
+            from:ctx.accounts.safe_onyc.to_account_info(),to:owner_onyc.ok_or(ExponentError::InvalidAccounts)?,authority:ctx.accounts.vault.to_account_info()},&[seeds]),base_in)?;
+    } else {
+        token::transfer(CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(),Transfer{
+            from:ctx.accounts.safe_usdc.to_account_info(),to:ctx.accounts.owner_usdc.to_account_info(),authority:ctx.accounts.vault.to_account_info()},&[seeds]),received-fee)?;
+    }
     ctx.accounts.vault.route_principal[ROUTE_ONYC]=p.principal_usdc;ctx.accounts.vault.last_rebalance_ts=now.unix_timestamp;
-    emit!(ExponentExit{safe:ctx.accounts.vault.key(),market:CORE_VAULT,redeem,pt_burned:order.amount,onyc_received:base_in,usdc_received:received,basis_usdc:basis,fee_usdc:fee,slot:now.slot});
+    emit!(ExponentExit{safe:ctx.accounts.vault.key(),market:CORE_VAULT,redeem,output_mint:if for_onyc {ONYC} else {USDC},pt_burned:order.amount,
+        onyc_received:base_in,usdc_received:received,basis_usdc:basis,fee_usdc:fee,slot:now.slot});
     Ok(())
 }
 
 #[event]
-pub struct ExponentEntry {pub safe:Pubkey,pub market:Pubkey,pub spent_usdc:u64,pub pt_acquired:u64,pub nav:[u64;4],pub core_rate:[u64;4],pub slot:u64}
+pub struct ExponentEntry {pub safe:Pubkey,pub market:Pubkey,pub input_mint:Pubkey,pub input_amount:u64,pub basis_usdc:u64,pub pt_acquired:u64,pub nav:[u64;4],pub core_rate:[u64;4],pub slot:u64}
 #[event]
-pub struct ExponentExit {pub safe:Pubkey,pub market:Pubkey,pub redeem:bool,pub pt_burned:u64,pub onyc_received:u64,pub usdc_received:u64,pub basis_usdc:u64,pub fee_usdc:u64,pub slot:u64}
+pub struct ExponentExit {pub safe:Pubkey,pub market:Pubkey,pub redeem:bool,pub output_mint:Pubkey,pub pt_burned:u64,pub onyc_received:u64,pub usdc_received:u64,pub basis_usdc:u64,pub fee_usdc:u64,pub slot:u64}
 #[event]
 pub struct ExponentRecovery {pub safe:Pubkey,pub mint:Pubkey,pub amount:u64,pub basis_usdc:u64}
 

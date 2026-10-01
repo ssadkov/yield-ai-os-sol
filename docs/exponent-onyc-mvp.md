@@ -7,6 +7,7 @@
 - Вход: USDC Safe → прямой Orca ONyc/USDC → ONyc Safe → Exponent CLMM → PT Safe.
 - Досрочная продажа: PT Safe → Exponent CLMM → ONyc Safe → тот же Orca → USDC **владельцу**.
 - Погашение: PT-only Exponent Core merge → ONyc Safe → Orca → USDC **владельцу**. YT не требуется после maturity.
+- ONyc-вариант: владелец может внести ONyc в Safe, держать его там и вывести обратно; ONyc Safe → Exponent CLMM → PT Safe, затем продажа или погашение → ONyc владельцу. Для этого варианта Orca не вызывается. Смешанный вход и выход (например ONyc → PT → USDC) использует только нужный обменный шаг.
 
 Каждая операция атомарна. Подготовка ATA/Position отдельная, с подписью владельца. PT имеет индексированный USD-номинал (9 decimals); фактическая выдача — ONyc. `1 PT != 1 ONyc`.
 
@@ -24,9 +25,11 @@
 
 **Пилотная комиссия Yield AI = 0**, независимо от Kamino Config. В API отдельно показана будущая политика: `5% * max(USDC proceeds - USDC basis, 0)`. Это 5% прибыли, не пять процентных пунктов APY. `maturityPreview` показывает future net APY/USDC после предполагаемой комиссии и текущих DEX costs. На actual settlement комиссия пока не взимается.
 
+Для входа собственным ONyc в позиции записывается USDC-эквивалент по свежему Scope NAV на момент покупки PT. Это **оценка**, а не фактическая внешняя цена приобретения ONyc владельцем. Прямое хранение ONyc в Safe не получает дополнительной fee-базы. Выход в ONyc не является USDC-реализацией; комиссия остаётся нулевой. Перед включением 5% fee потребуется отдельно определить ONyc-выход и смешанные входы, без ретроактивного начисления на пилотные позиции.
+
 ## Контракт и executor
 
-Инструкции: `init_exponent_position`, `set_exponent_policy`, `exponent_buy_pt`, `exponent_sell_pt`, `exponent_redeem_pt`, `recover_exponent`.
+Инструкции: `init_exponent_position`, `set_exponent_policy`, `deposit_onyc`, `withdraw_onyc`, `exponent_buy_pt`, `exponent_buy_pt_with_onyc`, `exponent_sell_pt`, `exponent_sell_pt_for_onyc`, `exponent_redeem_pt`, `exponent_redeem_pt_for_onyc`, `recover_exponent`. ONyc-native действия на первом этапе подписывает только владелец; executor ограничен USDC-маршрутом.
 
 Executor требует существующую registry approval и назначение на Safe, enabled limits/position, положительную ONyc allocation. Проверяются action cap, rolling 24h volume, total principal и owner allocation. Exit volume учитывается как `max(received USDC, released basis)`, чтобы убыток не уменьшал расход бюджета. Owner устанавливает эти параметры существующими V2-инструкциями; `setup` не меняет allocation или Kamino policy.
 
@@ -55,6 +58,10 @@ curl -X POST 'http://localhost:3000/api/v2/exponent/transactions' \
 
 Для sell/redeem `amount` — tracked PT raw, owner позволяет API вернуть basis/loss floor. `authority` по умолчанию owner. Buy pilot limit: 10,000 USDC; PT raw limit 20,000 * 1e9, ниже небезопасного диапазона upstream double math. Расчёты settlement остаются u64/u128. Redeem quote до maturity только forecast; unsigned redeem до maturity отклоняется.
 
+`asset` по умолчанию `USDC`. `asset:"ONYC"` убирает Orca: для `buy` входная сумма — raw ONyc, для `sell`/`redeem` выход — ONyc владельцу. Эти операции требуют подпись владельца; `deposit_onyc` и `withdraw_onyc` через `/transactions` позволяют держать ONyc в Safe. Setup также создаёт owner ONyc ATA. Если Orca недоступна, ONyc-native котировка и выход не требуют загрузки пула. Для ONyc-входа API возвращает `maturityOnycAtCurrentNavRaw` как сценарий при сегодняшнем NAV, но не показывает будущий USDC APY без котировки конечного обмена; фактический ONyc выход зависит от frozen rate.
+
+Примеры тел запросов: `/quote` — `{"action":"buy","asset":"ONYC","amount":"100000000000"}`; `/transactions` — `{"action":"deposit_onyc","owner":"OWNER_PUBKEY","amount":"100000000000"}`. Для `/transactions` покупки/продажи/погашения укажите `owner`, `action`, `asset`, raw `amount` и при необходимости `authority`, `minimumOutput`, `quotedAt`. Ответ содержит только неподписанную транзакцию; EVM Safe этой версией не поддерживается.
+
 Builder заново получает котировку. Передайте `minimumOutput` из принятой котировки и `quotedAt` = её `chainTime`, чтобы не принять ухудшившуюся/старую котировку. Fingerprint `quoteId` — диагностический, не подпись и не разрешение. Подпись требуется единственному `authority`, а в setup — owner. Ответ содержит base64 transaction, blockhash/lastValidBlockHeight, serializedBytes, networkFeeLamports, simulation logs/error/CU. Account rent и optional priority fee не включены в доходность.
 
 400 — некорректный ввод. 422 — состояние/котировка/setup/policy недоступны; обновить read state и quote. Simulation error нельзя трактовать как готовность исполнения. **`executionReady:false` всегда**: deployed Safe пока не содержит эти новые инструкции. Автоматических sign/send/retry-send нет.
@@ -63,19 +70,19 @@ Builder заново получает котировку. Передайте `mi
 
 [Полный машинный fork report](./exponent-onyc-fork-report.json) содержит quote data, snapshots и SHA256 исполняемых ELF. Runtime LiteSVM 1.5.0, публичные Exponent Core/CLMM/Generic SY/Orca ELF, реальные market accounts, новый локальный Safe ELF. Ключи владельца/executor и USDC funding — искусственные локальные fixtures. Bankrun 0.4.0 не исполняет текущий CLMM ELF; для воспроизведения используется LiteSVM.
 
-Snapshot: `2026-09-30T19:40:45.876Z`, slot `452061427`, Scope NAV `1.150884088`. Partial sale 50%, затем весь остаток:
+Snapshot: `2026-10-01T07:13:30.303Z`, slot `452216889`, Scope NAV `1.151213761`. Partial sale 50%, затем весь остаток:
 
 | Вход USDC | PT в Safe | Немедленный выход USDC владельцу |
 | ---: | ---: | ---: |
-| 100 | 103.326984386 | 99.868658 |
-| 1,000 | 1,033.266156607 | 998.686590 |
-| 10,000 | 10,332.292812357 | 9,986.866212 |
+| 100 | 103.271094890 | 99.869184 |
+| 1,000 | 1,032.708817771 | 998.691854 |
+| 10,000 | 10,326.875037482 | 9,986.918664 |
 
-Дополнительная покупка на 1,000 USDC, локальный Clock `2027-01-10T13:01:00Z`, два частичных PT-only погашения: итог около 1,032.61 USDC владельцу. Первая часть при исходном NAV, вторая после искусственного +10% oracle NAV при **неизменной DEX liquidity**. Это проверка frozen rate/маршрута, не январская котировка. Все атомарные маршруты помещаются в 1,014 bytes с reviewed ALTs, потребляют меньше 500k CU в этих fixtures. Баланс SY содержит только ограниченное округление; PT и USDC basis обнуляются.
+ONyc-native цикл: owner внёс 150 ONyc, купил за 100 ONyc 118.881763702 PT, досрочно продал PT за 99.889162176 ONyc владельцу и вывел оставшиеся 50 ONyc. Далее куплены PT из 100 ONyc и 1,000 USDC. При локальном Clock `2027-01-10T13:01:00Z` половина PT погашена в 575.654092 USDC, остаток — в 500.163420840 ONyc владельцу. Перед вторым погашением oracle NAV искусственно поднят на 10% при **неизменной DEX liquidity**; frozen Core rate сохранился. Это проверка маршрутов, не январская котировка. ONyc-native buy/sell укладываются в 810/843 bytes, maturity USDC route — 1,014 bytes; операции потребляют меньше 500k CU в этих fixtures. PT и позиционная basis обнуляются.
 
-Пройдены 13 Rust tests, 5 TS tests, SBF/IDL сборка, client/web typecheck и Next production build. Все прежние instruction/account type layouts сравнены с новым IDL и совпадают. Fork проверяет rollback при action/24h/principal cap, pause, foreign signer, expired quote, widened slippage, market/recipient substitution и недостижимом minimum после Orca swap. HTTP smoke: markets 200, buy/sell quotes 200, malformed transaction request 400. Public RPC может отвечать 429; production нужен существующий настроенный provider.
+Пройдены 13 Rust tests, SBF/IDL сборка без stack warnings, client/web typecheck, Next production build и local LiteSVM fork с реальными Exponent/Orca ELF. Предыдущие USDC-кейсы и 10 негативных сценариев сохранены; добавлены ONyc deposit/hold/withdraw, buy/sell/redeem, отказ executor для ONyc-native операции и два rollback/recipient теста. Read-only live quotes прошли из Linux. Локальный HTTP smoke из Windows получил 422, потому что sandbox запретил исходящее RPC-соединение (`EACCES`), а не из-за ошибки рынка; HTTP проверка на production provider остаётся release gate. Public RPC при сборке отвечал 429; production нужен настроенный provider.
 
-Отдельный fresh HTTP read `2026-09-30` (~21:23 UTC): 1,000 USDC → 868.754569720 ONyc → 1,032.631853130 PT; обратная независимая котировка → 867.783949805 ONyc → 998.679404 USDC. Она отличается от fork snapshot и не является исполненным round trip.
+Свежие независимые read-only котировки 2026-10-01, slot `452219770`: 1,000 USDC → 1,032.714359682 PT; немедленная обратная продажа этого количества → 998.687414 USDC (расчётная потеря 0.1312586%). Прямой вход 100 ONyc → 118.881423660 PT; обратная продажа → 99.889126030 ONyc (0.11087397%). Это два последовательных расчёта по состоянию рынка, **не исполненный round trip**; сумма после maturity зависит от frozen rate и ликвидности выхода.
 
 Воспроизведение (Linux, Node >=22, `npm ci` в client и web; Solana/Anchor toolchain):
 
@@ -84,6 +91,7 @@ NO_DNA=1 anchor build
 cargo test --lib
 cd client
 npm run exponent:test
+npm run exponent:live-check # Mainnet read-only, verifies genesis and fresh USDC/ONyc round-trip quotes
 # Новый пустой каталог, только публичные данные; fetch ELF при каждом запуске.
 EXPONENT_FORK_DIR=/tmp/onyc-fixture npm run exponent:fork-prepare
 cp ../target/deploy/yield_vault.so /tmp/onyc-fixture/
@@ -92,8 +100,10 @@ EXPONENT_FORK_DIR=/tmp/onyc-fixture EXPONENT_IDL="$PWD/../target/idl/yield_vault
 
 Build toolchain в этой проверке: Anchor CLI 0.32.1, Rust Anchor deps 0.32.2, Solana CLI 3.1.12. SDK pins: Exponent 0.9.29, Whirlpool SDK 0.20.0. Существующие npm audit findings автоматически не исправлялись; полноценный dependency/security review остаётся release gate.
 
+Новый локальный ELF: 811,288 bytes, SHA-256 `49c394d8bfc22315ae1f12320e6f390e56d433da39c2bfde4246026ef90480d3`. Read-only Mainnet на 2026-10-01: действующий код `620,488` bytes, SHA-256 `7f0da515e6a1d4249b5748457e279cc0636867cd43d973522da8e698ac80ebe9`, как в [executor-limits отчёте](./yield-ai-v2-executor-limits.md); ProgramData `620,533` bytes, authority `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A`. Нужный ProgramData минимум `811,333` bytes (рост на `190,800`); rent минимум `4.12222188 SOL` против текущих `3.15295788 SOL`, разница `0.969264 SOL`. У authority на момент чтения `0.501798581 SOL`, то есть только на постоянную rent не хватает `0.467465419 SOL` до комиссий и временного upload buffer. Эта оценка не разрешает upgrade; бинарник не загружался.
+
 ## Перед mainnet
 
-Отдельное согласование upgrade и любых mainnet-транзакций. Затем повторить live hashes/upgrade authority/ProgramData/funding, проверить свежий Scope ABI/рынок/DEX/ALTs, owner configuration и небольшой owner-signed полный цикл. Fork не подтверждает январскую ликвидность, будущий NAV, отсутствие freeze ONyc или возможность primary OnRe redemption. По рынку допустимы потери/недоступность исполнения; 5% — предел executor, не гарантия выхода. In-kind recovery не зависит от работоспособности рынка/oracle.
+Отдельное согласование upgrade и любых mainnet-транзакций. Затем повторить live hashes/upgrade authority/ProgramData/funding, проверить свежий Scope ABI/рынок/DEX/ALTs, owner configuration и небольшой owner-signed цикл покупки/досрочной продажи в обоих активах. **Реальное погашение PT-ONyc 10JAN27 в Mainnet невозможно проверить до 2027-01-10 13:00 UTC**; сейчас этот шаг доказан только локальным fork с перемоткой Clock. Не обозначать живой цикл как включающий maturity до фактической январской транзакции. Fork не подтверждает январскую ликвидность, будущий NAV, отсутствие freeze ONyc или возможность primary OnRe redemption. По рынку допустимы потери/недоступность исполнения; 5% — предел executor, не гарантия выхода. In-kind recovery не зависит от работоспособности рынка/oracle.
 
 Первичные источники: [Exponent post maturity](https://docs.exponent.finance/developers/learn/post-maturity), [buy wrapper](https://docs.exponent.finance/developer-clmm/typescript/instructions/ix-wrapper-buy-pt), [Core merge](https://docs.exponent.finance/developer-core/typescript/instructions/ix-merge-to-base), [Scope OraclePrices layout](https://github.com/Kamino-Finance/scope/blob/master/programs/scope/src/states/oracle_prices.rs), [Scope DatedPrice layout](https://github.com/Kamino-Finance/scope/blob/master/programs/scope/src/states/dated_price.rs). При расхождении краткого описания wrapper с raw units выше основанием служит сохранённый ELF/fork execution.

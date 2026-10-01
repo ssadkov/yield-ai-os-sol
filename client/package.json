@@ -8,6 +8,7 @@
     "smoke": "tsx src/smoke.ts",
     "v2-security": "tsx src/v2SecuritySmoke.ts",
     "exponent:test": "tsx src/exponentTest.ts",
+    "exponent:live-check": "tsx src/exponentLiveCheck.ts",
     "exponent:inspect": "tsx src/exponentInspect.ts",
     "exponent:fork-prepare": "tsx src/exponentForkPrepare.ts",
     "exponent:fork": "tsx src/v2ExponentFork.ts"

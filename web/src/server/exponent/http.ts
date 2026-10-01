@@ -11,9 +11,11 @@ export function parseRequest(value:Record<string,unknown>):QuoteRequest {
   if(!['buy','sell','redeem'].includes(String(value.action)))throw Error('invalid action');
   rawAmount(value.amount);
   for(const key of ['owner','authority','market'])if(value[key]!==undefined&&typeof value[key]!=='string')throw Error('invalid '+key);
+  if(value.asset!==undefined&&value.asset!=='USDC'&&value.asset!=='ONYC')throw Error('invalid asset');
   if(value.slippageBps!==undefined&&(!Number.isInteger(value.slippageBps)||Number(value.slippageBps)<2||Number(value.slippageBps)>100))throw Error('slippageBps must be 2..100');
   return {action:value.action as ExponentAction,amount:value.amount as string,owner:value.owner as string|undefined,
-    authority:value.authority as string|undefined,market:value.market as string|undefined,slippageBps:value.slippageBps as number|undefined};
+    authority:value.authority as string|undefined,market:value.market as string|undefined,asset:value.asset as 'USDC'|'ONYC'|undefined,
+    slippageBps:value.slippageBps as number|undefined};
 }
 export function unavailable() {
   // Never send provider URLs, credentials, or SDK exception objects to callers.

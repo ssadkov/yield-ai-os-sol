@@ -10,7 +10,7 @@ import BN from 'bn.js';
 import { forkRpc } from './exponentForkRpc.js';
 const sourceRequire=createRequire(import.meta.url);
 const { EXPONENT, SAFE_PROGRAM, safeAddress, tokenAddress, positionAddress, decodePosition }=sourceRequire('../../web/src/lib/exponentV2.ts') as typeof import('../../web/src/lib/exponentV2.js');
-const { unsignedSetup, unsignedTransaction, policyAddress }=sourceRequire('../../web/src/server/exponent/transactions.ts') as typeof import('../../web/src/server/exponent/transactions.js');
+const { unsignedSetup, unsignedTransaction, unsignedOnycTransfer, policyAddress }=sourceRequire('../../web/src/server/exponent/transactions.ts') as typeof import('../../web/src/server/exponent/transactions.js');
 
 if(process.platform!=='linux')throw Error('Use Linux LiteSVM; no network sending is allowed');
 const dir=process.env.EXPONENT_FORK_DIR;if(!dir)throw Error('EXPONENT_FORK_DIR required');
@@ -52,8 +52,8 @@ const fixture=async(name:string,seed:string,data:Record<string,unknown>)=>{
 };
 await fixture('Config','config',{admin:context.payer.publicKey,treasury,performanceFeeBps:500});
 const registry=await fixture('ExecutorRegistry','executor_registry',{defaultExecutor:agent.publicKey,approved:[agent.publicKey]});
-const safe=safeAddress(owner.publicKey),safeUsdc=tokenAddress(safe,EXPONENT.usdc),safePt=tokenAddress(safe,EXPONENT.pt);
-const ownerUsdc=tokenAddress(owner.publicKey,EXPONENT.usdc),mint=new PublicKey(EXPONENT.usdc);
+const safe=safeAddress(owner.publicKey),safeUsdc=tokenAddress(safe,EXPONENT.usdc),safeOnyc=tokenAddress(safe,EXPONENT.onyc),safePt=tokenAddress(safe,EXPONENT.pt);
+const ownerUsdc=tokenAddress(owner.publicKey,EXPONENT.usdc),ownerOnyc=tokenAddress(owner.publicKey,EXPONENT.onyc),mint=new PublicKey(EXPONENT.usdc);
 const usdcFixture=Buffer.alloc(165);AccountLayout.encode({mint,owner:owner.publicKey,amount:BigInt(30_000_000_000),delegateOption:0,delegate:PublicKey.default,state:1,isNativeOption:0,isNative:BigInt(0),delegatedAmount:BigInt(0),closeAuthorityOption:0,closeAuthority:PublicKey.default},usdcFixture);
 context.setAccount(ownerUsdc,{lamports:2_039_280,owner:TOKEN_PROGRAM_ID,executable:false,data:usdcFixture});
 const methods=program.methods as any;
@@ -69,15 +69,16 @@ type TransactionInstructionOrV0=import('@solana/web3.js').TransactionInstruction
 const balance=async(key:PublicKey)=>{const a=await context.banksClient.getAccount(key);return a?Buffer.from(a.data).readBigUInt64LE(64):BigInt(0);};
 const pos=async()=>{const a=await context.banksClient.getAccount(positionAddress(safe));assert(a);return decodePosition(Buffer.from(a.data),positionAddress(safe));};
 async function reject(label:string,tx:VersionedTransaction,signer:Keypair,pattern:RegExp) {
- tx.sign([signer]);const before=await balance(safeUsdc),p=await pos();
+ tx.sign([signer]);const before=await balance(safeUsdc),baseBefore=await balance(safeOnyc),p=await pos();
  const r=await context.banksClient.tryProcessTransaction(tx),logs=r.meta?.logMessages.join('\n')??'';
- assert(r.result!==null,label+' must fail');assert.match(logs,pattern,label+': '+r.result);assert.equal(await balance(safeUsdc),before);assert.equal((await pos()).trackedPt,p.trackedPt);
+ assert(r.result!==null,label+' must fail');assert.match(logs,pattern,label+': '+r.result);assert.equal(await balance(safeUsdc),before);
+ assert.equal(await balance(safeOnyc),baseBefore);assert.equal((await pos()).trackedPt,p.trackedPt);
  report.negative.push(label);console.log('REJECT',label);
 }
 const limits=policyAddress('executor_limits',safe);
 const setLimits=async(action:number,daily:number,principal:number,enabled=true)=>send([await methods.setExecutorLimits(new BN(action),new BN(daily),new BN(principal),enabled).accounts({owner:owner.publicKey,vault:safe,executorLimits:limits,systemProgram:SystemProgram.programId}).instruction()]);
-const build=async(action:'buy'|'sell'|'redeem',amount:bigint,signer=agent)=>{
- const result=await unsignedTransaction(connection,{action,amount:amount.toString(),owner:owner.publicKey.toBase58(),authority:signer.publicKey.toBase58(),slippageBps:50});
+const build=async(action:'buy'|'sell'|'redeem',amount:bigint,signer=agent,asset:'USDC'|'ONYC'='USDC')=>{
+ const result=await unsignedTransaction(connection,{action,asset,amount:amount.toString(),owner:owner.publicKey.toBase58(),authority:signer.publicKey.toBase58(),slippageBps:50});
  return {tx:VersionedTransaction.deserialize(Buffer.from(result.unsignedTransaction,'base64')),result};
 };
 const mutate=async(tx:VersionedTransaction,change:(ix:import('@solana/web3.js').TransactionInstruction)=>void)=>{
@@ -122,8 +123,38 @@ try {
  await reject('substituted market',await mutate(checked,ix=>{ix.keys[30]={...ix.keys[30],pubkey:new PublicKey(EXPONENT.coreVault)};}),agent,/InvalidAccounts/);
  await reject('substituted recipient',await mutate(checked,ix=>{ix.keys[11]={...ix.keys[11],pubkey:safeUsdc};}),agent,/ConstraintTokenOwner|ConstraintAssociated|ConstraintAddress/);
  await reject('unsatisfied minimum rolls back Orca',await mutate(checked,ix=>{const high=ix.data.readBigUInt64LE(32)*BigInt(2);ix.data.writeBigUInt64LE(high,24);ix.data.writeBigUInt64LE(high,32);}),agent,/Slippage exceeded|Slippage/);
+ // Native ONyc enters and leaves the same Safe without an Orca CPI. This balance is a fork-only fixture.
+ const onycAccount=await context.banksClient.getAccount(ownerOnyc);assert(onycAccount);
+ const onycData=Buffer.from(onycAccount.data);onycData.writeBigUInt64LE(BigInt(300_000_000_000),64);
+ context.setAccount(ownerOnyc,{...onycAccount,data:onycData});
+ const transfer=async(action:'deposit_onyc'|'withdraw_onyc',amount:bigint)=>{
+   const t=await unsignedOnycTransfer(connection,owner.publicKey.toBase58(),action,amount.toString());
+   return send(VersionedTransaction.deserialize(Buffer.from(t.unsignedTransaction,'base64')));
+ };
+ await transfer('deposit_onyc',BigInt(150_000_000_000));assert.equal(await balance(safeOnyc),BigInt(150_000_000_000));
+  const nativeChecked=(await build('buy',BigInt(100_000_000_000),owner,'ONYC')).tx;
+  await reject('native buy impossible PT minimum rolls back',await mutate(nativeChecked,ix=>{
+    const high=ix.data.readBigUInt64LE(32)*BigInt(2);ix.data.writeBigUInt64LE(high,24);
+  }),owner,/Slippage exceeded|Slippage/);
+ const nativeBuy=await build('buy',BigInt(100_000_000_000),owner,'ONYC');await send(nativeBuy.tx,owner);
+ assert.equal(await balance(safeOnyc),BigInt(50_000_000_000));
+ const nativePt=BigInt((await pos()).trackedPt),nativeOwnerBefore=await balance(ownerOnyc);
+  const nativeExitChecked=(await build('sell',nativePt,owner,'ONYC')).tx;
+  await reject('native exit wrong ONyc recipient',await mutate(nativeExitChecked,ix=>{
+    const index=ix.keys.findIndex(k=>k.pubkey.equals(ownerOnyc));assert(index>=0);ix.keys[index]={...ix.keys[index],pubkey:safeOnyc};
+  }),owner,/InvalidAccounts/);
+ const nativeExit=await build('sell',nativePt,owner,'ONYC');await send(nativeExit.tx,owner);
+ const nativeProceeds=(await balance(ownerOnyc))-nativeOwnerBefore;
+ assert.equal((await pos()).trackedPt,'0');assert.equal((await pos()).principalUsdc,'0');
+ assert.equal(await balance(safeOnyc),BigInt(50_000_000_000));
+ await transfer('withdraw_onyc',BigInt(50_000_000_000));assert.equal(await balance(safeOnyc),BigInt(0));
+ await assert.rejects(build('buy',BigInt(1_000_000_000),agent,'ONYC'),/owner signature/);
+ report.nativeOnyc={depositedRaw:'150000000000',pt:nativePt.toString(),exitToOwnerRaw:nativeProceeds.toString(),
+   remainingSafeRaw:(await balance(safeOnyc)).toString(),buyBytes:nativeBuy.result.serializedBytes,exitBytes:nativeExit.result.serializedBytes};
+ await transfer('deposit_onyc',BigInt(100_000_000_000));
+ await send((await build('buy',BigInt(100_000_000_000),owner,'ONYC')).tx,owner);
  const matureBuy=await build('buy',BigInt(1_000_000_000));await send(matureBuy.tx,agent);
- const maturityPt=BigInt((await pos()).trackedPt),ownerBefore=await balance(ownerUsdc);
+ const maturityPt=BigInt((await pos()).trackedPt),ownerBefore=await balance(ownerUsdc),ownerOnycBefore=await balance(ownerOnyc);
  const feedAddress=new PublicKey(EXPONENT.scope),feed=await context.banksClient.getAccount(feedAddress);assert(feed);
  const future=BigInt(EXPONENT.maturity+60),futureSlot=originalClock.slot+BigInt(1);
  context.setClock(new runtime.Clock(futureSlot,originalClock.epochStartTimestamp,originalClock.epoch,originalClock.leaderScheduleEpoch,future));
@@ -135,11 +166,11 @@ try {
  // Once Core freezes its rate, a later Scope update must not change the PT->ONyc quote.
  const appreciated=Buffer.from(fresh);appreciated.writeBigUInt64LE(appreciated.readBigUInt64LE(offset)*BigInt(110)/BigInt(100),offset);
  context.setAccount(feedAddress,{...feed,data:appreciated});
- const late=await build('redeem',BigInt((await pos()).trackedPt));assert(late.result.quote.redemptionRateFrozen);
+ const late=await build('redeem',BigInt((await pos()).trackedPt),owner,'ONYC');assert(late.result.quote.redemptionRateFrozen);
  assert.equal(late.result.simulation.error,null,'late redemption uses Core frozen rate: '+late.result.simulation.logs.join('\n'));
- const lateCu=await send(late.tx,agent);assert.equal((await pos()).trackedPt,'0');assert.equal((await pos()).principalUsdc,'0');
+ const lateCu=await send(late.tx,owner);assert.equal((await pos()).trackedPt,'0');assert.equal((await pos()).principalUsdc,'0');
  assert.equal(await balance(safePt),BigInt(0));assert.equal(await balance(tokenAddress(safe,EXPONENT.yt)),BigInt(0));
- report.maturity={pt:maturityPt.toString(),usdcToOwner:((await balance(ownerUsdc))-ownerBefore).toString(),redeemCu,bytes:redeem.result.serializedBytes,
+ report.maturity={pt:maturityPt.toString(),usdcToOwner:((await balance(ownerUsdc))-ownerBefore).toString(),onycToOwner:((await balance(ownerOnyc))-ownerOnycBefore).toString(),redeemCu,bytes:redeem.result.serializedBytes,
    clock:future.toString(),assumption:'First half at snapshot NAV; second half after synthetic +10% Scope update, DEX pool held fixed',quote:redeem.result.quote,lateQuote:late.result.quote,lateCu};
  console.log('MATURITY',report.maturity);
  writeFileSync(process.env.EXPONENT_REPORT||dir+'/result.json',JSON.stringify(report,null,2));

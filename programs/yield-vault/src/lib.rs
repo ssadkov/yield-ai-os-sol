@@ -289,13 +289,28 @@ pub mod yield_vault {
         exponent::set_policy(ctx, enabled, max_loss_bps, max_slippage_bps)
     }
     pub fn exponent_buy_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
-        exponent::buy(ctx, order)
+        exponent::buy(ctx, order, false)
+    }
+    pub fn exponent_buy_pt_with_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::buy(ctx, order, true)
     }
     pub fn exponent_sell_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
-        exponent::exit(ctx, order, false)
+        exponent::exit(ctx, order, false, false)
+    }
+    pub fn exponent_sell_pt_for_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, false, true)
     }
     pub fn exponent_redeem_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
-        exponent::exit(ctx, order, true)
+        exponent::exit(ctx, order, true, false)
+    }
+    pub fn exponent_redeem_pt_for_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, true, true)
+    }
+    pub fn deposit_onyc(ctx: Context<OnycTransfer>, amount: u64) -> Result<()> {
+        exponent::transfer_onyc(ctx, amount, true)
+    }
+    pub fn withdraw_onyc(ctx: Context<OnycTransfer>, amount: u64) -> Result<()> {
+        exponent::transfer_onyc(ctx, amount, false)
     }
     pub fn recover_exponent(ctx: Context<RecoverExponent>, amount: u64) -> Result<()> {
         exponent::recover(ctx, amount)

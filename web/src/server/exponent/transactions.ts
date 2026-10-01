@@ -11,8 +11,10 @@ const meta=(pubkey:PublicKey,isWritable=false,isSigner=false)=>({pubkey,isWritab
 function orcaAccounts(s:Loaded,safe:PublicKey,swap:Awaited<ReturnType<typeof dex>>) {
   if(!s.pool)throw Error('Orca pool unavailable');
   const d=s.pool.getData();
+  const fixedTickArray=new PublicKey(EXPONENT.fixedTickArray);
+  if(!swap.tickArray0.equals(fixedTickArray))throw Error('Orca active tick range is outside the reviewed fixed array');
   return [meta(new PublicKey(EXPONENT.orcaProgram)),meta(TOKEN_PROGRAM_ID),meta(safe),meta(new PublicKey(EXPONENT.whirlpool),true),
-    ...[tokenAddress(safe,EXPONENT.onyc),d.tokenVaultA,tokenAddress(safe,EXPONENT.usdc),d.tokenVaultB,swap.tickArray0,swap.tickArray1,swap.tickArray2,
+    ...[tokenAddress(safe,EXPONENT.onyc),d.tokenVaultA,tokenAddress(safe,EXPONENT.usdc),d.tokenVaultB,fixedTickArray,fixedTickArray,fixedTickArray,
       PDAUtil.getOracle(ORCA_WHIRLPOOL_PROGRAM_ID,new PublicKey(EXPONENT.whirlpool)).publicKey].map(k=>meta(k,true))];
 }
 export function positionSetup(owner:PublicKey,lossBps=500,slippageBps=50) {

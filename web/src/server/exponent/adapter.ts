@@ -7,6 +7,7 @@ import BN from 'bn.js';
 import Decimal from 'decimal.js';
 import { createHash } from 'node:crypto';
 import { EXPONENT, EXPONENT_MARKET, SAFE_PROGRAM, type ExponentAction, rawAmount, minimum, exitBasis, projectedProfitFee, safeAddress, positionAddress, decodePosition } from '../../lib/exponentV2';
+import { exponentDeploymentReady } from './deployment';
 
 export type QuoteRequest={market?:string;action:ExponentAction;amount:string;asset?:'USDC'|'ONYC';owner?:string;authority?:string;slippageBps?:number};
 export const emptyWallet=(publicKey:PublicKey)=>({publicKey,signTransaction:async()=>{throw Error('unsigned only')},signAllTransactions:async()=>{throw Error('unsigned only')}});
@@ -52,13 +53,13 @@ async function readPosition(connection:Connection,owner?:string) {
   const p=decodePosition(info.data,address);if(p.safe!==safe.toBase58())throw Error('foreign position');return p;
 }
 export async function marketInfo(connection:Connection) {
-  const s=await loadMarket(connection);
+  const [s,executionReady]=await Promise.all([loadMarket(connection),exponentDeploymentReady(connection)]);
   return {id:EXPONENT_MARKET,market:EXPONENT.market,coreVault:EXPONENT.coreVault,ptMint:EXPONENT.pt,baseMint:EXPONENT.onyc,
     decimals:{usdc:6,pt:9,onyc:9},maturity:new Date(EXPONENT.maturity*1000).toISOString(),chainTime:s.now,slot:s.slot,
     nav:{value:s.navDecimal,source:'on-chain Scope index 108',oracleTimestamp:s.oracleTimestamp,oracleSlot:s.oracleSlot,positionSnapshotScale:'1000000000000'},
     route:'USDC or ONyc → PT (Exponent CLMM); sale or maturity redemption → ONyc or USDC via Orca',
     leveraged:false,pilotFeeBps:0,futureDisplayProfitFeeBps:500,defaultMaxLossBps:500,maxSlippageBps:100,
-    executionReady:false,reason:'Safe upgrade and owner-signed mainnet acceptance cycle require separate approval'};
+    executionReady,reason:executionReady?null:'Reviewed Safe ELF is not deployed on Mainnet'};
 }
 export async function quote(connection:Connection,request:QuoteRequest) {
   if(request.market&&request.market!==EXPONENT_MARKET)throw Error('unsupported market');
@@ -70,7 +71,8 @@ export async function quote(connection:Connection,request:QuoteRequest) {
   if(request.owner)new PublicKey(request.owner);if(request.authority)new PublicKey(request.authority);
   const slippageBps=request.slippageBps??50;
   if(!Number.isInteger(slippageBps)||slippageBps<2||slippageBps>100)throw Error('slippageBps must be 2..100');
-  const legBps=Math.floor(slippageBps/2),s=await loadMarket(connection,asset==='USDC'),p=await readPosition(connection,request.owner);
+  const legBps=Math.floor(slippageBps/2);
+  const [s,p,executionReady]=await Promise.all([loadMarket(connection,asset==='USDC'),readPosition(connection,request.owner),exponentDeploymentReady(connection)]);
   if(request.action==='buy'&&s.now>=EXPONENT.maturity)throw Error('market matured');
   if(request.action==='sell'&&s.now>=EXPONENT.maturity)throw Error('use redemption after maturity');
   const math={financials:s.market.state.financials,configurationOptions:s.market.state.configurationOptions,ticks:s.market.state.ticks,currentSyExchangeRate:s.nav};
@@ -113,7 +115,7 @@ export async function quote(connection:Connection,request:QuoteRequest) {
     redemptionRate:request.action==='redeem'?redemptionRate:null,redemptionRateFrozen:request.action==='redeem'&&frozenRate>0,
     basisUsdc:basis?.toString()??null,inputBasisUsdc:request.action==='buy'?inputBasis.toString():null,
     maturityOnycAtCurrentNavRaw:maturityOnyc?.toString()??null,lossFloorUsdc:lossFloor?.toString()??null,economicAllowed,
-    position:p,pilotFeeBps:0,pilotFeeUsdc:'0',previewOnly:request.action==='redeem'&&s.now<EXPONENT.maturity,executionReady:false,
+    position:p,pilotFeeBps:0,pilotFeeUsdc:'0',previewOnly:request.action==='redeem'&&s.now<EXPONENT.maturity,executionReady,
     maturityPreview:maturityOnyc===null||maturityUsdc===null?null:{ptRaw:expected.toString(),onycRaw:maturityOnyc.toString(),usdcAtCurrentDexRaw:maturityUsdc.toString(),
       projectedFutureProfitFeeUsdc:projectedFee!.toString(),projectedNetUsdc:(maturityUsdc!-projectedFee!).toString(),
       grossApyBeforeDexFees:annualize(expected/BigInt(1000)),netApyAfterCurrentDexAndFutureProfitFee:annualize(maturityUsdc-projectedFee!),displayProfitFeeBps:500,

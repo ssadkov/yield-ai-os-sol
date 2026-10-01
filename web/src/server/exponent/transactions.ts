@@ -4,6 +4,7 @@ import { PDAUtil, ORCA_WHIRLPOOL_PROGRAM_ID } from '@orca-so/whirlpools-sdk';
 import { EXPONENT, SAFE_PROGRAM, type ExponentAction, rawAmount, safeAddress, positionAddress, tokenAddress, instructionTag, exponentAccounts, assertExponentInstruction } from '../../lib/exponentV2';
 import { quote, type QuoteRequest, type Loaded, dex } from './adapter';
 import Decimal from 'decimal.js';
+import { exponentDeploymentReady } from './deployment';
 
 export const policyAddress=(seed:string,safe?:PublicKey)=>PublicKey.findProgramAddressSync([Buffer.from(seed),...(safe?[safe.toBuffer()]:[])],SAFE_PROGRAM)[0];
 const meta=(pubkey:PublicKey,isWritable=false,isSigner=false)=>({pubkey,isWritable,isSigner});
@@ -34,10 +35,11 @@ async function serialize(connection:Connection,payer:PublicKey,ixs:TransactionIn
     instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:1_400_000}),...ixs]}).compileToV0Message(tables));
   const bytes=tx.serialize();if(bytes.length>1232)throw Error('atomic route exceeds Solana transaction size');
   const sim=await connection.simulateTransaction(tx,{sigVerify:false,replaceRecentBlockhash:true,commitment:'confirmed'});
+  const executionReady=sim.value.err===null&&await exponentDeploymentReady(connection);
   return {unsignedTransaction:Buffer.from(bytes).toString('base64'),blockhash,lastValidBlockHeight,serializedBytes:bytes.length,requiredSigners:[payer.toBase58()],
     simulation:{error:sim.value.err,unitsConsumed:sim.value.unitsConsumed??null,logs:sim.value.logs??[]},
-    networkFeeLamports:(await connection.getFeeForMessage(tx.message,'confirmed')).value,executionReady:false,
-    deploymentStatus:'Preview only; mainnet upgrade and owner-signed acceptance require separate approval'};
+    networkFeeLamports:(await connection.getFeeForMessage(tx.message,'confirmed')).value,executionReady,
+    deploymentStatus:executionReady?'Reviewed Safe ELF verified on Mainnet':'Reviewed Safe ELF not deployed or transaction simulation failed'};
 }
 /** Preparation is separate; neither SDK nor this API ever signs or sends a transaction. */
 export async function unsignedSetup(connection:Connection,ownerString:string,lossBps=500,slippageBps=50) {
@@ -99,5 +101,5 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
     'exponent_'+request.action+'_pt_for_onyc';
   const action=new TransactionInstruction({programId:SAFE_PROGRAM,keys:[...fixed,...nativeRecipient,...(request.action==='buy'?[...orca,...exp]:[...exp,...orca])],
     data:Buffer.concat([instructionTag(actionName),data])});
-  return {quote:q.public,safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[action],true)};
+  return {quote:q.public,minimumOutputRaw:minOut.toString(),safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[action],true)};
 }

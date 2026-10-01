@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL, PublicKey, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -292,6 +293,7 @@ export function SafeV2Panel() {
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold"><ShieldCheck className="h-6 w-6 text-primary" /> Yield AI Safe v2</h1>
         <p className="text-muted-foreground">Your personal Solana Safe. Only your wallet can move funds out. Program {short(PROGRAM_ID.toBase58())} · {cluster}</p>
+        <Link className="text-primary underline" href="/v2/exponent">ONyc fixed income →</Link>
       </div>
       <WalletMultiButton />
     </header>

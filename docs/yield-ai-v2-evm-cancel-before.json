@@ -1,0 +1,17 @@
+{
+  "cluster": "devnet",
+  "owner": "0xb659DA13418527601C52D4220536C12397F20855",
+  "safe": "bn4KYuYg6fvbqPEh13rC1Exr5HuPCC455KiC1dTEnEr",
+  "ata": "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+  "slot": 506231001,
+  "nonce": "2",
+  "safeMaskedSha256": "9b437d910fa233a340f1feea05b41ed7472567fbebb7191cdcc7fa6d81ab5d5b",
+  "safeLamports": 4231640,
+  "ataSha256": "fbb6673f77d72f191a094974e573d45c286067473b52bf0e28a24ae39cd3c493",
+  "ataLamports": 1488440,
+  "usdcRaw": "0",
+  "sponsorLamports": 44269920,
+  "observedAt": "2026-10-01T09:46:56.612Z",
+  "transactionsSent": false,
+  "signerFilesRead": false
+}

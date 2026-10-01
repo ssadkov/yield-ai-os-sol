@@ -1,0 +1,19 @@
+{
+  "cluster": "devnet",
+  "multisig": "GGLdf4MtQkT98QoaDLyadrsn9rcEzRw1BxhaAkvvPN5r",
+  "vault": "JD59fdFqhchEt4CBFw9QKhXYeUvoeA5tAJ6kRWELPVDk",
+  "vaultIndex": 0,
+  "nextProposalIndex": "1",
+  "unsignedProposalAndFirstVoteSimulationPassed": true,
+  "simulationSignatureVerification": false,
+  "simulationPayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "actualUiPayer": "connected member wallet",
+  "action": "memo_only_governance_rehearsal",
+  "memo": "Yield AI Devnet governance rehearsal: 2of3,3600s",
+  "program": "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+  "amountLamports": 0,
+  "unsignedMessageBase58": "BYPL3D5ZsaXq5TNRtsL9V4yuvFRewSrKYPT9fdqxrc4rwP4vCrn3bsrggGuJxSvAY59w7EHtao1Q9J2iGNBWdqNTqPrnif5BRiT4iVMfYpB7QPkpZdP1mZTjEtE36cuzdBfPJDVE7waA1dhex38ShrQaeDnjbgiCQdFbLKEx6ovdSd5uCQ5e6HChzLvLLXBjiC7U2EGB5C6Y4nXC",
+  "walletMustSignProposal": true,
+  "transactionsSent": false,
+  "signerFilesRead": false
+}

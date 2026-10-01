@@ -19,3 +19,7 @@ The local Devnet relayer is funded, pins the verified ELF and runs sendEnabled=t
 [Local preview](http://localhost:3101/v2/evm-devnet) uses the canonical localhost origin. Lifecycle signing and relay are enabled. Submit to relayer executes the signed action within the configured limits. Build and 31 API/relayer tests passed. Build retried unrelated static-page RPC requests but completed successfully.
 
 The user changed the transaction rule: Devnet transactions in the agreed task scope require no further chat approval; Mainnet transactions require separate explicit approval. Owner signatures and preflight/receipt/spending checks remain mandatory. Production deployment remains separately gated. Safe close/rent refunds, ordinary funding, bridges/CCTP and yield-custody integrations remain disabled. The current single upgrade authority can still replace program logic; multisig/timelock governance is not active.
+
+## Devnet governance rehearsal update — 2026-10-01
+
+A standalone Squads v4 multisig has now been created and independently verified with the three user-selected Solana wallet members, threshold 2 of 3, one-hour Devnet timelock and no external config authority. Yield AI upgrade authority is still the operator; no authority transfer has occurred. Human voting/delayed execution and live EVM cancellation remain pending. See [exact receipt, wallet steps, unsigned Memo simulation and remaining gates](yield-ai-v2-evm-governance-rehearsal.md). The 48-hour Mainnet governance proposal remains unactivated.

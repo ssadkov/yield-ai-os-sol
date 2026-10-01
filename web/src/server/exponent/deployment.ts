@@ -4,8 +4,8 @@ import { SAFE_PROGRAM } from '../../lib/exponentV2';
 
 // Exact reviewed ELF. Rebuilds require a new review and hash before execution is enabled.
 const PROGRAM_DATA = new PublicKey('GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY');
-const ELF_BYTES = 811_288;
-const ELF_SHA256 = '49c394d8bfc22315ae1f12320e6f390e56d433da39c2bfde4246026ef90480d3';
+const ELF_BYTES = 686_960;
+const ELF_SHA256 = '9543eb14e69694d25d6a4d1bba2a5bcc7f00f1d34a095112d0b898764805269f';
 
 export async function exponentDeploymentReady(connection: Connection): Promise<boolean> {
   try {

@@ -21,7 +21,7 @@ function mock(programBytes: Buffer, code: Buffer): Connection {
 }
 
 async function main() {
-  assert.equal(elf.length, 811_288, 'unexpected local ELF size');
+  assert.equal(elf.length, 686_960, 'unexpected local ELF size');
   assert.equal(await exponentDeploymentReady(mock(program, data)), true);
   const changed = Buffer.from(data); changed[changed.length - 1] ^= 1;
   assert.equal(await exponentDeploymentReady(mock(program, changed)), false);

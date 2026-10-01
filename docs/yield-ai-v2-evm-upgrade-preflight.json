@@ -1,0 +1,101 @@
+{
+  "status": "read_only_preflight_ok",
+  "observedAt": "2026-09-30T18:25:38.390Z",
+  "cluster": "devnet",
+  "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "finalizedSlot": 505995099,
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "programData": "H5evLv9yEPaSRacNTYv5y4Tjdj3gJByUgavwMg66xTBg",
+  "upgradeAuthorityAndPayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "payerLamports": 12460952494,
+  "lastUpgradeSlot": "505600165",
+  "currentProgramDataBytes": 667181,
+  "currentDeployedElfBytes": 667136,
+  "currentDeployedElfSha256": "ec3a33f0534caa36dea969eb140e5d881fca9ad55fee94f68535745737d33bb2",
+  "reviewedElfBytes": 688864,
+  "reviewedElfSha256": "fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489",
+  "requiredProgramDataBytes": 688909,
+  "additionalBytes": 21728,
+  "requiredProgramDataRentLamports": 3500307960,
+  "additionalProgramDataRentLamports": 110378240,
+  "plannedBuffer": "HWZmWntMjPbMGUnFP2fh37kmGBuYD5ykx9RH23i8zPvp",
+  "bufferSeed": "evm-wd-fee494161131-20260930",
+  "bufferAlreadyExists": false,
+  "bufferBytes": 688901,
+  "bufferMinimumRentLamports": 3500267320,
+  "cliBufferFundingLamports": 3500307960,
+  "writeChunkBytes": 960,
+  "writeTransactionsUpperBound": 718,
+  "writeFeeLamports": 5000,
+  "singlePassFeeUpperBoundLamports": 3605000,
+  "proposedFeeCapLamports": 50000000,
+  "peakFundingWithCapLamports": 3660686200,
+  "netSpendWithFeeCapLamports": 160378240,
+  "bufferCreationSimulation": {
+    "error": null,
+    "unitsConsumed": 2820,
+    "feeLamports": 5000,
+    "accountPersisted": false
+  },
+  "extensions": [
+    {
+      "instruction": "ExtendProgramChecked",
+      "error": {
+        "InstructionError": [
+          2,
+          "InvalidInstructionData"
+        ]
+      },
+      "unitsConsumed": 2670,
+      "feeLamports": 5000,
+      "resultingProgramDataBytes": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program BPFLoaderUpgradeab1e11111111111111111111111 invoke [1]",
+        "Program BPFLoaderUpgradeab1e11111111111111111111111 failed: invalid instruction data"
+      ]
+    },
+    {
+      "instruction": "ExtendProgram",
+      "error": null,
+      "unitsConsumed": 2820,
+      "feeLamports": 5000,
+      "resultingProgramDataBytes": 688909,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program BPFLoaderUpgradeab1e11111111111111111111111 invoke [1]",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Extended ProgramData account by 21728 bytes",
+        "Program BPFLoaderUpgradeab1e11111111111111111111111 success"
+      ]
+    }
+  ],
+  "safe": {
+    "owner": "0x70d5d723Ba7f39Cfb676C67Bbd4b5D6aE8047f4B",
+    "address": "B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu",
+    "ata": "DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK",
+    "rentPayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+    "nonce": "1",
+    "allocationBps": [
+      5000,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "usdcRaw": "0"
+  },
+  "fullUpgradeSimulation": "not performed: new buffer not allocated/uploaded",
+  "transactionSent": false,
+  "walletFilesRead": false
+}

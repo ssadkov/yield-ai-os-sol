@@ -1,0 +1,43 @@
+{
+  "status": "full_recovery_finalized_verified",
+  "cluster": "devnet",
+  "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "intent": {
+    "action": "withdraw_usdc",
+    "cluster": "devnet",
+    "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "owner": "0x70d5d723Ba7f39Cfb676C67Bbd4b5D6aE8047f4B",
+    "safe": "B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu",
+    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "amountRaw": "900000",
+    "recipientTokenAccount": "eLJeneXAJnyyBanwkQ64JZGaZLGmkVP4x92JBEhzSyw",
+    "recipientOwner": "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2",
+    "nonce": "3",
+    "deadline": "1790833798"
+  },
+  "digest": "0x5d451fd2faf076012674f863626341923b375ffca285f0bb9bb83da41d54e023",
+  "txSignature": "rA7azNw6fdL966bAxso9J24f7CDEtqCHJFt2oF4KiAyvEyn4EAvjY8hZhKSeXA7YPC41bQvjJzcP9waX8qCsPS4",
+  "finalizedSlot": 506169976,
+  "blockTime": 1790833717,
+  "verifiedAt": "2026-10-01T05:51:06.494Z",
+  "readbackSlot": 506170607,
+  "feePayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "actualFeeLamports": 5000,
+  "rentLamports": 0,
+  "source": "DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK",
+  "sourceBeforeRaw": "900000",
+  "sourceAfterRaw": "0",
+  "recipientBeforeRaw": "100000",
+  "recipientAfterRaw": "1000000",
+  "nonceBefore": "2",
+  "nonceAfter": "3",
+  "deployedSha256": "fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489",
+  "simulation": {
+    "error": null,
+    "computeUnits": 41725
+  },
+  "eip712OwnerSignatureVerified": true,
+  "transactionSent": true,
+  "independentReceiptAndReadbackVerified": true
+}

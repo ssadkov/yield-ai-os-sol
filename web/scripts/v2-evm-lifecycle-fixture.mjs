@@ -1,0 +1,15 @@
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire, Module } from "node:module";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+import { Keypair } from "@solana/web3.js";
+import { privateKeyToAccount } from "viem/accounts";
+import { hashTypedData } from "viem";
+const require=createRequire(import.meta.url),path=fileURLToPath(new URL("../src/lib/v2EvmDevnet.ts",import.meta.url)),mod=new Module(path);
+mod.filename=path;mod.paths=require.resolve.paths("viem");mod._compile(ts.transpileModule(readFileSync(path,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}).outputText,path);
+const h=mod.exports,owner=privateKeyToAccount("0x"+randomBytes(32).toString("hex")),payer=Keypair.generate().publicKey,{safe}=h.deriveEvmSafe(owner.address);
+const create=h.lifecycleTypedData(safe,1n,2000000000n,payer),cancel=h.lifecycleTypedData(safe,9n,2000000000n);
+const fixture={owner:owner.address,safe:safe.toBase58(),mint:h.EVM_DEVNET_USDC_MINT.toBase58(),rentPayer:payer.toBase58(),deadline:"2000000000",createDigest:hashTypedData(create),createSignature:await owner.signTypedData(create),cancelDigest:hashTypedData(cancel),cancelSignature:await owner.signTypedData(cancel)};
+writeFileSync(new URL("../../programs/yield-vault/tests/fixtures/evm-lifecycle.json",import.meta.url),JSON.stringify(fixture,null,2)+"\n");
+console.log(JSON.stringify({status:"public_lifecycle_fixture_written",owner:fixture.owner,createDigest:fixture.createDigest,cancelDigest:fixture.cancelDigest}));

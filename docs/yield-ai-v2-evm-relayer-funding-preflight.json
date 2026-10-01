@@ -1,0 +1,18 @@
+{
+  "status": "unsigned_simulation_ok",
+  "observedAt": "2026-10-01T06:10:24.119Z",
+  "cluster": "devnet",
+  "action": "fund_separate_relayer",
+  "from": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "to": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "amountLamports": 50000000,
+  "feeLamports": 5000,
+  "rentLamports": 0,
+  "payerBeforeLamports": 12346954254,
+  "payerAfterLamports": 12296949254,
+  "recipientBeforeLamports": 0,
+  "recipientAfterLamports": 50000000,
+  "sendEnabled": false,
+  "transactionSent": false,
+  "walletFilesRead": false
+}

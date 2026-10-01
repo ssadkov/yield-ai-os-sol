@@ -1,0 +1,25 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import {createRequire,Module} from "node:module";
+import {fileURLToPath} from "node:url";
+import ts from "typescript";
+const require=createRequire(import.meta.url),id="0x"+"a".repeat(64);
+let upstreamId=id, extra={}, code=202, called=0;
+const path=fileURLToPath(new URL("../src/app/api/v2/evm-relay/route.ts",import.meta.url));
+const mod=new Module(path);mod.filename=path;mod.paths=require.resolve.paths("next/server");
+mod.require=name=>name==="@/lib/v2EvmDevnet"?{parseEvmOwnerIntent:x=>{if(!x||x.invalid)throw Error("bad");return x;},verifyEvmIntentSignature:async()=>id}:name==="node:fs"?{readFileSync:()=>"s".repeat(48)}:require(name);
+mod._compile(ts.transpileModule(readFileSync(path,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}).outputText,path);
+const {POST,GET}=mod.exports;
+const realFetch=globalThis.fetch;
+test.beforeEach(()=>{upstreamId=id;extra={};code=202;called=0;process.env.V2_EVM_RELAYER_ENABLED="true";process.env.V2_EVM_RELAYER_URL="http://127.0.0.1:3102";process.env.V2_EVM_RELAYER_SUBMIT_TOKEN_FILE="/private/submit-token";
+ globalThis.fetch=async()=>{called++;return new Response(JSON.stringify({id:upstreamId,state:"quoted",plan:{id:upstreamId,cluster:"devnet",costLamports:5000,debugSecret:"must not leak"},planHash:"b".repeat(64),wireBase64:"must not leak",signature:"bad",...extra}),{status:code,headers:{"content-type":"application/json"}});};});
+test.after(()=>{globalThis.fetch=realFetch;});
+function request(body={},origin="https://lab.test",type="application/json"){return new Request("https://lab.test/api/v2/evm-relay",{method:"POST",headers:{origin,"content-type":type},body:JSON.stringify(body)});}
+test("proxy exposes only public fields and binds response to verified intent digest",async()=>{const r=await POST(request());assert.equal(r.status,202);const b=await r.json();assert.equal(b.id,id);assert.equal(b.wireBase64,undefined);assert.equal(b.plan.debugSecret,undefined);assert.equal(b.signature,undefined);
+ upstreamId="0x"+"c".repeat(64);assert.equal((await POST(request())).status,503);});
+test("origin, content type, signature and body limit reject before forwarding",async()=>{assert.equal((await POST(request({},"https://evil.test"))).status,403);assert.equal((await POST(request({},"https://lab.test","text/plain"))).status,415);assert.equal((await POST(request({invalid:true}))).status,400);assert.equal((await POST(request({large:"x".repeat(4096)}))).status,413);assert.equal(called,0);});
+test("disabled proxy and non-loopback upstream fail closed",async()=>{delete process.env.V2_EVM_RELAYER_ENABLED;assert.equal((await POST(request())).status,503);process.env.V2_EVM_RELAYER_ENABLED="true";
+ for(const url of ["http://evil.test","https://127.0.0.1","http://user:password@127.0.0.1","http://127.0.0.1/jobs"]){process.env.V2_EVM_RELAYER_URL=url;assert.equal((await POST(request())).status,503);}assert.equal(called,0);});
+test("upstream error text and unexpected states never leak to browser",async()=>{code=409;extra={error:"secret RPC credential"};const r=await POST(request());assert.equal(r.status,409);assert.doesNotMatch(JSON.stringify(await r.json()),/secret/);code=202;extra={state:"debug"};assert.equal((await POST(request())).status,503);});
+test("job lookup requires digest and rejects a different returned job",async()=>{assert.equal((await GET(new Request("https://lab.test/api/v2/evm-relay?id=bad"))).status,400);assert.equal(called,0);const r=await GET(new Request("https://lab.test/api/v2/evm-relay?id="+id));assert.equal(r.status,202);upstreamId="0x"+"c".repeat(64);assert.equal((await GET(new Request("https://lab.test/api/v2/evm-relay?id="+id))).status,503);});

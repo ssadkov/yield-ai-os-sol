@@ -1,0 +1,51 @@
+{
+  "cluster": "devnet",
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "status": "six_live_simulations_passed",
+  "ephemeralTestOwner": "0x6c4513d05A56ab4C4D4b02d04CF72916B142E27e",
+  "testSafe": "4UnjuqSbTV1RhJZiPywKuPsnyXVA39tf5y1RLTeewjyX",
+  "payer": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "payerBalanceUnchanged": true,
+  "testSafeCreated": false,
+  "transactionsSent": false,
+  "solanaSignerFilesRead": false,
+  "results": [
+    {
+      "name": "signed creation followed by signed cancellation",
+      "passed": true,
+      "errorName": null,
+      "computeUnits": 99498
+    },
+    {
+      "name": "legacy unsigned creation",
+      "passed": true,
+      "errorName": "OwnerSignatureRequired",
+      "computeUnits": 42054
+    },
+    {
+      "name": "sponsor substitution",
+      "passed": true,
+      "errorName": "WrongSigner",
+      "computeUnits": 68844
+    },
+    {
+      "name": "cancel replay",
+      "passed": true,
+      "errorName": "InvalidNonce",
+      "computeUnits": 105515
+    },
+    {
+      "name": "expired creation",
+      "passed": true,
+      "errorName": "SignatureExpired",
+      "computeUnits": 43537
+    },
+    {
+      "name": "high-s malleable creation",
+      "passed": true,
+      "errorName": "HighSignatureS",
+      "computeUnits": 43576
+    }
+  ],
+  "verifiedAt": "2026-10-01T08:17:51.514Z"
+}

@@ -1,0 +1,30 @@
+{
+  "cluster": "devnet",
+  "squadsProgram": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+  "squadsProgramData": "Fy3YMJCvwbAXUgUM5b91ucUVA3jYzwWLHL3MwBqKsh8n",
+  "squadsProgramDataSha256": "97fb2a5c08e5df5e862d8354ac5b97d3587117f98c4457754ca12e30bef0664d",
+  "multisig": "GGLdf4MtQkT98QoaDLyadrsn9rcEzRw1BxhaAkvvPN5r",
+  "vault": "JD59fdFqhchEt4CBFw9QKhXYeUvoeA5tAJ6kRWELPVDk",
+  "createKey": "7RUuXTM5gqCc3mNe2EhKGDcrYrUscpgi7J7N2S71hqdf",
+  "members": [
+    "5m14KnDtidRfBXqETVRCWbNQJNPy8sxxhviaTqkf51XQ",
+    "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2",
+    "4HfKpcmwZoF2u1ZVmHBJ6496y8VjNZGTHpJQTLQZ2E4B"
+  ],
+  "threshold": 2,
+  "timeLockSeconds": 3600,
+  "configAuthority": "11111111111111111111111111111111",
+  "feePayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "yieldProgram": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "yieldUpgradeAuthority": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "yieldElfSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98",
+  "relayerExcluded": true,
+  "authorityTransferred": false,
+  "status": "devnet_multisig_create_preflight_ok",
+  "feeLamports": 10000,
+  "rentLamports": 1823720,
+  "creationFeeLamports": 0,
+  "totalOperatorDebitLamports": 1833720,
+  "maxCostLamports": 200000000,
+  "computeUnits": 22641
+}

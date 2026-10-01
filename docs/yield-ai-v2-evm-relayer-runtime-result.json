@@ -1,0 +1,33 @@
+{
+  "status": "local_devnet_service_enabled_and_checked",
+  "cluster": "devnet",
+  "health": {
+    "cluster": "devnet",
+    "payer": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+    "sendEnabled": true,
+    "automatic": true,
+    "allowLifecycle": true
+  },
+  "expectedElfSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98",
+  "expectedElfBytes": 695488,
+  "limits": {
+    "maxFeeLamports": 5000,
+    "maxRentLamports": 10000000,
+    "maxDailyLamports": 20000000,
+    "maxHourlyTransactions": 10,
+    "minBalanceLamports": 10000000
+  },
+  "allowedOwners": [
+    "0x70d5d723Ba7f39Cfb676C67Bbd4b5D6aE8047f4B"
+  ],
+  "checks": {
+    "missingCredential": 401,
+    "submitCredentialAtAdminEndpoint": 401,
+    "unsignedMalformedIntent": 409,
+    "expiredConsumedOwnerIntent": 409
+  },
+  "journalJobs": 0,
+  "ownerTransactionsSent": 0,
+  "serviceSignerIsUpgradeAuthority": false,
+  "verifiedAt": "2026-10-01T08:21:31.778435+00:00"
+}

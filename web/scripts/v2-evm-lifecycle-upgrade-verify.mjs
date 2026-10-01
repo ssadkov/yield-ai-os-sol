@@ -1,0 +1,26 @@
+/** Read-only, independent finalized lifecycle release verification. No signer is loaded. */
+import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { Connection, PublicKey } from "@solana/web3.js";
+const journal=JSON.parse(readFileSync(new URL("../../target/deploy/evm-lifecycle-upgrade-journal.json",import.meta.url),"utf8"));
+assert.equal(journal.status,"verified_finalized");
+const expected="4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98",hash=b=>createHash("sha256").update(b).digest("hex");
+const program=new PublicKey("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5"),loader=new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+const authority=new PublicKey("8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A"),[programData]=PublicKey.findProgramAddressSync([program.toBuffer()],loader);
+const safe=new PublicKey("B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu"),ata=new PublicKey("DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK");
+const connection=new Connection(process.env.V2_DEVNET_RPC_URL||"https://api.devnet.solana.com","finalized");
+assert.equal(await connection.getGenesisHash(),"EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG");
+const a=await connection.getMultipleAccountsInfoAndContext([program,programData,authority,safe,ata,new PublicKey(journal.buffer)],"finalized");
+const [p,d,payer,v,t,b]=a.value;
+assert(p.executable&&p.owner.equals(loader)&&new PublicKey(p.data.subarray(4)).equals(programData));
+assert(d.owner.equals(loader)&&d.data.readUInt32LE()===3&&d.data[12]===1&&new PublicKey(d.data.subarray(13,45)).equals(authority));
+assert.equal(d.data.length,699149);assert.equal(hash(d.data.subarray(45,45+695488)),expected);assert(d.data.subarray(45+695488).every(x=>x===0));
+assert.equal(hash(v.data),journal.safeBeforeSha256);assert.equal(hash(t.data),journal.ataBeforeSha256);assert.equal(v.data.readBigUInt64LE(61),3n);assert.equal(t.data.readBigUInt64LE(64),0n);assert.equal(b,null);
+const receipt=await connection.getTransaction(journal.result.transaction,{commitment:"finalized",maxSupportedTransactionVersion:0});
+assert(receipt&&!receipt.meta.err);assert.equal(receipt.meta.fee,5000);assert.equal(d.data.readBigUInt64LE(4),BigInt(receipt.slot));
+const completed=journal.transactions.filter(x=>x.status==="finalized"),rejected=journal.transactions.filter(x=>x.status==="not_sent_rpc_preflight_rejection");
+assert.equal(completed.length,728);assert.equal(completed.filter(x=>x.action==="write_buffer").length,725);assert(journal.transactions.every(x=>["finalized","not_sent_rpc_preflight_rejection"].includes(x.status)));
+const fees=completed.reduce((n,x)=>n+x.estimatedFeeLamports,0);assert.equal(fees,3640000);assert.equal(journal.result.netSpendLamports,fees+52019200);
+const result={status:"independently_verified_finalized",cluster:"devnet",program:program.toBase58(),programData:programData.toBase58(),upgradeAuthority:authority.toBase58(),transaction:journal.result.transaction,finalizedSlot:receipt.slot,elfBytes:695488,elfSha256:expected,programDataBytes:d.data.length,reservedZeroPaddingBytes:3616,buffer:journal.buffer,bufferAbsent:true,bufferRentReturnedLamports:3533957880,additionalProgramRentLamports:52019200,totalTransactionFeesLamports:fees,netSpendLamports:journal.result.netSpendLamports,finalizedTransactionCount:completed.length,preflightRejectedWrites:rejected.map(x=>({signature:x.signature,offset:x.offset,error:x.rpcRejection.err,lastValidBlockHeight:x.lastValidBlockHeight,finalizedBlockHeightAtResolution:x.finalizedBlockHeightAtResolution})),safe:safe.toBase58(),safeAta:ata.toBase58(),safeNonce:"3",safeUsdcRaw:"0",safeUnchanged:true,ataUnchanged:true,sourceFinalizedReadSlot:a.context.slot,payerAtReadbackLamports:payer.lamports,verifiedAt:new Date().toISOString(),signerLoaded:false};
+writeFileSync(new URL("../../docs/yield-ai-v2-evm-lifecycle-upgrade-result.json",import.meta.url),JSON.stringify(result,null,2)+"\n");console.log(JSON.stringify(result));

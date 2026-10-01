@@ -1,0 +1,21 @@
+{
+  "status": "new_human_owner_ready_for_creation_signature",
+  "owner": "0xb659DA13418527601C52D4220536C12397F20855",
+  "safe": "bn4KYuYg6fvbqPEh13rC1Exr5HuPCC455KiC1dTEnEr",
+  "ata": "rQUE1MGE7jwzyCoUdWTphYKP28hjU3QqcnMjnGCwLxm",
+  "cluster": "devnet",
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "sponsor": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "safeExists": false,
+  "nextNonce": "1",
+  "rentLamports": 5720080,
+  "feeCapLamports": 5000,
+  "maxIntentTtlSeconds": 600,
+  "ownerSignatureReceived": false,
+  "transactionSent": false,
+  "verifiedAt": "2026-10-01T08:37:31.170Z",
+  "relayerRestartVerified": true,
+  "ownerAllowlisted": true,
+  "allowedOwnerCount": 2,
+  "runtimeCheckedAt": "2026-10-01T08:44:09.046678+00:00"
+}

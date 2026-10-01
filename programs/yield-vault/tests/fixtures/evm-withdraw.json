@@ -1,0 +1,15 @@
+{
+  "owner": "0xAdA40435735fA85bB9f0cAd4Fe1eFa1Dba09C89A",
+  "safe": "2U4Pq29aNc3kfkBc82WKCxr3SMWi6BjL7PYTTxhTt7Qt",
+  "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "amountRaw": "100000",
+  "recipientTokenAccount": "62xvzfD3FtfryokF3vZYHRtgFVbqufkzkrAfgqZEbwZR",
+  "recipientOwner": "2twCpxj6cqztdXwgV7EabmtDnC7W7xGr12hNrEuxpcdj",
+  "nonce": "7",
+  "deadline": "2000000000",
+  "signature": "0x11e5186b53c0220ffa490fda3020e84fe37a0e37f4ed4723aced12560c7156442efdbf2e85741e9df195c5b12fad2d7242b2112deff905d6459c47ecd8ac264b1c",
+  "digest": "0x7cb38e69b55ebda7c06abb70d3300e26335b61564145a5649e2a778816297d28",
+  "wrongProgramSignature": "0x612c07fc8ad8e7b3d83693a6b82e42a6054f09d18143055e1026d8360da45a7d6268064c4180a39d9e977f2be9c569595e1d90d40f82e652003b500bda0139e31c",
+  "wrongClusterSignature": "0x3414e9ae2e6a4d24407d6aafa9a91aa02049cdfe23da45ad3c9593f0d859f5974f45d22168fb0dfe84f88b0b70c5dc42b442de9654de182d19ee7d1924077fcf1c",
+  "allocationSignature": "0xa10fc93392de1dd0648bb566aec05d76933b96b2c6aaa15ad5e35371a4e3e62037f767bad59849bf1fb47c1fa27a3ded07084fbb9b82778eb724519dd1c531dd1b"
+}

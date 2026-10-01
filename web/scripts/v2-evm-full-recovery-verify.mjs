@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {Connection,PublicKey} from '@solana/web3.js';
+import {BorshAccountsCoder} from '@coral-xyz/anchor';
+import {TOKEN_PROGRAM_ID,unpackAccount} from '@solana/spl-token';
+const root=new URL('../../',import.meta.url),intent=JSON.parse(readFileSync(new URL('target/deploy/evm-withdraw-full-recovery-20261001-intent.json',root),'utf8'));delete intent.signature;
+const signature='rA7azNw6fdL966bAxso9J24f7CDEtqCHJFt2oF4KiAyvEyn4EAvjY8hZhKSeXA7YPC41bQvjJzcP9waX8qCsPS4';
+const c=new Connection('https://api.devnet.solana.com','finalized');assert.equal(await c.getGenesisHash(),intent.genesisHash);
+const tx=await c.getTransaction(signature,{commitment:'finalized',maxSupportedTransactionVersion:0});assert(tx&&tx.meta&&!tx.meta.err);assert.equal(tx.meta.fee,5000);
+const safe=new PublicKey(intent.safe),source=new PublicKey('DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK'),recipient=new PublicKey(intent.recipientTokenAccount),pd=new PublicKey('H5evLv9yEPaSRacNTYv5y4Tjdj3gJByUgavwMg66xTBg');
+const snapshot=await c.getMultipleAccountsInfoAndContext([safe,source,recipient,pd],{commitment:'finalized',minContextSlot:tx.slot});const [safeInfo,sourceInfo,recipientInfo,programData]=snapshot.value;assert(safeInfo&&sourceInfo&&recipientInfo&&programData);
+assert(safeInfo.owner.equals(new PublicKey(intent.program))&&safeInfo.data.length===705);
+const idl=JSON.parse(readFileSync(new URL('web/src/idl/yield_vault_evm_devnet.json',root),'utf8')),state=new BorshAccountsCoder(idl).decode('EvmVault',safeInfo.data);assert.equal(state.nonce.toString(),'3');assert.equal(Buffer.from(state.eth_address).toString('hex'),intent.owner.slice(2).toLowerCase());
+const s=unpackAccount(source,sourceInfo,TOKEN_PROGRAM_ID),r=unpackAccount(recipient,recipientInfo,TOKEN_PROGRAM_ID);assert.equal(s.amount,0n);assert(s.owner.equals(safe)&&s.mint.toBase58()===intent.mint);assert(r.owner.toBase58()===intent.recipientOwner&&r.mint.toBase58()===intent.mint);
+const keys=tx.transaction.message.getAccountKeys(),index=address=>Array.from({length:keys.length},(_,i)=>i).find(i=>keys.get(i).equals(address));
+function change(address){const i=index(address),pre=tx.meta.preTokenBalances.find(b=>b.accountIndex===i),post=tx.meta.postTokenBalances.find(b=>b.accountIndex===i);assert(pre&&post&&pre.mint===intent.mint&&post.mint===intent.mint);return {before:pre.uiTokenAmount.amount,after:post.uiTokenAmount.amount};}
+const sc=change(source),rc=change(recipient);assert.equal(BigInt(sc.after)-BigInt(sc.before),-900000n);assert.equal(BigInt(rc.after)-BigInt(rc.before),900000n);assert.equal(BigInt(rc.after),r.amount);
+const payer=keys.get(0).toBase58();assert.equal(payer,'8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A');assert.equal(tx.meta.preBalances[0]-tx.meta.postBalances[0],5000);
+const deployedSha256=createHash('sha256').update(programData.data.subarray(45)).digest('hex');assert.equal(deployedSha256,'fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489');
+const result={status:'full_recovery_finalized_verified',cluster:'devnet',genesisHash:intent.genesisHash,intent,digest:'0x5d451fd2faf076012674f863626341923b375ffca285f0bb9bb83da41d54e023',txSignature:signature,finalizedSlot:tx.slot,blockTime:tx.blockTime,verifiedAt:new Date().toISOString(),readbackSlot:snapshot.context.slot,feePayer:payer,actualFeeLamports:5000,rentLamports:0,source:source.toBase58(),sourceBeforeRaw:sc.before,sourceAfterRaw:sc.after,recipientBeforeRaw:rc.before,recipientAfterRaw:rc.after,nonceBefore:'2',nonceAfter:'3',deployedSha256,simulation:{error:null,computeUnits:41725},eip712OwnerSignatureVerified:true,transactionSent:true,independentReceiptAndReadbackVerified:true};
+writeFileSync(new URL('docs/yield-ai-v2-evm-full-recovery-result.json',root),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

@@ -175,6 +175,252 @@
       ]
     },
     {
+      "name": "create_evm_safe_authorized",
+      "discriminator": [
+        202,
+        68,
+        251,
+        46,
+        197,
+        229,
+        250,
+        34
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "evm_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  101,
+                  118,
+                  109
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "eth_address"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "address": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+        },
+        {
+          "name": "vault_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "evm_vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "eth_address",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "deadline",
+          "type": "u64"
+        },
+        {
+          "name": "signature",
+          "type": {
+            "array": [
+              "u8",
+              65
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "evm_cancel_intents",
+      "discriminator": [
+        0,
+        228,
+        142,
+        122,
+        31,
+        223,
+        148,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "evm_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  101,
+                  118,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "evm_vault.eth_address",
+                "account": "EvmVault"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "deadline",
+          "type": "u64"
+        },
+        {
+          "name": "signature",
+          "type": {
+            "array": [
+              "u8",
+              65
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "evm_set_allocation",
       "docs": [
         "Devnet authorization probe. This changes only the EVM Safe's target allocation;",
@@ -252,6 +498,187 @@
           }
         }
       ]
+    },
+    {
+      "name": "evm_withdraw_usdc",
+      "docs": [
+        "Owner-authorized idle USDC recovery. The sponsor has no withdrawal authority.",
+        "Destination account and its current token authority are bound by the EIP-712 intent."
+      ],
+      "discriminator": [
+        176,
+        250,
+        38,
+        180,
+        64,
+        134,
+        159,
+        244
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "docs": [
+            "Only pays network fees. Neither agent nor rent_payer grants custody authority."
+          ],
+          "signer": true
+        },
+        {
+          "name": "evm_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  97,
+                  117,
+                  108,
+                  116,
+                  95,
+                  101,
+                  118,
+                  109
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "evm_vault.eth_address",
+                "account": "EvmVault"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint",
+          "address": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+        },
+        {
+          "name": "vault_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "evm_vault"
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6,
+                  221,
+                  246,
+                  225,
+                  215,
+                  101,
+                  161,
+                  147,
+                  217,
+                  203,
+                  225,
+                  70,
+                  206,
+                  235,
+                  121,
+                  172,
+                  28,
+                  180,
+                  133,
+                  237,
+                  95,
+                  91,
+                  55,
+                  145,
+                  58,
+                  140,
+                  245,
+                  133,
+                  126,
+                  255,
+                  0,
+                  169
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "recipient_usdc_account",
+          "docs": [
+            "Existing SPL Token account; its exact address and token owner are signed."
+          ],
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_raw",
+          "type": "u64"
+        },
+        {
+          "name": "nonce",
+          "type": "u64"
+        },
+        {
+          "name": "deadline",
+          "type": "u64"
+        },
+        {
+          "name": "signature",
+          "type": {
+            "array": [
+              "u8",
+              65
+            ]
+          }
+        }
+      ]
     }
   ],
   "accounts": [
@@ -267,73 +694,6 @@
         177,
         196
       ]
-    }
-  ],
-  "types": [
-    {
-      "name": "EvmVault",
-      "docs": [
-        "Separate namespace and discriminator keep every existing Solana-owned Vault byte-for-byte intact.",
-        "Funds cannot be moved through legacy owner instructions: they require [\"vault\", Solana owner]."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "bump",
-            "type": "u8"
-          },
-          {
-            "name": "eth_address",
-            "type": {
-              "array": [
-                "u8",
-                20
-              ]
-            }
-          },
-          {
-            "name": "rent_payer",
-            "type": "pubkey"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
-          },
-          {
-            "name": "agent",
-            "type": "pubkey"
-          },
-          {
-            "name": "allocation_bps",
-            "type": {
-              "array": [
-                "u16",
-                8
-              ]
-            }
-          },
-          {
-            "name": "last_rebalance_ts",
-            "type": "i64"
-          },
-          {
-            "name": "allowed_programs",
-            "type": {
-              "vec": "pubkey"
-            }
-          },
-          {
-            "name": "route_principal",
-            "type": {
-              "array": [
-                "u64",
-                8
-              ]
-            }
-          }
-        ]
-      }
     }
   ],
   "errors": [
@@ -471,6 +831,83 @@
       "code": 6026,
       "name": "ExecutorPositionLimit",
       "msg": "Executor deposit exceeds the Safe's principal limit"
+    },
+    {
+      "code": 6027,
+      "name": "InsufficientEvmUsdc",
+      "msg": "Not enough idle USDC in the EVM Safe"
+    },
+    {
+      "code": 6028,
+      "name": "InvalidEvmWithdrawalRecipient",
+      "msg": "Withdrawal recipient must differ from the Safe source account"
+    }
+  ],
+  "types": [
+    {
+      "name": "EvmVault",
+      "docs": [
+        "Separate namespace and discriminator keep every existing Solana-owned Vault byte-for-byte intact.",
+        "Funds cannot be moved through legacy owner instructions: they require [\"vault\", Solana owner]."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "eth_address",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "agent",
+            "type": "pubkey"
+          },
+          {
+            "name": "allocation_bps",
+            "type": {
+              "array": [
+                "u16",
+                8
+              ]
+            }
+          },
+          {
+            "name": "last_rebalance_ts",
+            "type": "i64"
+          },
+          {
+            "name": "allowed_programs",
+            "type": {
+              "vec": "pubkey"
+            }
+          },
+          {
+            "name": "route_principal",
+            "type": {
+              "array": [
+                "u64",
+                8
+              ]
+            }
+          }
+        ]
+      }
     }
   ]
 }

@@ -1,0 +1,84 @@
+{
+  "verification": {
+    "status": "independent_rpc_verified",
+    "observedAt": "2026-09-30T18:53:30.584Z",
+    "genesisHash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "transaction": "5sNqPGyyatytBKAEpnQcdLSFPUD9K2kxEoefTkhU28hZuN23ueE6RnYS6bBiPCbiW3PJ1wwfWZ1UtpKiWMT5UprX",
+    "slot": 506001736,
+    "transactionError": null,
+    "finalUpgradeFeeLamports": 5000,
+    "readSlot": 506002229,
+    "programExecutable": true,
+    "programDataBytes": 688909,
+    "elfSha256": "fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489",
+    "bufferAbsent": true,
+    "payerLamports": 12346969254,
+    "safeNonce": "1",
+    "safeUsdcRaw": "0"
+  },
+  "execution": {
+    "transaction": "5sNqPGyyatytBKAEpnQcdLSFPUD9K2kxEoefTkhU28hZuN23ueE6RnYS6bBiPCbiW3PJ1wwfWZ1UtpKiWMT5UprX",
+    "finalizedSlot": 506001736,
+    "feeLamports": 5000,
+    "totalEstimatedTransactionFeesLamports": 3605000,
+    "programDataBytes": 688909,
+    "elfSha256": "fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489",
+    "upgradeAuthority": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+    "bufferAbsent": true,
+    "payerAfterLamports": 12346969254,
+    "netSpendLamports": 113983240,
+    "safeNonce": "1",
+    "safeUsdcRaw": "0",
+    "safeUnchanged": true,
+    "ataUnchanged": true,
+    "sourceFinalizedReadSlot": 506001741
+  },
+  "finalSimulation": {
+    "error": null,
+    "unitsConsumed": 2670,
+    "additionalBytes": 21728,
+    "extensionRentLamports": 110378240,
+    "feeLamports": 5000,
+    "expectedPayerLamportsAfter": 12346969254,
+    "bufferHash": "fee494161131cc44fb572f3bcbf5b019170b4414a41221b614f6337b5aaa7489",
+    "observedAt": "2026-09-30T18:51:32.870Z"
+  },
+  "transactions": [
+    {
+      "action": "create_buffer",
+      "signature": "3MabXMkmXPTBR4awXH3FgySrkaizDSU7wSFZGW8DSZicu5Sb3RtUYv5bE9AtjZ5kpJ4BaLgEcLonw8tEkkPbBgbo",
+      "lastValidBlockHeight": 493247179,
+      "estimatedFeeLamports": 5000,
+      "status": "not_sent_local_serialization_error",
+      "preparedAt": "2026-09-30T18:40:11.770Z",
+      "note": "Local signature verification failed before RPC send; buffer absent and payer unchanged."
+    },
+    {
+      "action": "create_buffer",
+      "signature": "5o8nhuVxuRk8owLW9ujjMMYekgGXqHPuKNpN9ysMfCboRKPaP4awNPA2EWdp98txdyQdeuJwhJ5HGS4Ur4MxWJ9Q",
+      "lastValidBlockHeight": 493247635,
+      "estimatedFeeLamports": 5000,
+      "status": "finalized",
+      "preparedAt": "2026-09-30T18:41:59.274Z",
+      "slot": 505999289
+    },
+    {
+      "action": "extend_program",
+      "signature": "5EzmZ5RkiUK7xabP7r9UACjTvZwNGTQDiNWX2uNCt4tAdCiVTnZGL9qiXQmZko3UKGtcYW5y4uDnMiFEpKRAWRxY",
+      "lastValidBlockHeight": 493250071,
+      "estimatedFeeLamports": 5000,
+      "status": "finalized",
+      "preparedAt": "2026-09-30T18:51:30.255Z",
+      "slot": 506001725
+    },
+    {
+      "action": "upgrade_program",
+      "signature": "5sNqPGyyatytBKAEpnQcdLSFPUD9K2kxEoefTkhU28hZuN23ueE6RnYS6bBiPCbiW3PJ1wwfWZ1UtpKiWMT5UprX",
+      "lastValidBlockHeight": 493250081,
+      "estimatedFeeLamports": 5000,
+      "status": "finalized",
+      "preparedAt": "2026-09-30T18:51:32.926Z",
+      "slot": 506001736
+    }
+  ]
+}

@@ -1,6 +1,20 @@
 # Yield AI v2: EVM-owner Safe Devnet authorization probe
 
-Status: Rust tests and isolated local-validator transaction cycle passed on 2026-09-28. The Devnet program was upgraded on 2026-09-29 and its deployed ELF hash was verified. An empty EVM-owner Safe was created on Devnet and its first EIP-712 allocation action succeeded. The separate `/v2/evm-devnet` lab lets a user sign an allocation intent with an EVM wallet; an operator can relay that intent after simulation and separate transaction authorization. This is a narrow authorization prototype. It does not enable deposits, swaps, Kamino, CCTP minting, or withdrawals from an EVM-owned Safe. Do not fund an EVM-owned Safe yet.
+Current 2026-10-01 implementation and gates: [signed lifecycle, recovery fallback and dedicated relayer](yield-ai-v2-evm-lifecycle-relayer.md). New lifecycle code is tested locally, not deployed. The separate sponsor remains send-disabled and unfunded. Full live recovery finalized: Safe 0 USDC, nonce 3; recipient now 1 USDC. See [full recovery receipt](yield-ai-v2-evm-full-recovery-result.md). Historical receipts below retain their original observations.
+
+Status: Rust tests and isolated local-validator transaction cycle passed on 2026-09-28. The Devnet program was upgraded on 2026-09-29 and its deployed ELF hash was verified. An empty EVM-owner Safe was created on Devnet and its first EIP-712 allocation action succeeded. The separate `/v2/evm-devnet` lab lets a user sign an allocation intent with an EVM wallet; an operator can relay that intent after simulation and separate transaction authorization. This is a narrow authorization prototype. The 2026-09-30 separately approved upgrade now adds owner-authorized idle-USDC withdrawal. Its deployed hash is verified. On 2026-10-01 a human Rabby signing cycle completed a 1-USDC deposit and a 0.1-USDC owner-authorized withdrawal; Full-balance recovery subsequently finalized: Safe 0 USDC, nonce 3; recipient 1 USDC. Ordinary funding, swaps, Kamino and CCTP remain disabled.
+
+## Human-signed Devnet withdrawal (2026-10-01)
+
+A fresh Rabby EIP-712 intent and separate send approval produced a finalized 0.1 test-USDC withdrawal to the owner-selected Solana wallet EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2. Receipt and independent readback confirm Safe 1 -> 0.9 USDC, recipient 0 -> 0.1 USDC, nonce 1 -> 2. See [withdrawal receipt](yield-ai-v2-evm-withdraw-result.md). Full-balance recovery subsequently finalized ([receipt](yield-ai-v2-evm-full-recovery-result.md)); ordinary funding/CCTP remain disabled.
+
+## Manual Devnet recovery deposit (2026-10-01)
+
+The user-approved 1 test-USDC deposit is finalized and balance-verified. Safe balance is 1000000 raw (1 USDC), nonce remains 1; operator balance is 19 USDC. See [deposit receipt](yield-ai-v2-evm-deposit-result.md). Owner-signed withdrawal remains pending, so ordinary funding/CCTP remain disabled.
+
+## Local withdrawal implementation (2026-09-30)
+
+Owner-authorized idle-USDC withdrawal is now implemented and validated locally in this EVM worktree. The separately approved Devnet withdrawal upgrade is finalized and its ELF hash verified. Keep ordinary funding disabled until the separately reviewed manual recovery cycle. See [upgrade receipts and cost reconciliation](yield-ai-v2-evm-upgrade-result.md). See [withdrawal payload, tests and local receipts](yield-ai-v2-evm-withdrawal.md). The historical Devnet results below are unchanged.
 
 ## Why this is a separate account
 

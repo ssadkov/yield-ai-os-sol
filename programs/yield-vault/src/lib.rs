@@ -331,18 +331,35 @@ pub mod yield_vault {
 
     /// First EVM-owner slice: sponsored empty Safe creation and its canonical USDC ATA.
     /// The owner can configure it only through an EIP-712 signature, never a Solana signer key.
+    // Kept in the ABI to reject old unsigned callers; init/rent roll back atomically on error.
     pub fn create_evm_safe(ctx: Context<CreateEvmSafe>, eth_address: [u8; 20]) -> Result<()> {
+        let _ = (ctx, eth_address);
+        err!(evm_owner::EvmOwnerError::OwnerSignatureRequired)
+    }
+
+    pub fn create_evm_safe_authorized(ctx: Context<CreateEvmSafe>, eth_address: [u8; 20], nonce: u64, deadline: u64, signature: [u8; 65]) -> Result<()> {
         require!(eth_address != [0; 20], evm_owner::EvmOwnerError::ZeroAddress);
+        let digest = evm_owner::create_safe_digest(&ctx.accounts.evm_vault.key(), &ctx.accounts.usdc_mint.key(), &ctx.accounts.payer.key(), nonce, deadline);
+        evm_owner::verify_intent(&eth_address, &digest, 0, nonce, deadline, &signature, Clock::get()?.unix_timestamp)?;
         let vault = &mut ctx.accounts.evm_vault;
         vault.bump = ctx.bumps.evm_vault;
         vault.eth_address = eth_address;
         vault.rent_payer = ctx.accounts.payer.key();
-        vault.nonce = 0;
+        vault.nonce = nonce;
         vault.agent = Pubkey::default();
         vault.allocation_bps = [0; MAX_ROUTES];
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         vault.allowed_programs = Vec::new();
         vault.route_principal = [0; MAX_ROUTES];
+        Ok(())
+    }
+
+
+    pub fn evm_cancel_intents(ctx: Context<EvmSetAllocation>, nonce: u64, deadline: u64, signature: [u8; 65]) -> Result<()> {
+        let vault = &mut ctx.accounts.evm_vault;
+        let digest = evm_owner::cancel_intents_digest(&vault.key(), nonce, deadline);
+        evm_owner::verify_intent(&vault.eth_address, &digest, vault.nonce, nonce, deadline, &signature, Clock::get()?.unix_timestamp)?;
+        vault.nonce = nonce;
         Ok(())
     }
 
@@ -363,6 +380,37 @@ pub mod yield_vault {
         )?;
         vault.allocation_bps = allocation_bps;
         vault.nonce = nonce;
+        Ok(())
+    }
+
+    /// Owner-authorized idle USDC recovery. The sponsor has no withdrawal authority.
+    /// Destination account and its current token authority are bound by the EIP-712 intent.
+    pub fn evm_withdraw_usdc(
+        ctx: Context<EvmWithdrawUsdc>, amount_raw: u64, nonce: u64,
+        deadline: u64, signature: [u8; 65],
+    ) -> Result<()> {
+        require!(amount_raw > 0, ErrorCode::ZeroAmount);
+        require!(amount_raw <= ctx.accounts.vault_usdc_ata.amount, ErrorCode::InsufficientEvmUsdc);
+        require_keys_neq!(ctx.accounts.recipient_usdc_account.key(), ctx.accounts.vault_usdc_ata.key(), ErrorCode::InvalidEvmWithdrawalRecipient);
+        let vault = &ctx.accounts.evm_vault;
+        let digest = evm_owner::withdraw_usdc_digest(
+            &vault.key(), &ctx.accounts.usdc_mint.key(), amount_raw,
+            &ctx.accounts.recipient_usdc_account.key(), &ctx.accounts.recipient_usdc_account.owner,
+            nonce, deadline,
+        );
+        evm_owner::verify_intent(&vault.eth_address, &digest, vault.nonce, nonce, deadline,
+            &signature, Clock::get()?.unix_timestamp)?;
+        let seeds: &[&[u8]] = &[b"vault_evm", &vault.eth_address, &[vault.bump]];
+        token::transfer_checked(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token::TransferChecked {
+                from: ctx.accounts.vault_usdc_ata.to_account_info(),
+                mint: ctx.accounts.usdc_mint.to_account_info(),
+                to: ctx.accounts.recipient_usdc_account.to_account_info(),
+                authority: vault.to_account_info(),
+            }, &[seeds],
+        ), amount_raw, ctx.accounts.usdc_mint.decimals)?;
+        ctx.accounts.evm_vault.nonce = nonce;
         Ok(())
     }
 
@@ -1021,6 +1069,22 @@ pub struct EvmSetAllocation<'info> {
 }
 
 #[derive(Accounts)]
+pub struct EvmWithdrawUsdc<'info> {
+    /// Only pays network fees. Neither agent nor rent_payer grants custody authority.
+    pub payer: Signer<'info>,
+    #[account(mut, seeds = [b"vault_evm", evm_vault.eth_address.as_ref()], bump = evm_vault.bump)]
+    pub evm_vault: Account<'info, EvmVault>,
+    #[account(address = EVM_USDC_MINT, constraint = usdc_mint.decimals == 6)]
+    pub usdc_mint: Account<'info, Mint>,
+    #[account(mut, associated_token::mint = usdc_mint, associated_token::authority = evm_vault)]
+    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    /// Existing SPL Token account; its exact address and token owner are signed.
+    #[account(mut, token::mint = usdc_mint)]
+    pub recipient_usdc_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
 pub struct SetAllocation<'info> {
     pub owner: Signer<'info>,
     #[account(
@@ -1418,6 +1482,10 @@ pub enum ErrorCode {
     ExecutorVolumeLimit,
     #[msg("Executor deposit exceeds the Safe's principal limit")]
     ExecutorPositionLimit,
+    #[msg("Not enough idle USDC in the EVM Safe")]
+    InsufficientEvmUsdc,
+    #[msg("Withdrawal recipient must differ from the Safe source account")]
+    InvalidEvmWithdrawalRecipient,
 }
 
 #[cfg(test)]

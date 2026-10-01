@@ -1,4 +1,4 @@
-/** Operator relay for a signed EVM-owner Devnet allocation intent. No USDC movement. */
+/** Manual operator relay. Preflight is unsigned; sending always requires separate approval. */
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -6,130 +6,98 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AnchorProvider, Program, Wallet, type Idl } from "@coral-xyz/anchor";
 import BN from "bn.js";
-import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID,
-  getAccount, getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { Connection, Keypair, PublicKey, SystemProgram, Transaction,
-  sendAndConfirmTransaction } from "@solana/web3.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, getAccount } from "@solana/spl-token";
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
+import { EVM_DEVNET_PROGRAM as programId, EVM_DEVNET_USDC_MINT as mint, EVM_DEVNET_GENESIS as genesis,
+  deriveEvmSafe, decimalU64, validateProbeAllocation, assertCanonicalEvmSignature,
+  parseWithdrawalIntent, verifyEvmIntentSignature, isWithdrawalIntent, type EvmOwnerIntent, isLifecycleIntent,
+} from "../../web/src/lib/v2EvmDevnet.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const idl = JSON.parse(readFileSync(join(here, "../../target/idl/yield_vault.json"), "utf8")) as Idl;
-const programId = new PublicKey("8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5");
-const mint = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
-const genesis = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
-const maxU64 = (1n << 64n) - 1n;
-
-type Intent = {
-  owner: string; safe: string; allocationBps: number[];
-  nonce: string; deadline: string; signature: string;
-};
-
-function parseU64(value: unknown, name: string): bigint {
-  assert(typeof value === "string" && /^(0|[1-9]\d{0,19})$/.test(value), `invalid ${name}`);
-  const parsed = BigInt(value);
-  assert(parsed <= maxU64, `invalid ${name}`);
-  return parsed;
+const idl = JSON.parse(readFileSync(join(here, "../../web/src/idl/yield_vault_evm_devnet.json"), "utf8")) as Idl;
+function readIntent(path: string): EvmOwnerIntent {
+  const input = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  assert(input && typeof input === "object" && !Array.isArray(input), "invalid intent JSON");
+  if (input.action === "withdraw_usdc") return parseWithdrawalIntent(input);
+  assert(input.action === undefined || input.action === "set_allocation", "unsupported intent action");
+  assert(typeof input.owner === "string", "invalid EVM owner");
+  const { owner, safe } = deriveEvmSafe(input.owner);
+  assert.equal(input.safe, safe.toBase58(), "Safe does not match EVM owner");
+  assertCanonicalEvmSignature(input.signature);
+  return { owner, safe: safe.toBase58(), allocationBps: validateProbeAllocation(input.allocationBps),
+    nonce: decimalU64(input.nonce, "nonce").toString(), deadline: decimalU64(input.deadline, "deadline").toString(), signature: input.signature };
 }
-
-function readIntent(path: string) {
-  const value = JSON.parse(readFileSync(path, "utf8")) as Intent;
-  assert(/^0x[\da-fA-F]{40}$/.test(value.owner), "invalid EVM owner");
-  assert(/^0x[\da-fA-F]{130}$/.test(value.signature), "invalid signature");
-  assert(Array.isArray(value.allocationBps) && value.allocationBps.length === 8
-    && value.allocationBps.every((part) => Number.isInteger(part) && part >= 0 && part <= 10_000)
-    && value.allocationBps.slice(1).every((part) => part === 0), "invalid Devnet probe allocation");
-  const owner = Buffer.from(value.owner.slice(2), "hex");
-  assert(owner.some((byte) => byte !== 0), "zero EVM owner");
-  const [safe] = PublicKey.findProgramAddressSync([Buffer.from("vault_evm"), owner], programId);
-  assert.equal(value.safe, safe.toBase58(), "Safe does not match EVM owner");
-  const nonce = parseU64(value.nonce, "nonce");
-  const deadline = parseU64(value.deadline, "deadline");
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  assert(deadline > now && deadline <= now + 900n, "intent expired or deadline too far away");
-  return { value, owner, safe, nonce, deadline, signature: Buffer.from(value.signature.slice(2), "hex") };
-}
-
 function existingPayer(): Keypair {
   const path = process.env.V2_PAYER_KEYPAIR;
   if (!path) throw new Error("V2_PAYER_KEYPAIR must point to an existing protected Devnet payer");
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(path.replace(/^~/, homedir()), "utf8"))));
 }
-
+type State = { ethAddress: number[]; nonce: BN; allocationBps: number[] };
 async function main() {
-  const mode = process.argv[2];
-  const path = process.argv[3];
-  if ((mode !== "--preflight" && mode !== "--send") || !path) {
-    throw new Error("Use --preflight <intent.json> or --send <intent.json>");
-  }
-  if (mode === "--send" && process.env.V2_EVM_RELAY_ACK !== "APPROVED_DEVNET_EVM_INTENT") {
-    throw new Error("Devnet relay send requires transaction-specific acknowledgement");
-  }
+  const mode = process.argv[2], path = process.argv[3];
+  if ((mode !== "--preflight" && mode !== "--send") || !path) throw new Error("Use --preflight <intent.json> or --send <intent.json>");
+  if (mode === "--send" && process.env.V2_EVM_RELAY_ACK !== "APPROVED_DEVNET_EVM_INTENT") throw new Error("Devnet relay send requires transaction-specific acknowledgement");
   assert.equal(idl.address, programId.toBase58(), "Devnet IDL mismatch");
-  const { value, owner, safe, nonce, deadline, signature } = readIntent(path);
+  const intent = readIntent(path), withdraw = isWithdrawalIntent(intent);
+  assert(!isLifecycleIntent(intent), "Lifecycle intents use the separately gated relayer lifecycle path");
+  const digest = await verifyEvmIntentSignature(intent);
+  const { ownerBytes: owner, safe, ata } = deriveEvmSafe(intent.owner);
+  const nonce = BigInt(intent.nonce), deadline = BigInt(intent.deadline), now = BigInt(Math.floor(Date.now() / 1000));
+  assert(deadline > now && deadline <= now + 900n, "intent expired or deadline too far away");
   const endpoint = process.env.V2_DEVNET_RPC_URL || "https://api.devnet.solana.com";
   assert.equal(new URL(endpoint).protocol, "https:", "Devnet RPC must use HTTPS");
   const connection = new Connection(endpoint, "confirmed");
   assert.equal(await connection.getGenesisHash(), genesis, "RPC is not Solana Devnet");
-  const payer = existingPayer();
-  const expectedPayer = process.env.V2_EVM_ALLOWED_PAYER || "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A";
-  assert.equal(payer.publicKey.toBase58(), expectedPayer, "payer does not match the configured Devnet sponsor");
-  const provider = new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" });
-  const program = new Program(idl, provider);
-  const ata = getAssociatedTokenAddressSync(mint, safe, true);
-
-  const accountInfo = await connection.getAccountInfo(safe, "confirmed");
-  const instructions = [];
-  let rent = 0;
-  if (!accountInfo) {
-    rent = await connection.getMinimumBalanceForRentExemption(705)
-      + await connection.getMinimumBalanceForRentExemption(165);
-    assert(rent <= 10_000_000, "Safe creation rent exceeds cap");
-    instructions.push(await program.methods.createEvmSafe([...owner]).accountsStrict({
-      payer: payer.publicKey, evmVault: safe, usdcMint: mint, vaultUsdcAta: ata,
-      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    }).instruction());
-    assert.equal(nonce, 1n, "new Safe requires nonce 1");
+  const payerPublicKey = new PublicKey(process.env.V2_EVM_ALLOWED_PAYER || "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A");
+  // Unsigned preflight never reads the sponsor secret.
+  const payer = mode === "--send" ? existingPayer() : Keypair.generate();
+  if (mode === "--send") assert(payer.publicKey.equals(payerPublicKey), "payer does not match the configured Devnet sponsor");
+  const program = new Program(idl, new AnchorProvider(connection, new Wallet(payer), { commitment: "confirmed" }));
+  const accounts = program.account as unknown as { evmVault: { fetch(address: PublicKey): Promise<State> } };
+  const info = await connection.getAccountInfo(safe, "confirmed"), instructions = [];
+  let rent = 0, sourceBefore = 0n, recipientBefore = 0n;
+  assert(info && info.owner.equals(programId), "Safe must already exist; creation needs a separate owner-signed lifecycle intent");
+  const state = await accounts.evmVault.fetch(safe);
+  assert.equal(Buffer.from(state.ethAddress).toString("hex"), Buffer.from(owner).toString("hex"), "Safe owner mismatch");
+  assert.equal(nonce, BigInt(state.nonce.toString()) + 1n, "Safe nonce changed; request a fresh signature; never resend blindly");
+  const token = await getAccount(connection, ata, "confirmed");
+  assert(token.owner.equals(safe) && token.mint.equals(mint) && !token.isFrozen, "Safe USDC ATA mismatch or frozen");
+  sourceBefore = token.amount;
+  if (isWithdrawalIntent(intent)) {
+    const destination = new PublicKey(intent.recipientTokenAccount), authority = new PublicKey(intent.recipientOwner);
+    const token = await getAccount(connection, destination, "confirmed");
+    assert(token.mint.equals(mint) && token.owner.equals(authority) && !token.isFrozen, "recipient account mint/authority mismatch or frozen");
+    assert(BigInt(intent.amountRaw) <= sourceBefore, "insufficient idle USDC");
+    recipientBefore = token.amount;
+    instructions.push(await program.methods.evmWithdrawUsdc(new BN(intent.amountRaw), new BN(intent.nonce), new BN(intent.deadline), [...Buffer.from(intent.signature.slice(2), "hex")])
+      .accountsStrict({ payer: payerPublicKey, evmVault: safe, usdcMint: mint, vaultUsdcAta: ata,
+        recipientUsdcAccount: destination, tokenProgram: TOKEN_PROGRAM_ID }).instruction());
   } else {
-    assert(accountInfo.owner.equals(programId), "Safe is not owned by the Devnet program");
-    const state = await (program.account as unknown as { evmVault: { fetch(address: PublicKey): Promise<{
-      ethAddress: number[]; nonce: BN; allocationBps: number[];
-    }> } }).evmVault.fetch(safe);
-    assert.equal(Buffer.from(state.ethAddress).toString("hex"), owner.toString("hex"), "Safe owner mismatch");
-    if (state.nonce.toString() === nonce.toString()
-      && state.allocationBps.every((part, index) => part === value.allocationBps[index])) {
-      console.log(JSON.stringify({ status: "already_applied", safe: safe.toBase58(), nonce: value.nonce }));
-      return;
-    }
-    assert.equal(nonce, BigInt(state.nonce.toString()) + 1n, "Safe nonce changed; request a fresh EVM signature");
-    const token = await getAccount(connection, ata, "confirmed");
-    assert(token.owner.equals(safe) && token.mint.equals(mint), "Safe USDC ATA mismatch");
+    instructions.push(await program.methods.evmSetAllocation(intent.allocationBps, new BN(intent.nonce), new BN(intent.deadline), [...Buffer.from(intent.signature.slice(2), "hex")])
+      .accountsStrict({ payer: payerPublicKey, evmVault: safe }).instruction());
   }
-  instructions.push(await program.methods.evmSetAllocation(
-    value.allocationBps, new BN(nonce.toString()), new BN(deadline.toString()), [...signature],
-  ).accountsStrict({ payer: payer.publicKey, evmVault: safe }).instruction());
-
   const tx = new Transaction().add(...instructions);
-  tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+  tx.feePayer = payerPublicKey; tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
   const fee = await connection.getFeeForMessage(tx.compileMessage());
   assert(fee.value !== null && fee.value <= 100_000, "network fee exceeds cap");
   const simulation = await connection.simulateTransaction(tx);
   assert.equal(simulation.value.err, null, `Devnet simulation failed: ${JSON.stringify(simulation.value.err)} ${simulation.value.logs?.join("\n")}`);
-  console.log(JSON.stringify({ status: "simulation_ok", safe: safe.toBase58(),
-    owner: value.owner, nonce: value.nonce, allocationBps: value.allocationBps,
-    rentLamports: rent, feeLamports: fee.value, computeUnits: simulation.value.unitsConsumed }));
+  console.log(JSON.stringify({ status: "simulation_ok", cluster: "devnet", program: programId.toBase58(),
+    action: withdraw ? "withdraw_usdc" : "set_allocation", payer: payerPublicKey.toBase58(), intent, digest,
+    source: ata.toBase58(), rentLamports: rent, feeLamports: fee.value, computeUnits: simulation.value.unitsConsumed }));
   if (mode === "--preflight") return;
-
-  const txSignature = await sendAndConfirmTransaction(connection, tx, [payer], {
-    commitment: "finalized", skipPreflight: false,
-  });
-  const after = await (program.account as unknown as { evmVault: { fetch(address: PublicKey): Promise<{
-    ethAddress: number[]; nonce: BN; allocationBps: number[];
-  }> } }).evmVault.fetch(safe);
-  assert.equal(after.nonce.toString(), value.nonce, "post-send nonce mismatch");
-  assert(after.allocationBps.every((part, index) => part === value.allocationBps[index]), "post-send allocation mismatch");
-  console.log(JSON.stringify({ status: "finalized", safe: safe.toBase58(), txSignature,
-    nonce: after.nonce.toString(), allocationBps: after.allocationBps }));
+  assert(BigInt(Math.floor(Date.now() / 1000)) < deadline, "signature expired during preflight");
+  const txSignature = await sendAndConfirmTransaction(connection, tx, [payer], { commitment: "finalized", skipPreflight: false });
+  // Print the receipt before read-back: a read failure must not hide a sent transaction.
+  console.log(JSON.stringify({ status: "finalized", txSignature, digest, safe: safe.toBase58() }));
+  const after = await accounts.evmVault.fetch(safe);
+  assert.equal(after.nonce.toString(), intent.nonce, "post-send nonce mismatch");
+  if (isWithdrawalIntent(intent)) {
+    const sourceAfter = await getAccount(connection, ata, "finalized");
+    const destinationAfter = await getAccount(connection, new PublicKey(intent.recipientTokenAccount), "finalized");
+    assert.equal(sourceAfter.amount, sourceBefore - BigInt(intent.amountRaw), "source balance mismatch");
+    assert.equal(destinationAfter.amount, recipientBefore + BigInt(intent.amountRaw), "recipient balance mismatch");
+  } else assert(after.allocationBps.every((part, i) => part === intent.allocationBps[i]), "post-send allocation mismatch");
+  console.log(JSON.stringify({ status: "readback_ok", txSignature, nonce: after.nonce.toString() }));
 }
-
 main().catch((error) => { console.error(error); process.exitCode = 1; });

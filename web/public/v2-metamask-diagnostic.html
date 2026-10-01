@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yield AI v2 · MetaMask Solana diagnostic</title>
+  <style>
+    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; font: 16px/1.5 system-ui, sans-serif; color: #f8fafc; background: #09090b; }
+    button { padding: .7rem 1rem; border: 0; border-radius: .4rem; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    pre { padding: 1rem; overflow-wrap: anywhere; white-space: pre-wrap; border: 1px solid #71717a; border-radius: .4rem; }
+  </style>
+</head>
+<body>
+  <h1>MetaMask Solana connection diagnostic</h1>
+  <p>This page runs without the Yield AI React wallet adapter, RPC, or Safe code. It requests only a public Solana account from the MetaMask Wallet Standard provider. It does not request a signature or send a transaction.</p>
+  <p>Site: <strong id="origin"></strong></p>
+  <button id="connect" disabled>Connect MetaMask Solana</button>
+  <pre id="result" role="status">Waiting for MetaMask Wallet Standard registration...</pre>
+  <script>
+    const output = document.getElementById("result");
+    const button = document.getElementById("connect");
+    document.getElementById("origin").textContent = location.origin;
+    const wallets = new Set();
+    let pending = false;
+
+    function metaMask() {
+      return [...wallets].find(wallet => wallet && wallet.name === "MetaMask" &&
+        typeof wallet.features?.["standard:connect"]?.connect === "function");
+    }
+    function render() {
+      const wallet = metaMask();
+      button.disabled = pending || !wallet;
+      if (!pending) output.textContent = wallet
+        ? `MetaMask registered. Initial Solana accounts: ${wallet.accounts?.length ?? "unknown"}.\nChains: ${(wallet.chains || []).join(", ")}.\nClick Connect to request an account.`
+        : `No MetaMask Wallet Standard provider registered on ${location.origin}. Detected wallets: ${[...wallets].map(item => item.name).join(", ") || "none"}.`;
+    }
+    const api = Object.freeze({ register(...items) {
+      items.forEach(item => wallets.add(item));
+      render();
+      return () => { items.forEach(item => wallets.delete(item)); render(); };
+    }});
+    window.addEventListener("wallet-standard:register-wallet", event => event.detail(api));
+    const legacy = Array.isArray(navigator.wallets) ? navigator.wallets : [];
+    try {
+      Object.defineProperty(navigator, "wallets", { value: Object.freeze({ push(...callbacks) {
+        callbacks.forEach(callback => callback(api));
+      }}) });
+      legacy.forEach(callback => callback(api));
+    } catch (error) {
+      output.textContent = `Legacy discovery unavailable: ${String(error)}`;
+    }
+    window.dispatchEvent(new CustomEvent("wallet-standard:app-ready", { detail: api }));
+    render();
+
+    button.addEventListener("click", async () => {
+      const wallet = metaMask();
+      if (!wallet || pending) return;
+      pending = true;
+      button.disabled = true;
+      output.textContent = "Requesting Solana account from MetaMask...";
+      try {
+        const before = wallet.accounts?.length ?? 0;
+        const response = await wallet.features["standard:connect"].connect();
+        const returned = response?.accounts || [];
+        const exposed = wallet.accounts || [];
+        output.textContent = `Wallet Standard connect completed.\nAccounts before: ${before}\nReturned accounts: ${returned.length}\nWallet accounts after: ${exposed.length}\nReturned public addresses: ${returned.map(account => account.address).join(", ") || "none"}\nWallet public addresses: ${exposed.map(account => account.address).join(", ") || "none"}`;
+      } catch (error) {
+        output.textContent = `Wallet Standard connect failed: ${error?.name || "Error"}: ${error?.message || String(error)}`;
+      } finally {
+        pending = false;
+        button.disabled = !metaMask();
+      }
+    });
+  </script>
+</body>
+</html>

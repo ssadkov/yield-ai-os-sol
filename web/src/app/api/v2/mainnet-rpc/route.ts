@@ -5,7 +5,7 @@ import { V2_MAINNET_RPC_URL, v2MainnetRpcHeaders } from "@/lib/v2MainnetRpc.serv
 const ALLOWED = new Set([
   "getGenesisHash", "getLatestBlockhash", "getBalance", "getFeeForMessage",
   "simulateTransaction", "sendTransaction", "getSignatureStatuses", "getBlockHeight",
-  "getAccountInfo", "getTokenAccountsByOwner", "getTokenAccountBalance",
+  "getAccountInfo", "getMultipleAccounts", "getTransaction", "getTokenAccountsByOwner", "getTokenAccountBalance",
   "getMinimumBalanceForRentExemption",
 ]);
 const MAX_REQUEST_BYTES = 256_000;

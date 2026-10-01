@@ -32,7 +32,7 @@ async function serialize(connection:Connection,payer:PublicKey,ixs:TransactionIn
     if(!t||t.state.deactivationSlot!==(BigInt(1)<<BigInt(64))-BigInt(1))throw Error('market lookup table unavailable');return t;})):[];
   const {blockhash,lastValidBlockHeight}=await connection.getLatestBlockhash('confirmed');
   const tx=new VersionedTransaction(new TransactionMessage({payerKey:payer,recentBlockhash:blockhash,
-    instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:1_400_000}),...ixs]}).compileToV0Message(tables));
+    instructions:[ComputeBudgetProgram.setComputeUnitLimit({units:1_400_000}),ComputeBudgetProgram.setComputeUnitPrice({microLamports:10_000}),...ixs]}).compileToV0Message(tables));
   const bytes=tx.serialize();if(bytes.length>1232)throw Error('atomic route exceeds Solana transaction size');
   const sim=await connection.simulateTransaction(tx,{sigVerify:false,replaceRecentBlockhash:true,commitment:'confirmed'});
   const executionReady=sim.value.err===null&&await exponentDeploymentReady(connection);

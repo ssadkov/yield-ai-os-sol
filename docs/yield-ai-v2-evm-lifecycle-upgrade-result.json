@@ -1,0 +1,39 @@
+{
+  "status": "independently_verified_finalized",
+  "cluster": "devnet",
+  "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+  "programData": "H5evLv9yEPaSRacNTYv5y4Tjdj3gJByUgavwMg66xTBg",
+  "upgradeAuthority": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "transaction": "2hE98gT2bVkHmAAACiFRV9oFU7goKcscBoFhxmCYDvAoZyr7Y26sbcESWxv7eAT9iiaysKDHJRmF3XPVMaBHXgZQ",
+  "finalizedSlot": 506207702,
+  "elfBytes": 695488,
+  "elfSha256": "4a2a277a6df06bbcafe172f90ff88bfc3d31fe34b4309b2b6913a4d7b70fdf98",
+  "programDataBytes": 699149,
+  "reservedZeroPaddingBytes": 3616,
+  "buffer": "2HGHeWBCe1b5MDr4c4jwYocUKJ2WXfxzPkpi6o5eo2dV",
+  "bufferAbsent": true,
+  "bufferRentReturnedLamports": 3533957880,
+  "additionalProgramRentLamports": 52019200,
+  "totalTransactionFeesLamports": 3640000,
+  "netSpendLamports": 55659200,
+  "finalizedTransactionCount": 728,
+  "preflightRejectedWrites": [
+    {
+      "signature": "38gK9j3SFg9GEYQDW8tcada5qxfszJ7z8azZ5v53CS3G3tQ2LLbCEe39VDfYebRbvWLeGUBVjkBsuSUQaEQ4nVDC",
+      "offset": 225600,
+      "error": "BlockhashNotFound",
+      "lastValidBlockHeight": 493451670,
+      "finalizedBlockHeightAtResolution": 493452598
+    }
+  ],
+  "safe": "B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu",
+  "safeAta": "DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK",
+  "safeNonce": "3",
+  "safeUsdcRaw": "0",
+  "safeUnchanged": true,
+  "ataUnchanged": true,
+  "sourceFinalizedReadSlot": 506207799,
+  "payerAtReadbackLamports": 12291295054,
+  "verifiedAt": "2026-10-01T08:16:16.340Z",
+  "signerLoaded": false
+}

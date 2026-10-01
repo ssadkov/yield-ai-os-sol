@@ -27,7 +27,7 @@ export function loadRelayConfig(path: string): RelayConfig {
   for (const k of ["maxFeeLamports", "maxRentLamports", "maxDailyLamports", "maxHourlyTransactions", "minBalanceLamports", "port"] as const) assert(Number.isSafeInteger(c[k]) && c[k] > 0);
   assert(c.port > 1024 && c.port < 65536 && c.maxFeeLamports <= 100000 && c.maxRentLamports <= 10000000 && c.maxDailyLamports <= 50000000 && c.maxHourlyTransactions <= 60);
   assert(typeof c.sendEnabled === "boolean" && typeof c.automatic === "boolean" && typeof c.allowLifecycle === "boolean");
-  if (c.automatic) assert(c.sendEnabled && c.automaticApproval === "DEVNET_OWNER_SIGNED_INTENTS_WITH_LIMITS", "automatic relay needs separate budget authorization");
+  if (c.automatic) assert(c.sendEnabled && c.automaticApproval === "DEVNET_OWNER_SIGNED_INTENTS_WITH_LIMITS", "automatic relay requires the bounded Devnet execution policy");
   for (const token of [c.submitToken, c.adminToken]) assert(typeof token === "string" && /^[A-Za-z0-9_-]{40,128}$/.test(token));
   assert.notEqual(c.submitToken, c.adminToken, "submit token must not authorize sends");
   protectedPath(c.keypairPath); protectedPath(c.journalPath); assert.equal(statSync(c.keypairPath).mode & 0o077, 0, "signer must have mode 0600");
@@ -60,7 +60,7 @@ export class RelayerWorker {
     return publicJob(job);
   }
   async approve(id: string, approvedPlanHash: string) {
-    assert(this.config.sendEnabled, "sending disabled pending funding and explicit operator approval");
+    assert(this.config.sendEnabled, "sending disabled by operator configuration");
     const job = this.journal.get(id); assert(job, "job missing");
     if (job.state !== "quoted") return publicJob(job);
     assert.equal(publicJob(job).planHash, approvedPlanHash, "reviewed plan changed");

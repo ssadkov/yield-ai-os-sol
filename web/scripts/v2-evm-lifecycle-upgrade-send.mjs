@@ -35,12 +35,13 @@ async function rpc(method, params = []) {
     await pause(Math.max(0, nextRpc - Date.now())); nextRpc = Date.now() + 220;
     let res;
     try { res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }), signal: AbortSignal.timeout(30000) }); }
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }), signal: AbortSignal.timeout(60000) }); }
     catch { throw Error("RPC transport error during " + method + "; inspect journal/signature before retry"); }
     if (res.status === 429 && n < 3) { await pause(1500 * (n + 1)); continue; }
     assert(res.ok, method + " HTTP " + res.status);
     const payload = await res.json();
-    if (payload.error) throw Error(method + " RPC error " + payload.error.code + ": " + JSON.stringify(payload.error.data || null));
+    if (payload.error) { const error = Error(method + " RPC error " + payload.error.code + ": " + JSON.stringify(payload.error.data || null));
+      Object.assign(error, { rpcMethod: method, rpcCode: payload.error.code, rpcData: payload.error.data }); throw error; }
     return payload.result;
   }
 }
@@ -61,10 +62,18 @@ function checkBuffer(b) {
 }
 assert.equal(await rpc("getGenesisHash"), "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG", "wrong cluster");
 // Resolve any previously recorded transaction first; never silently repeat an uncertain send.
-for (const entry of journal.transactions.filter(t => t.status !== "finalized" && t.status !== "not_sent_local_serialization_error")) {
+for (const entry of journal.transactions.filter(t => !["finalized", "not_sent_local_serialization_error", "not_sent_rpc_preflight_rejection"].includes(t.status))) {
   const status = (await rpc("getSignatureStatuses", [[entry.signature], { searchTransactionHistory: true }])).value[0];
-  assert(status && status.confirmationStatus === "finalized" && !status.err, "unresolved earlier send " + entry.signature + "; inspect before retry");
-  entry.status = "finalized"; entry.slot = status.slot;
+  if (status && status.confirmationStatus === "finalized" && !status.err) { entry.status = "finalized"; entry.slot = status.slot; continue; }
+  // Only a recorded, explicit RPC preflight rejection can be resolved as not sent.
+  // A transport failure or an unknown submission never permits a replacement signature.
+  if (!status && entry.action === "write_buffer" && entry.rpcRejection?.rpcCode === -32002 && entry.rpcRejection?.err === "BlockhashNotFound") {
+    const height = await rpc("getBlockHeight", [{ commitment: "finalized" }]);
+    const receipt = await rpc("getTransaction", [entry.signature, { commitment: "finalized", encoding: "json", maxSupportedTransactionVersion: 0 }]);
+    assert(height > entry.lastValidBlockHeight && receipt === null, "rejected upload signature not yet safely expired");
+    entry.status = "not_sent_rpc_preflight_rejection"; entry.resolvedAt = new Date().toISOString(); entry.finalizedBlockHeightAtResolution = height; continue;
+  }
+  assert(false, "unresolved earlier send " + entry.signature + "; inspect before retry");
 }
 save();
 const before = await accounts([program, programData, authority, safe, ata, buffer]);
@@ -84,7 +93,7 @@ let signer;
 try { const secret = Uint8Array.from(JSON.parse(readFileSync(process.env.V2_PAYER_KEYPAIR, "utf8"))); signer = Keypair.fromSecretKey(Uint8Array.from(secret)); secret.fill(0); }
 catch { throw Error("Cannot load existing protected operator signer"); }
 assert(signer.publicKey.equals(authority), "operator public key mismatch");
-let estimatedFees = journal.transactions.filter(t => t.status !== "not_sent_local_serialization_error").reduce((n, t) => n + t.estimatedFeeLamports, 0);
+let estimatedFees = journal.transactions.filter(t => !["not_sent_local_serialization_error", "not_sent_rpc_preflight_rejection"].includes(t.status)).reduce((n, t) => n + t.estimatedFeeLamports, 0);
 function make(ixs, blockhash) { return new Transaction({ feePayer: authority, recentBlockhash: blockhash }).add(
   ComputeBudgetProgram.setComputeUnitLimit({ units: 1400000 }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 0 }), ...ixs); }
 async function simulate(t, postKeys = []) {
@@ -104,7 +113,11 @@ async function submit(t, block, action, fee, details = {}) {
     wireBase64: wire, estimatedFeeLamports: fee, status: "prepared", preparedAt: new Date().toISOString() };
   journal.transactions.push(entry); estimatedFees += fee; save();
   // Record before the first RPC send. Only identical bytes may be retransmitted by RPC.
-  const returned = await rpc("sendTransaction", [wire, { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 2 }]);
+  let returned;
+  try { returned = await rpc("sendTransaction", [wire, { encoding: "base64", skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 2 }]); }
+  catch (error) { if (error.rpcMethod === "sendTransaction" && error.rpcCode === -32002 && error.rpcData?.err === "BlockhashNotFound") {
+    entry.rpcRejection = { rpcCode: error.rpcCode, err: error.rpcData.err, observedAt: new Date().toISOString() }; save();
+  } throw error; }
   assert.equal(returned, signature); entry.status = "submitted"; save(); return entry;
 }
 async function confirm(entries) {
@@ -145,7 +158,9 @@ for (let i = 0; i < writes.length; i += 20) {
   const first = make([writeIx(writes[i].offset, writes[i].payload)], block.blockhash), fee = await transactionFee(first);
   for (const part of writes.slice(i, i + 20)) {
     const t = make([writeIx(part.offset, part.payload)], block.blockhash); await simulate(t);
-    entries.push(await submit(t, block, "write_buffer", fee, { offset: part.offset, length: part.payload.length }));
+    const freshBlock = (await rpc("getLatestBlockhash", [{ commitment: "confirmed" }])).value;
+    t.recentBlockhash = freshBlock.blockhash;
+    entries.push(await submit(t, freshBlock, "write_buffer", fee, { offset: part.offset, length: part.payload.length }));
   }
   await confirm(entries); emit({ status: "upload_progress_finalized", completed: Math.min(i + 20, writes.length), total: writes.length, estimatedFeesLamports: estimatedFees });
 }

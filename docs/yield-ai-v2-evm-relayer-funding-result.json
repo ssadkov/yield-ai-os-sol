@@ -1,0 +1,23 @@
+{
+  "status": "funding_finalized_verified",
+  "observedAt": "2026-10-01T08:16:42.892Z",
+  "cluster": "devnet",
+  "action": "fund_separate_relayer",
+  "from": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "to": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s",
+  "amountLamports": 50000000,
+  "feeLamports": 5000,
+  "rentLamports": 0,
+  "payerBeforeLamports": 12291295054,
+  "payerAfterLamports": 12241290054,
+  "recipientBeforeLamports": 0,
+  "recipientAfterLamports": 50000000,
+  "sendEnabled": false,
+  "transactionSent": true,
+  "walletFilesRead": true,
+  "signature": "5JdpFKYP2hJWEdARqxTHCNH7CtT4HmngXsRtndcww1LfXqYthwzRYSS1eqPempFvy3PcmrWRuodKKiUsMzRSebH6",
+  "preparedAt": "2026-10-01T08:16:44.731Z",
+  "finalizedSlot": 506207926,
+  "actualFeeLamports": 5000,
+  "verifiedAt": "2026-10-01T08:16:46.559Z"
+}

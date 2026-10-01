@@ -1,0 +1,33 @@
+{
+  "previewUrl": "http://localhost:3101/v2/evm-devnet",
+  "previewHttpStatus": 200,
+  "state": {
+    "cluster": "devnet",
+    "program": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+    "owner": "0x70d5d723Ba7f39Cfb676C67Bbd4b5D6aE8047f4B",
+    "safe": "B9TDuTrEihNcX2StDwGn4qua6Dd921P9GLxoPgaF7WNu",
+    "ata": "DGMgUNQ3VeBoU4HxCYfxtqhg93Zjt2dyEHQCxgJfu7WK",
+    "exists": true,
+    "nonce": "3",
+    "allocationBps": [
+      5000,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "usdcRaw": "0",
+    "rentPayer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+    "withdrawalEnabled": true,
+    "lifecycleEnabled": true,
+    "sponsor": "GhK2bfKSsFgVrm6RbgHZkMzQ34pvYh5tGjfda3UchY1s"
+  },
+  "relayerReachableFromWebHost": true,
+  "crossOriginStatus": 403,
+  "invalidIntentStatus": 400,
+  "expiredIntentForwardedAndRejected": 409,
+  "verifiedAt": "2026-10-01T08:24:43.909Z"
+}

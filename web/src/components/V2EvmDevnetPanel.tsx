@@ -151,7 +151,7 @@ export function V2EvmDevnetPanel() {
       }
       if (version !== session.current) return;
       setVerified(body);
-      setNotice("Signature verified. Copy the request and send it to the operator for Devnet relay.");
+      setNotice("Signature verified. Submit the request to the Devnet relayer to execute it.");
     } catch (cause) { if (version === session.current) setError(walletError(cause)); }
     finally { if (version === session.current) setBusy(false); }
   }
@@ -199,7 +199,7 @@ export function V2EvmDevnetPanel() {
       if (body.relayMode !== "operator" || body.digest !== hashTypedData(typed)
         || await verifyEvmIntentSignature(body.intent) !== hashTypedData(typed)) throw new Error("Verified withdrawal differs from the message you signed");
       if (version !== session.current) return;
-      setVerified(body); setNotice("Withdrawal signature verified. Operator relay requires separate transaction approval.");
+      setVerified(body); setNotice("Withdrawal signature verified. Submit to the Devnet relayer to send this withdrawal.");
     } catch (cause) { if (version === session.current) setError(walletError(cause)); }
     finally { if (version === session.current) setBusy(false); }
   }
@@ -245,7 +245,7 @@ export function V2EvmDevnetPanel() {
       if (!response.ok) throw new Error(job.error || "Relayer unavailable; copy the request for operator fallback");
       if (job.id !== signed.digest) throw new Error("Relayer returned a different request");
       if (version !== session.current) return;
-      setRelayJob(job); setNotice(job.state === "quoted" ? "Relayer simulation passed. This request is awaiting separate operator approval." : "Relayer request accepted. Check its transaction status.");
+      setRelayJob(job); setNotice(job.state === "quoted" ? "Relayer simulation passed. Sending is paused in the service configuration." : "Relayer request accepted. Check its transaction status.");
     } catch (cause) { if (version === session.current) setError(walletError(cause)); }
     finally { if (version === session.current) setBusy(false); }
   }
@@ -357,7 +357,7 @@ export function V2EvmDevnetPanel() {
 
       {verified && <section className="space-y-3 rounded-xl border border-zinc-700 bg-zinc-900/70 p-5" aria-label="Verified relay request">
         <h2 className="text-xl font-medium">Verified request</h2>
-        <p className="text-sm text-zinc-300">Send this request to the operator before {new Date(Number(verified.intent.deadline) * 1000).toLocaleTimeString()}. The operator will simulate and relay it on Solana Devnet.</p>
+        <p className="text-sm text-zinc-300">Submit before {new Date(Number(verified.intent.deadline) * 1000).toLocaleTimeString()}. The Devnet relayer checks your signature, simulates the transaction and sends it within its spending limits. Submitting executes the signed action.</p>
         <p className="text-sm">Action: {"action" in verified.intent ? verified.intent.action : "set_allocation"}{isWithdrawalIntent(verified.intent) ? " · " + formatUnits(BigInt(verified.intent.amountRaw), 6) + " test USDC to " + verified.intent.recipientOwner : ""}</p>
         <button disabled={busy || !!relayJob} onClick={() => void submitToRelayer()} className="rounded-lg bg-violet-700 px-4 py-2 disabled:opacity-50">Submit to relayer</button>
         {relayJob && <div className="space-y-2 text-sm"><p>Relayer status: {relayJob.state}</p><button disabled={busy} onClick={() => void refreshRelay()} className="rounded-lg border border-zinc-500 px-3 py-2">Check transaction status</button>{relayJob.signature && <a className="block break-all underline" href={"https://explorer.solana.com/tx/" + relayJob.signature + "?cluster=devnet"} target="_blank" rel="noreferrer">View Solana transaction</a>}</div>}

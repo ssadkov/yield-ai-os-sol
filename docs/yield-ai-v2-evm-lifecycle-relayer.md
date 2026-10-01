@@ -74,7 +74,7 @@ Reproduce from WSL in the EVM worktree (NO_DNA=1): cargo test -p yield-vault --f
 
 The lifecycle upgrade and 0.05 test-SOL funding both finalized. See [exact transaction receipts, costs, independent hash/readback and current gates](yield-ai-v2-evm-lifecycle-release-result.md). Six additional live-program simulations passed without sending or creating test accounts. The configured service now pins the new hash/size, allows lifecycle and executes allowlisted owner-signed intents automatically within the existing limits. Its service signer has no upgrade authority.
 
-A new human EVM account public address is still needed for the fresh create/deposit/cancel/withdraw rehearsal: the current owner already has a Safe. The allowlist remains narrow. No owner action has yet been sent by the dedicated service; previous full recovery used the manual payer path. Keep this distinction when reporting readiness.
+A second human EVM account has now been added for the fresh create/deposit/cancel/withdraw rehearsal: 0xb659DA13418527601C52D4220536C12397F20855. Its new Safe is absent and awaits a fresh CreateSafe signature; see [readiness](yield-ai-v2-evm-new-owner-ready.json). The allowlist remains narrow. No owner action has yet been sent by the dedicated service; previous full recovery used the manual payer path. Keep this distinction when reporting readiness.
 
 ## Upgrade governance proposal — not activated
 

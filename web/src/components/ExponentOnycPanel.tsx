@@ -7,6 +7,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { ComputeBudgetProgram, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PROGRAM_ID } from "@/lib/constants";
+import { verifyOwnerSignedTransaction } from "@/lib/verifySolanaOwnerSignature";
 
 const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((mod) => mod.WalletMultiButton),
@@ -136,11 +137,8 @@ export function ExponentOnycPanel() {
         throw new Error("Unexpected transaction program");
       }
       const message = tx.message.serialize();
-      const signed = await signTransaction(tx);
-      if (!(signed instanceof VersionedTransaction) || signed.message.serialize().length !== message.length
-        || signed.message.serialize().some((byte, index) => byte !== message[index])) {
-        throw new Error("Wallet changed the transaction message");
-      }
+      const walletSigned = await signTransaction(tx);
+      const signed = await verifyOwnerSignedTransaction(walletSigned.serialize(), message, publicKey);
       const sent = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
       setSignature(sent); setStatus(`Sent ${sent}. Waiting for confirmation…`);
       for (let attempt = 0; attempt < 30; attempt++) {

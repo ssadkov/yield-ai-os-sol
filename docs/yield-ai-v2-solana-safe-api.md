@@ -1,5 +1,7 @@
 # Yield AI v2: Solana wallet Safe API v1 — idle USDC cycle
 
+Devnet update, 2026-10-03: [Seeker integration and live round trip](yield-ai-v2-seeker-devnet.md). Optional first deposit is now supported atomically with creation; read-only transaction status is available. Public Devnet hosting access is still being configured.
+
 Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, and withdraw idle USDC back to the owner. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Protocol investments, allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
 ## Deployment and trust boundary
@@ -52,9 +54,13 @@ Body limit: 2048 bytes. Unknown fields are rejected. EVM owners return `UNSUPPOR
 - `blockhash`, `lastValidBlockHeight`: transaction lifetime. Block height is authoritative; there is no fabricated wall-clock expiry.
 - `simulation`: successful unsigned simulation slot and consumed CU; `createdAt` in ms.
 
-The transaction contains a 200,000-CU limit and `initialize_with_limits`. It creates the Safe, its canonical USDC ATA and executor policy atomically. Allocation starts entirely idle. No USDC transfer, protocol deposit or arbitrary CPI is included. ATA rent is omitted if a valid ATA already exists; pre-funded empty System-owned PDAs need only the rent top-up. An orphan existing executor policy is rejected rather than reset.
+The transaction contains a 200,000-CU limit and `initialize_with_limits`. It creates the Safe, its canonical USDC ATA and executor policy atomically. Allocation starts entirely idle. Optional `initialDepositUsdc` is a positive decimal string (six decimals maximum): the same transaction appends a typed `deposit` from the owner's canonical USDC ATA. It still needs only one owner signature, returns `initialDepositUsdc`, `initialDepositRaw`, `source`, `destination`, `atomic: true`, and has setup step ID `create_safe_and_deposit`. If omitted, no transfer is included. No protocol deposit or arbitrary CPI is included. ATA rent is omitted if a valid ATA already exists; pre-funded empty System-owned PDAs need only the rent top-up. An orphan existing executor policy is rejected rather than reset.
 
-If the Safe already exists, returns `status: "already_exists"`, current `state`, `steps: []`. Do not ask the wallet to sign. Repeating a plan request does not create anything: uniqueness is enforced by the owner PDA on chain. No durable server plan store or `Idempotency-Key` replay guarantee is implemented yet; fresh requests may have different blockhashes/plan IDs. That requirement from the broader backend specification is deferred to the signed-submission/job layer.
+If the Safe already exists, returns `status: "already_exists"`, current `state`, `steps: []`, including when `initialDepositUsdc` was supplied: no repeat deposit is constructed. Use `/deposits/plan` for another deposit. Do not ask the wallet to sign. Repeating a plan request does not create anything: uniqueness is enforced by the owner PDA on chain. No durable server plan store or `Idempotency-Key` replay guarantee is implemented yet; fresh requests may have different blockhashes/plan IDs. That requirement is deferred to the signed-submission/job layer.
+
+### GET /transactions/SIGNATURE?cluster=devnet&lastValidBlockHeight=HEIGHT
+
+Read-only status lookup with `searchTransactionHistory: true`. Accepts a canonical 64-byte base58 signature and an optional safe-integer block height. Returns network, signature, `status`, `confirmationStatus`, slot, error, finalized blockHeight, blockhashExpired and updatedAt. Statuses: pending, processed, confirmed, finalized, failed, unknown_or_expired. Missing history after blockhash expiry sets `reconciliationRequired: true`: absence alone is not proof that funds never moved. Keep signed bytes/signature before send; reconcile receipt and balances before preparing a fresh transfer. Only finalized success or finalized failure is terminal for automatic client recovery. This is not a transaction submission endpoint or durable job.
 
 Insufficient owner SOL returns HTTP 422 `INSUFFICIENT_SOL` with `error.details.cost`, network and Safe, so mobile can show the exact funding requirement. Estimated rent and fee are a snapshot, not a reservation. Wallet-added priority fees change the final cost.
 

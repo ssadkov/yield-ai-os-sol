@@ -2,6 +2,7 @@ import { BN, BorshAccountsCoder, BorshInstructionCoder, type Idl } from "@coral-
 import { ACCOUNT_SIZE, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync, unpackAccount, unpackMint } from "@solana/spl-token";
 import { ComputeBudgetProgram, Connection, PublicKey, SystemProgram, TransactionInstruction, TransactionMessage, VersionedTransaction, type AccountInfo } from "@solana/web3.js";
 import { createHash } from "node:crypto";
+import bs58 from "bs58";
 import idlJson from "../idl/yield_vault.json" with { type: "json" };
 
 // Existing Anchor ABI is retained at this boundary. No wallet/keypair is held by this API.
@@ -144,10 +145,12 @@ export async function inspectSafe(connection: Connection, network: MobileNetwork
   };
   return { state, addresses, defaultExecutor, defaultAvailable, balanceUsdc, walletUsdc, infos: { safeInfo, limitsInfo, ataInfo, ownerAtaInfo } };
 }
-export async function creationPlan(connection: Connection, network: MobileNetwork, owner: PublicKey) {
+export async function creationPlan(connection: Connection, network: MobileNetwork, owner: PublicKey, initialDepositUsdc?: unknown) {
+  const initialAmount = initialDepositUsdc === undefined ? null : usdcAmount(initialDepositUsdc);
   const inspected = await inspectSafe(connection, network, owner);
   const { state, addresses: a, infos, defaultExecutor, defaultAvailable } = inspected;
   if (state.exists) return { status: "already_exists" as const, state, steps: [] };
+  if (initialAmount !== null && initialAmount > inspected.walletUsdc) throw new MobileApiError("INSUFFICIENT_USDC", "Wallet does not hold enough test/native USDC for the first deposit", 422, { availableUsdc: usdc(inspected.walletUsdc) });
   if (!defaultAvailable) fail("EXECUTOR_UNAVAILABLE", "Admin has not approved a default executor for new Safes");
   // An orphan policy is not silently reset by init_if_needed.
   if (state.executorLimits) fail("INVALID_ACCOUNT", "Executor policy exists without an initialized Safe");
@@ -169,13 +172,20 @@ export async function creationPlan(connection: Connection, network: MobileNetwor
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: a.limits, isSigner: false, isWritable: true },
   ] });
-  const plan = await ownerPlan(connection, network, owner, state, rent, [initialize], "create_safe", "Create your Solana Safe");
-  return { ...plan, defaults: { executor: defaultExecutor.toBase58(), executorLimits: DEFAULT_LIMITS, allocationBps: Array(8).fill(0) } };
+  const instructions = [initialize];
+  if (initialAmount !== null) instructions.push(new TransactionInstruction({ programId: a.program, data: instructionCoder.encode("deposit", { amount: new BN(initialAmount.toString()) }), keys: [
+    { pubkey: owner, isSigner: true, isWritable: true }, { pubkey: a.safe, isSigner: false, isWritable: true },
+    { pubkey: a.mint, isSigner: false, isWritable: false }, { pubkey: a.ownerAta, isSigner: false, isWritable: true },
+    { pubkey: a.ata, isSigner: false, isWritable: true }, { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ] }));
+  const plan = await ownerPlan(connection, network, owner, state, rent, instructions, initialAmount === null ? "create_safe" : "create_safe_and_deposit", initialAmount === null ? "Create your Solana Safe" : "Create Safe and deposit USDC");
+  return { ...plan, ...(initialAmount !== null ? { initialDepositUsdc: usdc(initialAmount), initialDepositRaw: String(initialAmount), source: String(a.ownerAta), destination: String(a.ata), atomic: true } : {}), defaults: { executor: defaultExecutor.toBase58(), executorLimits: DEFAULT_LIMITS, allocationBps: Array(8).fill(0) } };
 }
 
 async function ownerPlan(connection: Connection, network: MobileNetwork, owner: PublicKey, state: Awaited<ReturnType<typeof inspectSafe>>["state"], rent: number, instructions: TransactionInstruction[], kind: string, title: string) {
   const latest = await connection.getLatestBlockhash("confirmed");
   const message = new TransactionMessage({ payerKey: owner, recentBlockhash: latest.blockhash, instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_LIMIT }), ...instructions] }).compileToV0Message();
+  if (message.header.numRequiredSignatures !== 1 || !message.staticAccountKeys[0].equals(owner)) fail("INVALID_TRANSACTION", "Plan must require only the owner's signature");
   const fee = (await connection.getFeeForMessage(message, "confirmed")).value;
   if (fee === null) fail("BLOCKHASH_UNAVAILABLE", "Cannot estimate the fee; request a new plan");
   const required = rent + fee;
@@ -185,15 +195,31 @@ async function ownerPlan(connection: Connection, network: MobileNetwork, owner: 
   const simulation = await connection.simulateTransaction(tx, { sigVerify: false, commitment: "confirmed", minContextSlot: state.slot });
   if (simulation.value.err) fail("SIMULATION_FAILED", "Safe operation was rejected by the configured cluster; refresh state and retry", 422);
   const serialized = Buffer.from(tx.serialize());
+  if (serialized.length > 1232) fail("INVALID_TRANSACTION", "Plan exceeds Solana packet size");
   const planId = createHash("sha256").update(network.genesis).update(serialized).digest("hex");
   return {
     status: "ready" as const, planId, state, cost,
     // Block height is authoritative; a wall-clock expiry would only be an estimate.
     blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight,
     simulation: { slot: simulation.context.slot, unitsConsumed: simulation.value.unitsConsumed ?? null },
-    steps: [{ id: kind, kind: kind === "create_safe" ? "setup" : kind, title, transaction: serialized.toString("base64"), transactionVersion: 0, requiredSigners: [owner.toBase58()] }],
+    steps: [{ id: kind, kind: kind.startsWith("create_safe") ? "setup" : kind, title, transaction: serialized.toString("base64"), transactionVersion: 0, requiredSigners: [owner.toBase58()] }],
     createdAt: Date.now(),
   };
+}
+
+/** Read-only reconciliation. Missing history is not evidence that a transfer never landed. */
+export async function transactionStatus(connection: Connection, network: MobileNetwork, signature: string, height?: string | null) {
+  try { if (signature.length < 64 || signature.length > 88 || bs58.decode(signature).length !== 64 || bs58.encode(bs58.decode(signature)) !== signature) throw new Error(); }
+  catch { throw new MobileApiError("INVALID_SIGNATURE", "Expected a canonical 64-byte Solana signature"); }
+  if (height != null && (!/^(0|[1-9]\d{0,15})$/.test(height) || !Number.isSafeInteger(Number(height)))) throw new MobileApiError("INVALID_REQUEST", "Invalid lastValidBlockHeight");
+  if (await connection.getGenesisHash() !== network.genesis) fail("RPC_CLUSTER_MISMATCH", "Configured RPC points to a different Solana cluster");
+  const response = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
+  const entry = response.value[0];
+  const blockHeight = height == null ? null : await connection.getBlockHeight("finalized");
+  const expired = blockHeight === null ? null : blockHeight > Number(height);
+  const status = entry ? entry.err ? "failed" : entry.confirmationStatus ?? (entry.confirmations === null ? "finalized" : "processed") : expired ? "unknown_or_expired" : "pending";
+  return { signature, network, status, confirmationStatus: entry?.confirmationStatus ?? (entry?.confirmations === null ? "finalized" : null), slot: entry?.slot ?? null, error: entry?.err ?? null, blockHeight, blockhashExpired: expired, updatedAt: Date.now(),
+    reconciliationRequired: !entry && expired === true };
 }
 
 /** Wallet -> idle Safe USDC, or idle Safe USDC -> the same owner's canonical ATA. */

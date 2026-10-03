@@ -1,5 +1,5 @@
 import { Connection } from "@solana/web3.js";
-import { creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan } from "./mobileSafe";
+import { creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
 import { v2MainnetRpcHeaders, V2_MAINNET_RPC_URL } from "./v2MainnetRpc.server";
 
 // Deployment selects one cluster. Requests cannot choose a program, mint, RPC or executor.
@@ -30,7 +30,13 @@ export async function mobileApi(action: () => Promise<unknown>) {
 export async function mobileConfig() {
   const { network, connection } = mobileSafeRuntime();
   if (await connection.getGenesisHash() !== network.genesis) throw new MobileApiError("RPC_CLUSTER_MISMATCH", "Configured RPC points to a different Solana cluster", 503);
-  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: false, allocation: false, withdrawalScope: "idle_usdc" } };
+  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, createAndDeposit: true, transactionStatus: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: false, allocation: false, withdrawalScope: "idle_usdc" } };
+}
+export async function mobileTransactionStatus(request: Request, signature: string) {
+  const url = new URL(request.url);
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(url.searchParams.get("cluster"), network);
+  return transactionStatus(connection, network, signature, url.searchParams.get("lastValidBlockHeight"));
 }
 export async function mobileReadSafe(request: Request) {
   const url = new URL(request.url);
@@ -42,14 +48,14 @@ export async function mobileReadSafe(request: Request) {
 export function parseCreationRequest(body: unknown) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new MobileApiError("INVALID_REQUEST", "Expected a JSON object");
   const value = body as Record<string, unknown>;
-  if (Object.keys(value).some((key) => key !== "owner" && key !== "cluster")) throw new MobileApiError("INVALID_REQUEST", "Unexpected creation-plan field");
-  return { owner: solanaOwner(value.owner), cluster: value.cluster };
+  if (Object.keys(value).some((key) => !["owner", "cluster", "initialDepositUsdc"].includes(key))) throw new MobileApiError("INVALID_REQUEST", "Unexpected creation-plan field");
+  return { owner: solanaOwner(value.owner), cluster: value.cluster, initialDepositUsdc: value.initialDepositUsdc };
 }
 export async function mobileCreationPlan(request: Request) {
   const input = parseCreationRequest(await planBody(request));
   const { network, connection } = mobileSafeRuntime();
   requireCluster(input.cluster, network);
-  return creationPlan(connection, network, input.owner);
+  return creationPlan(connection, network, input.owner, input.initialDepositUsdc);
 }
 export async function mobileUsdcPlan(request: Request, kind: "deposit" | "withdraw") {
   const body = await planBody(request);

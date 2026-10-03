@@ -4,13 +4,19 @@
 
 ## Что подключать
 
-- [Защищённый веб-стенд](https://yield-ai-os-sol-git-codex-yield-ai-v2-seeker-devnet-edbiz.vercel.app/v2/devnet): для браузерной пробы под Vercel login.
-- Protected API base: `https://yield-ai-os-sol-git-codex-yield-ai-v2-seeker-devnet-edbiz.vercel.app/api/mobile/v1`.
-- [PR #28](https://github.com/ssadkov/yield-ai-os-sol/pull/28), base `codex/yield-ai-v2-cctp-mainnet`; в `main` эта версия ещё не слита. Vercel Preview `dpl_6f6Z9aa37wtgZ9oXsuUpRN17WjAF` имеет состояние READY по API платформы; deploy URL отдельно HTTP-запросом не проверялся.
-- Public Devnet origin будет указан после настройки доступа Vercel. Текущий токен вернул 403 при создании отдельного проекта; защищённый Preview **не подходит как публичный хост мобильного приложения**. Пользователь разрешил отдельный `yield-ai-solana-devnet` с отключённым Vercel login только для него; ожидается обновлённый токен с правом создания проекта в edbiz.
+- [Публичный Devnet веб-стенд](https://yield-ai-solana-devnet.vercel.app/v2/devnet).
+- **Devnet API base:** `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`.
+- [Конфигурация API](https://yield-ai-solana-devnet.vercel.app/api/mobile/v1/config). В клиенте ожидаются `network.cluster = devnet` и `network.chain = solana:devnet`.
+- Отдельный Vercel проект `yield-ai-solana-devnet`; Vercel login и password protection отключены с разрешения владельца. API не требует Vercel token от мобильного клиента. HTTP endpoint URL отдельно после deploy не запрашивался: READY, alias binding и protection проверены по API платформы; функциональные проверки и живые Devnet транзакции описаны ниже.
+- [PR #28](https://github.com/ssadkov/yield-ai-os-sol/pull/28), base `codex/yield-ai-v2-cctp-mainnet`; в `main` эта версия ещё не слита. Исходники работающего Devnet deployment: `e00e9c280da6a640ac693f61d2cb11426b7fc5f2`.
+- Прежний [защищённый Preview](https://yield-ai-os-sol-git-codex-yield-ai-v2-seeker-devnet-edbiz.vercel.app/v2/devnet) остаётся для разработки; мобильному приложению нужен публичный origin выше.
 - Production `yield-ai-os-sol.vercel.app` для этого Devnet цикла не использовать. Изменений Production и Mainnet нет.
 
 Схемы: [Solana Safe API](yield-ai-v2-solana-safe-api.md). Нативный Android HTTP-клиент не требует CORS. Стенд вызывает API с того же origin; cross-origin браузерный доступ отдельно не открыт.
+
+### Короткое сообщение Владу
+
+> Devnet готов для подключения: base URL `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`, без Vercel login. `GET /config`, `GET /safes`, `POST /safes/creation-plan`, `POST /deposits/plan`, `POST /withdrawals/plan`, `GET /transactions/{signature}`. Во всех запросах cluster `devnet`, owner type `solana`; суммы — строки USDC, не JS float. Optional `initialDepositUsdc` создаёт Safe и делает первый депозит за одну MWA-подпись. Для теста пополнить owner test SOL и Circle USDC на Solana Devnet. Kamino в этом этапе выключен; сначала новый Safe → депозит → partial/all вывод → timeout/restart recovery. API отдаёт unsigned v0, кошелёк подписывает, приложение отправляет в Devnet и сохраняет signature до send. Стенд `/v2/devnet` показывает тот же цикл в браузере; физический Seeker ещё требует твоей приёмки.
 
 ## Сеть
 
@@ -75,7 +81,7 @@ GET /api/mobile/v1/transactions/SIGNATURE?cluster=devnet&lastValidBlockHeight=HE
 
 ## Дальше
 
-1. Открыть отдельный публичный Devnet API origin без Vercel login и передать Владу.
+1. Публичный Devnet API origin открыт: передать Владу ссылки и выполнить первый запрос `/config` с устройства.
 2. Приёмка Seeker: новый owner, одна подпись create+deposit, отдельное пополнение, partial/all withdraw, timeout/restart recovery, wrong-chain, insufficient SOL/USDC.
 3. Затем Kamino Mainnet и настройка executor; отдельно согласовать Mainnet операции.
 4. Спонсорство SOL, signed submission/jobs, стратегии/APR, история и agent `why` — следующие API части.
@@ -85,3 +91,7 @@ GET /api/mobile/v1/transactions/SIGNATURE?cluster=devnet&lastValidBlockHeight=HE
 `web/scripts/seeker-devnet-cycle.mjs`: однократный разрешённый Devnet pilot, защищённый прежний WSL signer, explicit ACK, cap 0,03 devnet SOL, signed simulation, fsync journal **до** send, receipt/balance verification. После записи подписанной операции повторный запуск запрещён. Публичный JSON без ключей и signed wire; приватный journal остаётся в WSL вне Git.
 
 Preview env: `V2_MOBILE_CLUSTER=devnet`, `V2_DEVNET_RPC_URL` (server-only), `NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com`, `NEXT_PUBLIC_V2_RPC_PROXY=0`. Не менять `NEXT_PUBLIC_V2_PROGRAM_ID` на Devnet: другие старые страницы связаны с bundled Mainnet IDL; mobile API и `/v2/devnet` выбирают свой Devnet program явно. Relayer/agent keys в отдельный Devnet API deployment не добавлять.
+
+Публичный проект: `prj_kV2DpRoR4aTyOsRgKZJr5QYKHMLo`, deployment `dpl_JVtobXcYiq7wx4jvHXzqKPWHewWJ`, target **staging** (Preview env), READY. Постоянный alias `yield-ai-solana-devnet.vercel.app` явно назначен этому deployment; назначение alias не меняет его target на Production. В новом проекте нет Git link: следующие push не обновляют этот стенд автоматически. Для будущего релиза явно указать `target: staging`, проверить READY и заново назначить этот alias. При создании первого deployment без target Vercel автоматически выбрал Production; эта попытка `dpl_46jJ68nwgoEkgXMrWJK7Vtah7Wzj` отменена до публикации.
+
+В отдельном проекте также установлены `V2_MAINNET_RPC_PROXY_ENABLED=0`, `NEXT_PUBLIC_V2_LAB_ENABLED=0`, `V2_EVM_RELAYER_ENABLED=false`, `NEXT_PUBLIC_V2_CCTP_ENABLED=0`, `NEXT_PUBLIC_V2_CCTP_MAINNET_ENABLED=0`, `NEXT_PUBLIC_V2_CCTP_MAINNET_SEND_ENABLED=0`. Серверный RPC для пилота — public `https://api.devnet.solana.com`; signer/agent/relayer keys и Vercel token не добавлялись в deployment env. Весь runtime API выбирает Devnet независимо от wallet UI.

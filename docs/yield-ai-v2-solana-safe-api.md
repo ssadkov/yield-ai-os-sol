@@ -1,6 +1,6 @@
 # Yield AI v2: Solana wallet Safe API v1 — idle USDC cycle
 
-Devnet update, 2026-10-03: [Seeker integration, hosts and live round trip](yield-ai-v2-seeker-devnet.md). Optional first deposit is now supported atomically with creation; read-only transaction status is available. Protected Preview is READY; a public Devnet project is approved and awaits a Vercel token with project-creation permission.
+Devnet update, 2026-10-03: [Seeker integration, hosts and live round trip](yield-ai-v2-seeker-devnet.md). Optional first deposit is supported atomically with creation; read-only transaction status is available. Public Devnet API base: `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`; [test panel](https://yield-ai-solana-devnet.vercel.app/v2/devnet). Dedicated staging deployment is READY, with Vercel login/password protection disabled by owner approval. Mainnet Production is a separate environment; do not use it for this pilot.
 
 Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, and withdraw idle USDC back to the owner. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Protocol investments, allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 
@@ -20,6 +20,8 @@ Read and unsigned-plan endpoints are public. Only an actual owner signature on t
 ## API contract
 
 Base URL: the deployment origin, followed by `/api/mobile/v1`. JSON responses have `Cache-Control: no-store`. USDC amounts are decimal strings with six digits; costs and SOL balances are integer lamport strings; times are unix milliseconds. Network/program/mint are explicit in every state response.
+
+For the Seeker Devnet pilot use **`https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`**. Example first read: `GET https://yield-ai-solana-devnet.vercel.app/api/mobile/v1/config`. Native clients do not need a Vercel account/token. Requests to this host must use `cluster: devnet`; Mainnet requests fail with `CLUSTER_MISMATCH`.
 
 ### GET /config
 

@@ -1,0 +1,66 @@
+{
+  "cluster": "devnet",
+  "network": {
+    "cluster": "devnet",
+    "chain": "solana:devnet",
+    "genesis": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+    "programId": "8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5",
+    "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  },
+  "payer": "8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A",
+  "safe": "HktjYtEM12sH7qTKMArYqjiJ95c3Sq8W6GTFV85gb7fS",
+  "registry": "AkP5jvAhA9vrtRLWhDjERD48k1J8MiE1Ad8dWPcASpYT",
+  "startingSolLamports": 12239451334,
+  "operations": [
+    {
+      "label": "init_registry",
+      "signature": "Wjr5TNxZ5YyfmhaHk4aZsBTCW6aC8spHg2ULx5SVk8Dhj2Dou1qvoRhjtnjWipcZwefojDfUYZKNzn9SBFVgehg",
+      "lastValidBlockHeight": 494228804,
+      "status": "finalized",
+      "projectedCostLamports": 3484800,
+      "unitsConsumed": 10582,
+      "slot": 506982205,
+      "actualFeeLamports": 5000,
+      "actualCostLamports": 3484800
+    },
+    {
+      "label": "create_and_deposit",
+      "signature": "3r4HJt951nnffcVLi3R1rm3VCq8NK14BW9HGJSzmggSmY1eTJxLAGAMEK35aWLTzxqLEhWEwNQqfuRAhRGmSew4p",
+      "lastValidBlockHeight": 494228843,
+      "status": "finalized",
+      "projectedCostLamports": 8600360,
+      "unitsConsumed": 74161,
+      "slot": 506982248,
+      "actualFeeLamports": 5000,
+      "actualCostLamports": 8600360
+    },
+    {
+      "label": "withdraw_partial",
+      "signature": "3tRtYipMbMo66XkjKxE7Y4s43HPSz7TihdCvyvKxr45yFmDdwe2qgGoBR8E9bZxjS7uRrL4YBiqbAwhojTJgsAs9",
+      "lastValidBlockHeight": 494228880,
+      "status": "finalized",
+      "projectedCostLamports": 5000,
+      "unitsConsumed": 11816,
+      "slot": 506982284,
+      "actualFeeLamports": 5000,
+      "actualCostLamports": 5000
+    },
+    {
+      "label": "withdraw_all",
+      "signature": "4vCUda3KS1KeLH1tHbpoHEMvHDC59Ez5yyTPPfSeH7j8mcLGEBgmwDDoJco9NqNU2i8tufb84S79u93D7noBnuqm",
+      "lastValidBlockHeight": 494228917,
+      "status": "finalized",
+      "projectedCostLamports": 5000,
+      "unitsConsumed": 11816,
+      "slot": 506982335,
+      "actualFeeLamports": 5000,
+      "actualCostLamports": 5000
+    }
+  ],
+  "status": "roundtrip_finalized_verified",
+  "walletBeforeRaw": "18000000",
+  "walletAfterRaw": "18000000",
+  "safeAfterRaw": "0",
+  "totalCostLamports": 12095160,
+  "completedAt": "2026-10-03T11:36:37.947Z"
+}

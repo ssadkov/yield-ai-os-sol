@@ -4,7 +4,9 @@ import { BorshAccountsCoder, BorshInstructionCoder, BN } from "@coral-xyz/anchor
 import { AccountLayout, MintLayout, TOKEN_PROGRAM_ID, AccountState } from "@solana/spl-token";
 import { PublicKey, SystemProgram, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } from "@solana/web3.js";
 import idl from "../src/idl/yield_vault.json" with { type: "json" };
-import { creationPlan, inspectSafe, MOBILE_NETWORKS, solanaOwner, safeAddresses, requireCluster, SAFE_SPACE, LIMITS_SPACE, usdcTransferPlan, usdcAmount } from "../src/lib/mobileSafe.ts";
+import { creationPlan, inspectSafe, MOBILE_NETWORKS, solanaOwner, safeAddresses, requireCluster, SAFE_SPACE, LIMITS_SPACE, usdcTransferPlan, usdcAmount, transactionStatus } from "../src/lib/mobileSafe.ts";
+import bs58 from "bs58";
+import { checkedDevnetTransaction } from "../src/lib/mobileDevnetWallet.ts";
 
 const network = MOBILE_NETWORKS.devnet;
 const owner = new PublicKey("2twCpxj6cqztdXwgV7EabmtDnC7W7xGr12hNrEuxpcdj");
@@ -44,6 +46,50 @@ function setAta(f, mint = addresses.mint, authority = addresses.safe, index = 5,
   f.accounts[index] = info(data, TOKEN_PROGRAM_ID);
 }
 const rejects = (action, code) => assert.rejects(action, (err) => err.code === code);
+
+test("create + first deposit is atomic, fits one packet, has one owner signer and exact canonical transfer", async () => {
+  const f = await fixture(); setAta(f, addresses.mint, owner, 6, 2_000_000n);
+  const plan = await creationPlan(f.connection, network, owner, "1");
+  assert.equal(plan.atomic, true); assert.equal(plan.initialDepositRaw, "1000000");
+  const wire = Buffer.from(plan.steps[0].transaction, "base64"); assert(wire.length <= 1232);
+  const tx = VersionedTransaction.deserialize(wire); assert.equal(tx.message.header.numRequiredSignatures, 1);
+  assert.equal(checkedDevnetTransaction(plan, owner, "create_deposit", "1").message.recentBlockhash, plan.blockhash);
+  assert.throws(() => checkedDevnetTransaction(plan, other, "create_deposit", "1"));
+  assert.throws(() => checkedDevnetTransaction(plan, owner, "create_deposit", "2"));
+  const changed = structuredClone(plan); changed.state.network.genesis = MOBILE_NETWORKS.mainnet.genesis;
+  assert.throws(() => checkedDevnetTransaction(changed, owner, "create_deposit", "1"));
+  const injected = TransactionMessage.decompile(tx.message);
+  injected.instructions.push(SystemProgram.transfer({ fromPubkey: owner, toPubkey: other, lamports: 1 }));
+  const bad = structuredClone(plan); bad.steps[0].transaction = Buffer.from(new VersionedTransaction(injected.compileToV0Message()).serialize()).toString("base64");
+  assert.throws(() => checkedDevnetTransaction(bad, owner, "create_deposit", "1"));
+  assert.equal(String(tx.message.staticAccountKeys[0]), String(owner));
+  const ix = TransactionMessage.decompile(tx.message).instructions;
+  assert.equal(ix.length, 3); assert.equal(ixCoder.decode(ix[1].data).name, "initialize_with_limits");
+  assert.equal(ixCoder.decode(ix[2].data).name, "deposit"); assert.equal(ixCoder.decode(ix[2].data).data.amount.toString(), "1000000");
+  assert.deepEqual(ix[2].keys.map(k => String(k.pubkey)), [owner, addresses.safe, addresses.mint, addresses.ownerAta, addresses.ata, TOKEN_PROGRAM_ID].map(String));
+  await setVault(f); const retry = await creationPlan(f.connection, network, owner, "1");
+  assert.equal(retry.status, "already_exists"); assert.deepEqual(retry.steps, []);
+});
+test("combined creation rejects missing funds and malformed amounts without a payload", async () => {
+  const f = await fixture();
+  await rejects(() => creationPlan(f.connection, network, owner, "1"), "INSUFFICIENT_USDC");
+  await rejects(() => creationPlan(f.connection, network, owner, "all"), "INVALID_AMOUNT");
+});
+test("transaction status reconciles history and never treats missing expired history as safe to repeat", async () => {
+  const signature = bs58.encode(new Uint8Array(64).fill(7));
+  let entry = null;
+  const c = { getGenesisHash: async () => network.genesis, getBlockHeight: async () => 100,
+    getSignatureStatuses: async (s, opts) => { assert.deepEqual(s, [signature]); assert.equal(opts.searchTransactionHistory, true); return { value: [entry] }; } };
+  assert.equal((await transactionStatus(c, network, signature, "101")).status, "pending");
+  const unknown = await transactionStatus(c, network, signature, "99"); assert.equal(unknown.status, "unknown_or_expired"); assert.equal(unknown.reconciliationRequired, true);
+  entry = { slot: 4, err: null, confirmations: null, confirmationStatus: "finalized" };
+  assert.equal((await transactionStatus(c, network, signature, "99")).status, "finalized");
+  entry.err = { InstructionError: [1, "Custom"] }; assert.equal((await transactionStatus(c, network, signature)).status, "failed");
+  await rejects(() => transactionStatus(c, network, "bad"), "INVALID_SIGNATURE");
+  await rejects(() => transactionStatus(c, network, signature, "1e3"), "INVALID_REQUEST");
+  c.getGenesisHash = async () => MOBILE_NETWORKS.mainnet.genesis;
+  await rejects(() => transactionStatus(c, network, signature), "RPC_CLUSTER_MISMATCH");
+});
 
 test("owner and cluster validation rejects EVM, PDAs, noncanonical addresses and wrong cluster", () => {
   assert.equal(solanaOwner({ type: "solana", address: String(owner) }).toBase58(), String(owner));
@@ -155,6 +201,7 @@ test("deposit and partial withdrawal bind exact amounts, owner signer and canoni
     assert.deepEqual(ix.keys.map((key) => String(key.pubkey)), [owner, addresses.safe, addresses.mint, addresses.ownerAta, addresses.ata, TOKEN_PROGRAM_ID].map(String));
     assert.equal(plan.destination, String(kind === "deposit" ? addresses.ata : addresses.ownerAta));
     assert.equal(plan.state.allocationBps[0], 5000); // Wallet ingress/egress never changes allocation.
+    assert.equal(checkedDevnetTransaction(plan, owner, kind, "0.100001").message.header.numRequiredSignatures, 1);
   }
 });
 test("full idle withdrawal uses the snapshot balance and creates missing owner ATA atomically", async () => {
@@ -167,6 +214,7 @@ test("full idle withdrawal uses the snapshot balance and creates missing owner A
   assert.equal(String(instructions[1].programId), "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
   assert.equal(String(instructions[1].keys[1].pubkey), String(addresses.ownerAta));
   assert.equal(ixCoder.decode(instructions[2].data).name, "withdraw");
+  checkedDevnetTransaction(plan, owner, "withdraw", "all");
 });
 test("deposit recreates missing Safe ATA in the owner transaction", async () => {
   const f = await fixture(); await setVault(f); setAta(f, addresses.mint, owner, 6);

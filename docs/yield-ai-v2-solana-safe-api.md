@@ -1,6 +1,6 @@
 # Yield AI v2: Solana wallet Safe API v1 — idle USDC cycle
 
-Devnet update, 2026-10-03: [Seeker integration and live round trip](yield-ai-v2-seeker-devnet.md). Optional first deposit is now supported atomically with creation; read-only transaction status is available. Public Devnet hosting access is still being configured.
+Devnet update, 2026-10-03: [Seeker integration, hosts and live round trip](yield-ai-v2-seeker-devnet.md). Optional first deposit is now supported atomically with creation; read-only transaction status is available. Protected Preview is READY; a public Devnet project is approved and awaits a Vercel token with project-creation permission.
 
 Date: 2026-09-30. Scope: read/create a personal Safe, deposit wallet USDC into it, and withdraw idle USDC back to the owner. Each action returns one unsigned transaction. The existing Solana contract ABI is retained. Protocol investments, allocation changes, portfolio NAV, agent history and EVM relay remain outside this API slice.
 

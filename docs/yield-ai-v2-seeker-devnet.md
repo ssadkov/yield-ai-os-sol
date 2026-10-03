@@ -4,9 +4,10 @@
 
 ## Что подключать
 
-- Веб-стенд: `/v2/devnet` на Preview этой ветки.
-- API: тот же origin + `/api/mobile/v1`.
-- Public Devnet origin будет указан после настройки доступа Vercel. Текущий токен не имеет права создавать отдельные проекты; защищённый Preview требует Vercel login и **не подходит как публичный хост мобильного приложения**.
+- [Защищённый веб-стенд](https://yield-ai-os-sol-git-codex-yield-ai-v2-seeker-devnet-edbiz.vercel.app/v2/devnet): для браузерной пробы под Vercel login.
+- Protected API base: `https://yield-ai-os-sol-git-codex-yield-ai-v2-seeker-devnet-edbiz.vercel.app/api/mobile/v1`.
+- [PR #28](https://github.com/ssadkov/yield-ai-os-sol/pull/28), base `codex/yield-ai-v2-cctp-mainnet`; в `main` эта версия ещё не слита. Vercel Preview `dpl_6f6Z9aa37wtgZ9oXsuUpRN17WjAF` имеет состояние READY по API платформы; deploy URL отдельно HTTP-запросом не проверялся.
+- Public Devnet origin будет указан после настройки доступа Vercel. Текущий токен вернул 403 при создании отдельного проекта; защищённый Preview **не подходит как публичный хост мобильного приложения**. Пользователь разрешил отдельный `yield-ai-solana-devnet` с отключённым Vercel login только для него; ожидается обновлённый токен с правом создания проекта в edbiz.
 - Production `yield-ai-os-sol.vercel.app` для этого Devnet цикла не использовать. Изменений Production и Mainnet нет.
 
 Схемы: [Solana Safe API](yield-ai-v2-solana-safe-api.md). Нативный Android HTTP-клиент не требует CORS. Стенд вызывает API с того же origin; cross-origin браузерный доступ отдельно не открыт.

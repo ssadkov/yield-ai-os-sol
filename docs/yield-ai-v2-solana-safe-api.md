@@ -166,3 +166,8 @@ Parallel EVM branch/chat scope: finish EVM-authorized withdrawal, recipient/amou
 ## Optional wallet RPC transport
 
 `POST /rpc` accepts one JSON-RPC 2.0 call: `getGenesisHash`, `getBlockHeight`, or gated `sendTransaction` with base64 bytes (max 1232 bytes). No batch, arbitrary upstream URL, signer or fee payer is accepted. Same-origin browser requests and native clients without an Origin header are supported; browser CORS is not opened. Preflight is mandatory; retries resubmit the exact same signed bytes. Credentials stay server-side. This is RPC transport, not a durable broadcaster/job or application idempotency layer. On Mainnet the send gate defaults off. Ingress rate limits remain a public release prerequisite.
+
+
+## Public Mainnet owner protocols (2026-10-05)
+
+See [owner Kamino / Exponent API](yield-ai-v2-owner-protocol-api.md) for the dedicated public Mainnet host, unsigned protocol plans, setup, partial/full exits and recovery. Idle `/withdrawals/plan` keeps its original scope.

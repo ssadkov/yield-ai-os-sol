@@ -1,12 +1,12 @@
 # Yield AI v2 — Mainnet mobile Safe release candidate
 
-Date: 2026-10-04. Branch: `codex/yield-ai-v2-mobile-mainnet`, based on `origin/main` (`b2ed575`). This is the first release slice: native Solana owner → idle USDC Safe → owner. Kamino API, EVM owners, CCTP, Exponent and autonomous executor workers are separate releases.
+Date: 2026-10-04. Branch: `codex/yield-ai-v2-mobile-mainnet`, based on `origin/main` (`b2ed575`). Scope expanded on 2026-10-05: native Solana owner → Safe → Kamino / Exponent → owner. See [owner protocol API](yield-ai-v2-owner-protocol-api.md) for the public host, phases and current evidence.
 
 ## Hosts and integration
 
 - **Mainnet Preview:** [test page](https://yield-ai-os-sol-git-codex-yield-ai-v2-mobile-mainnet-edbiz.vercel.app/v2/mobile), API base `https://yield-ai-os-sol-git-codex-yield-ai-v2-mobile-mainnet-edbiz.vercel.app/api/mobile/v1`. Vercel SSO remains enabled: this is an operator Preview, not yet a public mobile API origin. [Draft PR #29 into main](https://github.com/ssadkov/yield-ai-os-sol/pull/29).
 - **Public Devnet:** `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`; existing Seeker test page `/v2/devnet`. Its code/deployment is unchanged by this release.
-- **Production:** `https://yield-ai-os-sol.vercel.app` is the intended Mainnet origin after acceptance and an explicitly authorized Production release. Do not point the mobile app there until `/api/mobile/v1/config` returns the accepted release. A merge alone is not proof that the correct environment and wallet cycle are deployed.
+- **Public Mainnet Production:** dedicated `https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1`. Requested on 2026-10-05. Deployment details and protocol phases are in [owner protocol API](yield-ai-v2-owner-protocol-api.md).
 - [API request/response contract](yield-ai-v2-solana-safe-api.md).
 
 For Vlad: keep one API origin per build/environment and read `/config` before signing. Mainnet expects `cluster: mainnet`, `chain: solana:mainnet`, program `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih`, USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`. Never infer the chain from an EVM wallet network or hostname. The private provider URL stays server-side; no Vercel token, agent key or RPC credential belongs in the app.

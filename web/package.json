@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-mainnet.test.mjs",
+    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-mainnet.test.mjs scripts/mobile-kamino.test.mjs scripts/mobile-protocol.test.mjs",
     "probe:mobile-mainnet": "node --experimental-strip-types scripts/mobile-mainnet-http-probe.mjs"
   },
   "dependencies": {
@@ -48,6 +48,8 @@
     "tailwindcss": "^4.2.2",
     "typescript": "^5.9.3",
     "viem": "2.47.6",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@exponent-labs/exponent-sdk": "0.9.29",
+    "@orca-so/whirlpools-sdk": "0.20.0"
   }
 }

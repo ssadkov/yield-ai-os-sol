@@ -1,5 +1,5 @@
 import { Connection } from "@solana/web3.js";
-import { creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
+import { mobileKaminoPositionState, kaminoDepositPlan, kaminoWithdrawalPlan, kaminoReturnPlan, creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
 import { v2MainnetRpcHeaders, V2_MAINNET_RPC_URL } from "./v2MainnetRpc.server";
 
 // Deployment selects one cluster. Requests cannot choose a program, mint, RPC or executor.
@@ -30,7 +30,7 @@ export async function mobileApi(action: () => Promise<unknown>) {
 export async function mobileConfig() {
   const { network, connection } = mobileSafeRuntime();
   if (await connection.getGenesisHash() !== network.genesis) throw new MobileApiError("RPC_CLUSTER_MISMATCH", "Configured RPC points to a different Solana cluster", 503);
-  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", rpcTransport: "/api/mobile/v1/rpc", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, createAndDeposit: true, transactionStatus: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: false, allocation: false, withdrawalScope: "idle_usdc", sponsoredGas: false, transactionSubmissionEnabled: mobileSubmissionEnabled(network) } };
+  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", rpcTransport: "/api/mobile/v1/rpc", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, createAndDeposit: true, transactionStatus: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: network.cluster === "mainnet", protocolWithdrawals: network.cluster === "mainnet", protocolRoutes: network.cluster === "mainnet" ? ["kamino_usdc", "exponent_onyc_10jan27"] : [], allocation: false, withdrawalScope: "idle_usdc_or_explicit_protocol", sponsoredGas: false, transactionSubmissionEnabled: mobileSubmissionEnabled(network) } };
 }
 export function mobileSubmissionEnabled(network: { cluster: string }) {
   return network.cluster === "devnet" || process.env.V2_MOBILE_MAINNET_SEND_ENABLED === "1";
@@ -70,7 +70,31 @@ export async function mobileUsdcPlan(request: Request, kind: "deposit" | "withdr
   requireCluster(value.cluster, network);
   return usdcTransferPlan(connection, network, owner, kind, value.amount);
 }
-async function planBody(request: Request): Promise<unknown> {
+export async function mobileKaminoDepositPlan(request: Request) {
+  const body = await planBody(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new MobileApiError("INVALID_REQUEST", "Expected a JSON object");
+  const value = body as Record<string, unknown>;
+  if (Object.keys(value).some((key) => !["owner", "cluster", "amount", "source"].includes(key))) throw new MobileApiError("INVALID_REQUEST", "Unexpected Kamino deposit-plan field");
+  const owner = solanaOwner(value.owner);
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(value.cluster, network);
+  return kaminoDepositPlan(connection, network, owner, value.source, value.amount);
+}
+export async function mobileKaminoWithdrawalPlan(request: Request) {
+  const body = await planBody(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new MobileApiError("INVALID_REQUEST", "Expected a JSON object");
+  const value = body as Record<string, unknown>;
+  const allowed = value.phase === "redeem" ? ["owner", "cluster", "phase", "shares", "percent"] : value.phase === "return" ? ["owner", "cluster", "phase", "redemptionSignature"] : [];
+  if (!allowed.length || Object.keys(value).some((key) => !allowed.includes(key))) throw new MobileApiError("INVALID_REQUEST", "Use phase redeem with shares/percent, or return with redemptionSignature");
+  const owner = solanaOwner(value.owner);
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(value.cluster, network);
+  if (value.phase === "return") return kaminoReturnPlan(connection, network, owner, value.redemptionSignature);
+  const { kaminoWithdrawalAccounts } = await import("./kaminoWithdrawal.server");
+  return kaminoWithdrawalPlan(connection, network, owner, { shares: value.shares, percent: value.percent }, kaminoWithdrawalAccounts);
+}
+
+export async function planBody(request: Request): Promise<unknown> {
   // No signed payloads accepted and no sender key exists. This endpoint is read-only on chain.
   if (Number(request.headers.get("Content-Length") ?? 0) > 2048) throw new MobileApiError("INVALID_REQUEST", "Request body is too large", 413);
   const chunks: Uint8Array[] = [];
@@ -92,4 +116,12 @@ async function planBody(request: Request): Promise<unknown> {
   }
   const raw = Buffer.concat(chunks).toString("utf8");
   try { return JSON.parse(raw); } catch { throw new MobileApiError("INVALID_REQUEST", "Expected valid JSON"); }
+}
+
+export async function mobileKaminoPosition(request: Request) {
+  const url = new URL(request.url);
+  const { network, connection } = mobileSafeRuntime();
+  requireCluster(url.searchParams.get("cluster"), network);
+  const owner = solanaOwner({ type: url.searchParams.get("ownerType"), address: url.searchParams.get("address") });
+  return mobileKaminoPositionState(connection, network, owner);
 }

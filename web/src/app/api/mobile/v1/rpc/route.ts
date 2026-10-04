@@ -1,4 +1,5 @@
 import { mobileApi, mobileSafeRuntime, mobileSubmissionEnabled } from "@/lib/mobileSafeApi.server";
+import { validateMobileBroadcast } from "@/lib/mobileBroadcast.server";
 import { MobileApiError } from "@/lib/mobileSafe";
 
 export const runtime = "nodejs";
@@ -8,8 +9,6 @@ export const dynamic = "force-dynamic";
 // Forward only the wallet's signed transaction, never construct or retry a new transfer.
 export async function POST(request: Request) {
   return mobileApi(async () => {
-    const origin = request.headers.get("origin");
-    if (origin && origin !== new URL(request.url).origin) throw new MobileApiError("INVALID_ORIGIN", "Cross-origin RPC requests are not enabled", 403);
     if (Number(request.headers.get("content-length") ?? 0) > 4096) throw new MobileApiError("INVALID_REQUEST", "RPC request too large", 413);
     const reader = request.body?.getReader();
     const chunks: Uint8Array[] = [];
@@ -37,6 +36,7 @@ export async function POST(request: Request) {
       if (call.params.length > 2 || typeof call.params[0] !== "string" || call.params[0].length > 1644 || !/^[A-Za-z0-9+/]+={0,2}$/.test(call.params[0])) throw new MobileApiError("INVALID_REQUEST", "Expected one base64 signed transaction");
       const wire = Buffer.from(call.params[0], "base64");
       if (wire.length > 1232) throw new MobileApiError("INVALID_REQUEST", "Transaction exceeds packet size");
+      await validateMobileBroadcast(connection, network, wire);
       // RPC verifies signatures and simulates. Caller cannot disable preflight or retries policy.
       result = await connection.sendRawTransaction(wire, { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 2 });
     } else throw new MobileApiError("RPC_METHOD_NOT_ALLOWED", "RPC method not allowed", 400);

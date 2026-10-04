@@ -4,7 +4,7 @@ Date: 2026-10-04. Branch: `codex/yield-ai-v2-mobile-mainnet`, based on `origin/m
 
 ## Hosts and integration
 
-- **Mainnet Preview:** deployment URL will be recorded after READY. API base is that origin + `/api/mobile/v1`; test page `/v2/mobile`. Vercel SSO remains enabled: this is an operator Preview, not yet a public mobile API origin.
+- **Mainnet Preview:** [test page](https://yield-ai-os-sol-git-codex-yield-ai-v2-mobile-mainnet-edbiz.vercel.app/v2/mobile), API base `https://yield-ai-os-sol-git-codex-yield-ai-v2-mobile-mainnet-edbiz.vercel.app/api/mobile/v1`. Vercel SSO remains enabled: this is an operator Preview, not yet a public mobile API origin. [Draft PR #29 into main](https://github.com/ssadkov/yield-ai-os-sol/pull/29).
 - **Public Devnet:** `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1`; existing Seeker test page `/v2/devnet`. Its code/deployment is unchanged by this release.
 - **Production:** `https://yield-ai-os-sol.vercel.app` is the intended Mainnet origin after acceptance and an explicitly authorized Production release. Do not point the mobile app there until `/api/mobile/v1/config` returns the accepted release. A merge alone is not proof that the correct environment and wallet cycle are deployed.
 - [API request/response contract](yield-ai-v2-solana-safe-api.md).
@@ -59,6 +59,7 @@ The old `NEXT_PUBLIC_PROGRAM_ID` no longer overrides the v2 IDL: this fixes the 
 - Snapshot: Safe `FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ`, idle `0.998997` USDC, owner wallet `11.602327` USDC. These are a dated snapshot, not NAV or a reservation.
 - Creation simulation: 55,315 CU; rent 8,595,360 lamports + fee 5,000 = **0.008600360 SOL**. Deposit: 14,713 CU; idle withdrawal: 14,868 CU; fee **0.000005 SOL** each where ATAs already exist, zero priority fee. Account presence and fee conditions can change costs.
 - **Zero signed/sent transactions.** These Mainnet simulations do not replace a funded wallet/MWA acceptance cycle. New Mainnet atomic creation+first-deposit is covered by deterministic tests; the live Mainnet create simulation here was empty creation. Devnet atomic creation+deposit was already finalized in the previous release.
+- Preview verification uses Vercel READY/branch alias/target metadata and final source SHA, without fetching the deployed URL. Native client access and wallet approval on this deployment remain acceptance gates. The first Git-triggered build started before branch-scoped env existed; use the subsequent rebuild after env configuration as the Mainnet candidate.
 
 From `web`, Node 24:
 

@@ -6,7 +6,9 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-mainnet.test.mjs",
+    "probe:mobile-mainnet": "node --experimental-strip-types scripts/mobile-mainnet-http-probe.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.49",

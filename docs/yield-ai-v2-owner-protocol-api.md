@@ -4,7 +4,7 @@ Date: 2026-10-05. Branch `codex/yield-ai-v2-mobile-mainnet`. [PR #29](https://gi
 
 ## Hosts for Vlad
 
-- Mainnet API base: **https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1**. Dedicated Production project; Vercel SSO and password protection disabled. **Deployment is pending explicit private RPC transfer approval; this URL is reserved, not yet an accepted live API endpoint.**
+- Mainnet API base: **https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1**. Dedicated Production project; Vercel SSO and password protection disabled. Production is **READY** and public endpoint probes pass (details below).
 - Devnet API base: **https://yield-ai-solana-devnet.vercel.app/api/mobile/v1**. Core Safe / idle USDC cycle only.
 - [Core request contract](yield-ai-v2-solana-safe-api.md), [release notes](yield-ai-v2-mobile-mainnet.md).
 
@@ -70,7 +70,7 @@ Execution requires the exact reviewed Mainnet ELF SHA-256 `9543eb14e69694d25d6a4
 
 ## Public deployment and evidence
 
-New Vercel project: `yield-ai-solana-mainnet`, id `prj_tQiZKhw25G02iz76wgTBlLxdcQbp`. Public project exposes mobile API routes and the existing `/v2/mobile` **core** reference panel; legacy cron/agent/bridge routes return 404. Provider secret stays encrypted and server-side. Automatic Git deployments are disabled: releases deploy a reviewed SHA manually. Existing app and Devnet host remain independent.
+New Vercel project: `yield-ai-solana-mainnet`, id `prj_tQiZKhw25G02iz76wgTBlLxdcQbp`. Public project exposes mobile API routes and the existing `/v2/mobile` **core** reference panel; legacy cron/agent/bridge routes return 404. The current RPC is public PublicNode, with **no key**; the local private Helius URL was not copied to this project. Git was disconnected after creation: releases deploy a reviewed SHA manually. Existing app and Devnet host remain independent.
 
 - 47 deterministic tests pass: core owner cycle, Kamino substitution/partial/full/receipt-return checks, PT selection, reviewed Exponent SDK layouts, public route isolation and exact CORS origins.
 - TypeScript and Production build pass.
@@ -78,4 +78,7 @@ New Vercel project: `yield-ai-solana-mainnet`, id `prj_tQiZKhw25G02iz76wgTBlLxdc
 - Unsigned Mainnet simulations: wallet -> Kamino 1 USDC, 161697 CU, fee 5000 lamports, no rent; wallet -> Exponent 1 USDC and 50% PT exit each 521558 CU, fee 19000 lamports, no rent. These are independent simulations on existing balances, **not newly sent funded round trips**.
 - Full PT exit also simulates successfully: `533605536` raw PT, 418350 CU, fee 19000 lamports, minimum wallet proceeds `513075` raw USDC (0.513075 USDC), no rent. Setup on the already prepared pilot also returns ready, rent zero. Wrong cluster and authority override return 400; a foreign browser Origin returns 403.
 - Owner-signed funded API exits, network interruption recovery and physical Seeker UX remain integration acceptance. Earlier UI transactions do not prove the new API journal behavior. No Mainnet transaction was signed/sent by the agent in this release.
-- Production deployment readiness will be recorded after its build completes.
+- Production `dpl_F3L8xoqcDhEJawdoX3q31RFfsUyi`, source SHA `e81ce756302e12195532611782baf482e6b3c7ba`, target `production`, state `READY`, stable alias assigned. SSO/password protection are null; project has no Git link, no signer and no private RPC key.
+- Public unauthenticated probes: `/config` 200 with pinned Mainnet genesis/program; Kamino wallet deposit 1 USDC 200/ready (161801 CU, fee 5000 lamports); Exponent wallet buy 1 USDC 200/ready (450753 CU, fee 19000 lamports); Exponent all-PT exit 200/ready (418336 CU, fee 19000 lamports, minimum 513073 raw USDC). Zero-shares Kamino exit returns `redeemed`, no steps. Legacy agent/cron/RPC routes return 404.
+- The first public build used the official shared Solana RPC: config and Kamino worked, Exponent returned sanitized 503. Switching to public PublicNode passed both protocol probes without transferring a secret. Private Helius is an optional later configuration that still requires destination-specific consent.
+- Fixed Vercel bundling limit by restricting forced Jupiter runtime tracing to Jupiter/agent routes and excluding source maps/declaration files. Traced sizes: legacy Kamino 76.56 MB (was 270.21 MB), Exponent deposit 40.36 MB, mobile Kamino withdrawal 22.37 MB. Final Vercel Production and existing app Preview builds pass. These HTTP checks only simulate unsigned plans; no user funds were sent.

@@ -47,7 +47,7 @@ CRON_SECRET=
 SUPANODE_TOKEN=
 ```
 
-Mainnet send is opt-in. `0` still permits reads and unsigned simulations, but disables the sign/send button and the mobile RPC send method. It is not an on-chain pause: the owner can independently send their signed transaction via their own RPC. Public release additionally requires ingress rate limits and a public origin suitable for native clients; protected Preview SSO is not mobile API authentication. Browser cross-origin CORS is not opened; native HTTP does not need CORS.
+Mainnet send is opt-in. `0` still permits reads and unsigned simulations, but disables the sign/send button and the mobile RPC send method. It is not an on-chain pause: the owner can independently send their signed transaction via their own RPC. Public release additionally requires ingress rate limits and a public origin suitable for native clients; protected Preview SSO is not mobile API authentication. Public protocol API now supports explicitly configured browser origins; native HTTP does not need CORS.
 
 The old `NEXT_PUBLIC_PROGRAM_ID` no longer overrides the v2 IDL: this fixes the observed Production-build failure with a stale legacy program ID. Explicit mismatched `NEXT_PUBLIC_V2_PROGRAM_ID` still fails closed. No Rust/IDL redeployment or live Mainnet transaction occurred in this change.
 
@@ -81,3 +81,10 @@ npm run probe:mobile-mainnet
 6. Add autonomous executor budgets/journal, strategy/APR, portfolio/history/activity and agent `why` as additive capabilities. EVM owner/EIP-712, CCTP and Exponent retain separate acceptance gates.
 
 Existing native Solana Safes remain usable without recreation for compatible protocol extensions. New position accounts can be derived alongside the existing Safe. Layout changes require explicit migration; upgrading the program alone does not make migrations automatic. Future EVM-owned Safes use a different owner mode/PDA and do not convert an existing Solana-owned Safe. Load capacity is not established by this pilot.
+
+
+## Public owner API release, 2026-10-05
+
+Use **https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1** for Vlad's Mainnet build. Production is READY, no Vercel login, and both protocol planners passed unauthenticated HTTP simulation probes. This now supersedes the original protected-Preview/Kamino-release checklist above. See [owner protocol API](yield-ai-v2-owner-protocol-api.md) for exact payloads, setup, partial/full exits, costs, confirmation/recovery and deployment SHA.
+
+The runtime uses public PublicNode without a credential. No local Helius key was transferred. Solana owner manually signs and pays every issued transaction; executor workers are not part of this release. Public config advertises protocol deposits/withdrawals. The remaining acceptance work is funded wallet/MWA entry/exit and interruption recovery; simulated plans do not prove a newly sent round trip.

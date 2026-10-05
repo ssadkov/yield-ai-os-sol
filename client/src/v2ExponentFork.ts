@@ -33,6 +33,13 @@ const context={payer:Keypair.generate(),setAccount,setClock:(clock:any)=>svm.set
  simulateTransaction:async(tx:VersionedTransaction)=>{svm.withSigverify(false);try{return convert(svm.simulateTransaction(kit.getTransactionDecoder().decode(tx.serialize())));}finally{svm.withSigverify(true);}}
 }};
 context.setAccount(context.payer.publicKey,{lamports:30_000_000_000,owner:SystemProgram.programId,executable:false,data:Buffer.alloc(0)});
+// Exact local ELF metadata fixture: exercise the same deployment capability gate.
+const localElf=readFileSync(dir+'/yield_vault.so'),programData=new PublicKey('GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY');
+const loader=new PublicKey('BPFLoaderUpgradeab1e11111111111111111111111');
+const metadata=Buffer.alloc(45+localElf.length);metadata.writeUInt32LE(3);metadata.writeBigUInt64LE(BigInt(snapshot.slot),4);localElf.copy(metadata,45);
+context.setAccount(programData,{lamports:Number(svm.minimumBalanceForRentExemption(BigInt(metadata.length))),owner:loader,executable:false,data:metadata});
+const programMetadata=Buffer.alloc(36);programMetadata.writeUInt32LE(2);programData.toBuffer().copy(programMetadata,4);
+context.setAccount(SAFE_PROGRAM,{lamports:1000000000,owner:loader,executable:true,data:programMetadata});
 console.log('LiteSVM ready; activating cloned ALTs');
 context.warpToSlot(BigInt(snapshot.slot)+BigInt(1)); // Activate the cloned lookup tables.
 console.log('ALTs activated');
@@ -122,6 +129,20 @@ try {
  await reject('widened slippage',await mutate(checked,ix=>ix.data.writeBigUInt64LE(ix.data.readBigUInt64LE(32)*BigInt(98)/BigInt(100),24)),agent,/Slippage/);
  await reject('substituted market',await mutate(checked,ix=>{ix.keys[30]={...ix.keys[30],pubkey:new PublicKey(EXPONENT.coreVault)};}),agent,/InvalidAccounts/);
  await reject('substituted recipient',await mutate(checked,ix=>{ix.keys[11]={...ix.keys[11],pubkey:safeUsdc};}),agent,/ConstraintTokenOwner|ConstraintAssociated|ConstraintAddress/);
+ // Bypass the off-chain checker to exercise the contract's independent dynamic ABI guard.
+ const tables=await Promise.all(EXPONENT.lookupTables.map(async a=>(await connection.getAddressLookupTable(new PublicKey(a))).value!));
+ const checkedMessage=TransactionMessage.decompile(checked.message,{addressLookupTableAccounts:tables});
+ const safeInstruction=checkedMessage.instructions.find(i=>i.programId.equals(SAFE_PROGRAM))!;
+ const tickKey=safeInstruction.keys[24].pubkey,tickAccount=await getAccount(tickKey);assert(tickAccount);
+ assert.equal(tickAccount.data.subarray(0,8).toString('hex'),'11d8f68ee1c7da38','fork must exercise actual DynamicTickArray');
+ for(const [label,change] of [
+  ['dynamic tick foreign pool',(data:Buffer)=>PublicKey.default.toBuffer().copy(data,12)],
+  ['dynamic tick wrong discriminator',(data:Buffer)=>{data[0]^=255;}],
+  ['dynamic tick noncanonical start',(data:Buffer)=>{data.writeInt32LE(data.readInt32LE(8)+88,8);}],
+ ] as const){
+  const data=Buffer.from(tickAccount.data);change(data);context.setAccount(tickKey,{...tickAccount,data});
+  try{await reject(label,checked,agent,/InvalidAccounts/);}finally{context.setAccount(tickKey,tickAccount);}
+ }
  await reject('unsatisfied minimum rolls back Orca',await mutate(checked,ix=>{const high=ix.data.readBigUInt64LE(32)*BigInt(2);ix.data.writeBigUInt64LE(high,24);ix.data.writeBigUInt64LE(high,32);}),agent,/Slippage exceeded|Slippage/);
  // Native ONyc enters and leaves the same Safe without an Orca CPI. This balance is a fork-only fixture.
  const onycAccount=await context.banksClient.getAccount(ownerOnyc);assert(onycAccount);

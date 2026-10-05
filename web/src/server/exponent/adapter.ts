@@ -1,13 +1,14 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { Vault, MarketThree, LOCAL_ENV } from '@exponent-labs/exponent-sdk';
 import { getSwapQuote, QuoteDirection } from '@exponent-labs/market-three-math';
-import { WhirlpoolContext, buildWhirlpoolClient, swapQuoteByInputToken, ORCA_WHIRLPOOL_PROGRAM_ID, IGNORE_CACHE, UseFallbackTickArray } from '@orca-so/whirlpools-sdk';
+import { WhirlpoolContext, buildWhirlpoolClient, swapQuoteByInputToken, ORCA_WHIRLPOOL_PROGRAM_ID, IGNORE_CACHE, UseFallbackTickArray, PDAUtil, TickUtil } from '@orca-so/whirlpools-sdk';
 import { Percentage } from '@orca-so/common-sdk';
 import BN from 'bn.js';
 import Decimal from 'decimal.js';
 import { createHash } from 'node:crypto';
 import { EXPONENT, EXPONENT_MARKET, SAFE_PROGRAM, type ExponentAction, rawAmount, minimum, exitBasis, projectedProfitFee, safeAddress, positionAddress, decodePosition } from '../../lib/exponentV2';
-import { exponentDeploymentReady } from './deployment';
+import { exponentDeploymentVersion } from './deployment';
+import { checkedOrcaTickArrays, ExponentRouteUnavailable } from '../../lib/exponentOrca';
 
 export type QuoteRequest={market?:string;action:ExponentAction;amount:string;asset?:'USDC'|'ONYC';owner?:string;authority?:string;slippageBps?:number};
 export const emptyWallet=(publicKey:PublicKey)=>({publicKey,signTransaction:async()=>{throw Error('unsigned only')},signAllTransactions:async()=>{throw Error('unsigned only')}});
@@ -41,7 +42,8 @@ export async function loadMarket(connection:Connection,withDex=true) {
   if(!Number.isFinite(nav)||nav<=0)throw Error('invalid NAV');
   return {connection,core,market,context,pool,nav,navDecimal,oracleSlot,oracleTimestamp,now,slot:clock.data.readBigUInt64LE(0).toString()};
 }
-export type Loaded=Awaited<ReturnType<typeof loadMarket>>;
+export type Loaded=Awaited<ReturnType<typeof loadMarket>> & {deploymentVersion?:'fixed_ticks'|'dynamic_ticks'|null};
+export const supportsDynamicTicksFromQuote=(state:Loaded)=>state.deploymentVersion==='dynamic_ticks';
 export async function dex(state:Loaded,buy:boolean,amount:bigint,bps:number) {
   if(!state.pool||!state.context)throw Error('DEX not loaded for ONyc settlement');
   return swapQuoteByInputToken(state.pool,new PublicKey(buy?EXPONENT.usdc:EXPONENT.onyc),new BN(amount.toString()),Percentage.fromFraction(bps,10000),ORCA_WHIRLPOOL_PROGRAM_ID,state.context.fetcher,IGNORE_CACHE,UseFallbackTickArray.Never);
@@ -53,13 +55,21 @@ async function readPosition(connection:Connection,owner?:string) {
   const p=decodePosition(info.data,address);if(p.safe!==safe.toBase58())throw Error('foreign position');return p;
 }
 export async function marketInfo(connection:Connection) {
-  const [s,executionReady]=await Promise.all([loadMarket(connection),exponentDeploymentReady(connection)]);
+  const [s,deploymentVersion]=await Promise.all([loadMarket(connection),exponentDeploymentVersion(connection)]);
+  let routeReason:string|null=null,routeCode:string|null=null;
+  try {
+    if(!s.pool)throw new ExponentRouteUnavailable('EXPONENT_ROUTE_UNAVAILABLE','Orca pool unavailable');
+    const d=s.pool.getData();
+    const starts=[TickUtil.getStartTickIndex(d.tickCurrentIndex+1,1),TickUtil.getStartTickIndex(d.tickCurrentIndex,1)];
+    await checkedOrcaTickArrays(connection,starts.map(start=>PDAUtil.getTickArray(ORCA_WHIRLPOOL_PROGRAM_ID,new PublicKey(EXPONENT.whirlpool),start).publicKey),deploymentVersion==='dynamic_ticks');
+  } catch(e) {if(!(e instanceof ExponentRouteUnavailable))throw e;routeReason=e.message;routeCode=e.code;}
+  const executionReady=deploymentVersion!==null&&routeReason===null;
   return {id:EXPONENT_MARKET,market:EXPONENT.market,coreVault:EXPONENT.coreVault,ptMint:EXPONENT.pt,baseMint:EXPONENT.onyc,
     decimals:{usdc:6,pt:9,onyc:9},maturity:new Date(EXPONENT.maturity*1000).toISOString(),chainTime:s.now,slot:s.slot,
     nav:{value:s.navDecimal,source:'on-chain Scope index 108',oracleTimestamp:s.oracleTimestamp,oracleSlot:s.oracleSlot,positionSnapshotScale:'1000000000000'},
     route:'USDC or ONyc → PT (Exponent CLMM); sale or maturity redemption → ONyc or USDC via Orca',
     leveraged:false,pilotFeeBps:0,futureDisplayProfitFeeBps:500,defaultMaxLossBps:500,maxSlippageBps:100,
-    executionReady,reason:executionReady?null:'Reviewed Safe ELF is not deployed on Mainnet'};
+    executionReady,deploymentVersion,reason:!deploymentVersion?'Reviewed Safe ELF is not deployed on Mainnet':routeReason,unavailableCode:routeCode};
 }
 export async function quote(connection:Connection,request:QuoteRequest) {
   if(request.market&&request.market!==EXPONENT_MARKET)throw Error('unsupported market');
@@ -72,7 +82,9 @@ export async function quote(connection:Connection,request:QuoteRequest) {
   const slippageBps=request.slippageBps??50;
   if(!Number.isInteger(slippageBps)||slippageBps<2||slippageBps>100)throw Error('slippageBps must be 2..100');
   const legBps=Math.floor(slippageBps/2);
-  const [s,p,executionReady]=await Promise.all([loadMarket(connection,asset==='USDC'),readPosition(connection,request.owner),exponentDeploymentReady(connection)]);
+  const [s,p,deploymentVersion]=await Promise.all([loadMarket(connection,asset==='USDC'),readPosition(connection,request.owner),exponentDeploymentVersion(connection)]);
+  const executionReady=deploymentVersion!==null;
+  const reviewedState:Loaded={...s,deploymentVersion};
   if(request.action==='buy'&&s.now>=EXPONENT.maturity)throw Error('market matured');
   if(request.action==='sell'&&s.now>=EXPONENT.maturity)throw Error('use redemption after maturity');
   const math={financials:s.market.state.financials,configurationOptions:s.market.state.configurationOptions,ticks:s.market.state.ticks,currentSyExchangeRate:s.nav};
@@ -122,5 +134,5 @@ export async function quote(connection:Connection,request:QuoteRequest) {
       assumption:'Current NAV and current DEX liquidity; maturity NAV, liquidity and fees are unknown'},
     route:{dex:asset==='USDC'?'Orca Whirlpool direct ONyc/USDC':null,pool:asset==='USDC'?EXPONENT.whirlpool:null,pt:request.action==='redeem'?'Exponent Core merge':'Exponent CLMM',
       routerFeeBps:0,networkFeeIncluded:false,rentIncluded:false}};
-  return {public:{...result,quoteId:createHash('sha256').update(JSON.stringify(result)).digest('hex')},state:s,swap};
+  return {public:{...result,quoteId:createHash('sha256').update(JSON.stringify(result)).digest('hex')},state:reviewedState,swap};
 }

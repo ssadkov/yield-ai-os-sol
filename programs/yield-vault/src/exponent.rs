@@ -310,6 +310,36 @@ fn invoke_exponent<'info>(vault: &Account<'info,Vault>, rem: &[AccountInfo<'info
 }
 // Remaining Orca accounts: program, token program, Safe, pool, Safe ONyc, vault A,
 // Safe USDC, vault B, tick arrays 0/1/2, oracle. Legacy SPL-only swap, exact input.
+// Orca owns the account; additionally bind either reviewed ABI to the fixed pool and PDA.
+// DynamicTickArray has an 88-bit initialized bitmap followed by 88 enum entries.
+fn validated_tick_array_start(data: &[u8]) -> Result<i32> {
+    const FIXED: [u8;8] = [69,97,189,190,110,7,66,187];
+    const DYNAMIC: [u8;8] = [17,216,246,142,225,199,218,56];
+    require!(data.len()>=12,ExponentError::InvalidAccounts);
+    let start=i32::from_le_bytes(data[8..12].try_into().unwrap());
+    // This immutable pool has tickSpacing = 1. Include its lower boundary array.
+    require!(start % 88 == 0 && (-443696..=443608).contains(&start),ExponentError::InvalidAccounts);
+    if data[..8] == FIXED {
+        require!(data.len()==9988,ExponentError::InvalidAccounts);
+        require_keys_eq!(key_at(data,9956)?,WHIRLPOOL,ExponentError::InvalidAccounts);
+    } else {
+        require!(data[..8]==DYNAMIC && data.len()>=148 && data.len()<=10004
+            && (data.len()-148)%112==0,ExponentError::InvalidAccounts);
+        require_keys_eq!(key_at(data,12)?,WHIRLPOOL,ExponentError::InvalidAccounts);
+        let bitmap=u128::from_le_bytes(data[44..60].try_into().unwrap());
+        require!(bitmap >> 88 == 0,ExponentError::InvalidAccounts);
+        let mut offset=60usize;
+        for i in 0..88 {
+            require!(offset<data.len(),ExponentError::InvalidAccounts);
+            let initialized=((bitmap >> i)&1) as u8;
+            require!(data[offset]==initialized,ExponentError::InvalidAccounts);
+            offset+=1+usize::from(initialized)*112;
+            require!(offset<=data.len(),ExponentError::InvalidAccounts);
+        }
+    }
+    Ok(start)
+}
+
 fn invoke_orca<'info>(vault: &Account<'info,Vault>, rem: &[AccountInfo<'info>],
     buy: bool, amount: u64, minimum: u64) -> Result<()> {
     require!(rem.len()==12 && rem[0].executable,ExponentError::InvalidAccounts);
@@ -327,9 +357,7 @@ fn invoke_orca<'info>(vault: &Account<'info,Vault>, rem: &[AccountInfo<'info>],
     for tick in &rem[8..11] {
         require_keys_eq!(*tick.owner,ORCA,ExponentError::InvalidAccounts);
         let data=tick.try_borrow_data()?;
-        require!(data.len()==9988,ExponentError::InvalidAccounts); // fixed TickArray, no dynamic ABI
-        require_keys_eq!(key_at(&data,9956)?,WHIRLPOOL,ExponentError::InvalidAccounts);
-        let start=i32::from_le_bytes(data[8..12].try_into().unwrap()).to_string();
+        let start=validated_tick_array_start(&data)?.to_string();
         let address=Pubkey::find_program_address(&[b"tick_array",WHIRLPOOL.as_ref(),start.as_bytes()],&ORCA).0;
         require_keys_eq!(tick.key(),address,ExponentError::InvalidAccounts);
     }
@@ -495,6 +523,43 @@ pub enum ExponentError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn tick_fixture(dynamic:bool, bitmap:u128) -> Vec<u8> {
+        let mut data=if dynamic {vec![0u8;60]} else {vec![0u8;9988]};
+        let tag=if dynamic {[17,216,246,142,225,199,218,56]} else {[69,97,189,190,110,7,66,187]};
+        data[..8].copy_from_slice(&tag);
+        data[8..12].copy_from_slice(&(-67672i32).to_le_bytes());
+        let pool_offset=if dynamic {12} else {9956};
+        data[pool_offset..pool_offset+32].copy_from_slice(WHIRLPOOL.as_ref());
+        if dynamic {
+            data[44..60].copy_from_slice(&bitmap.to_le_bytes());
+            for i in 0..88 {let initialized=((bitmap>>i)&1) as u8;data.push(initialized);
+                if initialized==1 {data.resize(data.len()+112,0);}}
+        }
+        data
+    }
+    #[test] fn fixed_and_dynamic_orca_tick_abis_are_pool_bound() {
+        for dynamic in [false,true] {
+            for bitmap in [0u128,1,1<<87,(1<<88)-1] {
+                let data=tick_fixture(dynamic,bitmap);
+                assert_eq!(validated_tick_array_start(&data).unwrap(),-67672);
+                let mut bad=data.clone();let o=if dynamic {12} else {9956};bad[o]^=1;
+                assert!(validated_tick_array_start(&bad).is_err());
+                let mut bad=data.clone();bad[0]^=1;assert!(validated_tick_array_start(&bad).is_err());
+                let mut bad=data.clone();bad[8..12].copy_from_slice(&(-67671i32).to_le_bytes());
+                assert!(validated_tick_array_start(&bad).is_err());
+                assert!(validated_tick_array_start(&data[..data.len()-1]).is_err());
+            }
+        }
+    }
+    #[test] fn dynamic_orca_bitmap_and_enum_layout_cannot_be_forged() {
+        let data=tick_fixture(true,1);
+        let mut bad=data.clone();bad[60]=0;assert!(validated_tick_array_start(&bad).is_err());
+        let mut bad=data.clone();bad[60]=2;assert!(validated_tick_array_start(&bad).is_err());
+        let mut bad=data.clone();bad[44..60].copy_from_slice(&(1u128<<88).to_le_bytes());
+        assert!(validated_tick_array_start(&bad).is_err());
+        for len in [0,8,11,147,149,10005] {assert!(validated_tick_array_start(&vec![0u8;len]).is_err());}
+    }
+
     #[test] fn partial_basis_then_full_exit_preserves_every_unit() {
         let a=basis_for_exit(1_000_000_001,3,1).unwrap();
         assert_eq!(a,333_333_333);

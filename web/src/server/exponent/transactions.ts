@@ -2,19 +2,20 @@ import { Connection, PublicKey, TransactionInstruction, TransactionMessage, Vers
 import { TOKEN_PROGRAM_ID, createAssociatedTokenAccountIdempotentInstruction } from '@solana/spl-token';
 import { PDAUtil, ORCA_WHIRLPOOL_PROGRAM_ID } from '@orca-so/whirlpools-sdk';
 import { EXPONENT, SAFE_PROGRAM, type ExponentAction, rawAmount, safeAddress, positionAddress, tokenAddress, instructionTag, exponentAccounts, assertExponentInstruction } from '../../lib/exponentV2';
-import { quote, type QuoteRequest, type Loaded, dex } from './adapter';
+import { quote, type QuoteRequest, type Loaded, dex, supportsDynamicTicksFromQuote } from './adapter';
 import Decimal from 'decimal.js';
 import { exponentDeploymentReady } from './deployment';
+import { checkedOrcaTickArrays } from '../../lib/exponentOrca';
 
 export const policyAddress=(seed:string,safe?:PublicKey)=>PublicKey.findProgramAddressSync([Buffer.from(seed),...(safe?[safe.toBuffer()]:[])],SAFE_PROGRAM)[0];
 const meta=(pubkey:PublicKey,isWritable=false,isSigner=false)=>({pubkey,isWritable,isSigner});
-function orcaAccounts(s:Loaded,safe:PublicKey,swap:Awaited<ReturnType<typeof dex>>) {
+async function orcaAccounts(s:Loaded,safe:PublicKey,swap:Awaited<ReturnType<typeof dex>>) {
   if(!s.pool)throw Error('Orca pool unavailable');
   const d=s.pool.getData();
-  const fixedTickArray=new PublicKey(EXPONENT.fixedTickArray);
-  if(!swap.tickArray0.equals(fixedTickArray))throw Error('Orca active tick range is outside the reviewed fixed array');
+  const arrays=[swap.tickArray0,swap.tickArray1,swap.tickArray2];
+  await checkedOrcaTickArrays(s.connection,arrays,supportsDynamicTicksFromQuote(s));
   return [meta(new PublicKey(EXPONENT.orcaProgram)),meta(TOKEN_PROGRAM_ID),meta(safe),meta(new PublicKey(EXPONENT.whirlpool),true),
-    ...[tokenAddress(safe,EXPONENT.onyc),d.tokenVaultA,tokenAddress(safe,EXPONENT.usdc),d.tokenVaultB,fixedTickArray,fixedTickArray,fixedTickArray,
+    ...[tokenAddress(safe,EXPONENT.onyc),d.tokenVaultA,tokenAddress(safe,EXPONENT.usdc),d.tokenVaultB,...arrays,
       PDAUtil.getOracle(ORCA_WHIRLPOOL_PROGRAM_ID,new PublicKey(EXPONENT.whirlpool)).publicKey].map(k=>meta(k,true))];
 }
 export function positionSetup(owner:PublicKey,lossBps=500,slippageBps=50) {
@@ -98,7 +99,7 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
   if(missing.some(a=>a===null))throw Error('missing token accounts; run action=setup');
   const data=Buffer.alloc(40);data.writeBigUInt64LE(rawAmount(request.amount),0);data.writeBigUInt64LE(BigInt(q.public.intermediate.minRaw),8);
   data.writeBigUInt64LE(minOut,16);data.writeBigUInt64LE(BigInt(q.public.output.expectedRaw),24);data.writeBigInt64LE(BigInt(q.public.expiresAt),32);
-  const exp=exponentAccounts(request.action,safe),orca=q.swap?orcaAccounts(q.state,safe,q.swap):[];
+  const exp=exponentAccounts(request.action,safe),orca=q.swap?await orcaAccounts(q.state,safe,q.swap):[];
   const nativeRecipient=q.public.asset==='ONYC'&&request.action!=='buy'?[meta(tokenAddress(owner,EXPONENT.onyc),true)]:[];
   const actionName=q.public.asset==='USDC'?'exponent_'+request.action+'_pt':request.action==='buy'?'exponent_buy_pt_with_onyc':
     'exponent_'+request.action+'_pt_for_onyc';

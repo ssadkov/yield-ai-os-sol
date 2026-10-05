@@ -103,4 +103,15 @@ Invalid required APY, timeout or failed upstream refresh returns HTTP 503 / `YIE
 
 Verification: four yield tests (decimal/percent units, missing/corrupt/negative/zero metrics, 60-second cache and refresh failures, malformed/oversized responses); 51 total mobile tests. Official source snapshot on 2026-10-05: APY ~7.49%, seven-day APY ~7.64%; examples, never hardcode them.
 
-Published APY addition: commit `2540b681b2fc838e4c92bb8af067d954623e2a71`, Production deployment `dpl_5zEtqwE2hxxfbwhepyenVdeAAV6n`, READY with stable alias assigned. Public unauthenticated yield probe returned `available`, `apyPercent: "7.487914368164117"` and the pinned vault; public config advertises the yield endpoint. All 51 mobile tests, TypeScript and local Production build passed. No on-chain transaction or program upgrade was performed. PR #29 remains the merge target.
+Published APY addition: commit `2540b681b2fc838e4c92bb8af067d954623e2a71`, Production deployment `dpl_5zEtqwE2hxxfbwhepyenVdeAAV6n`, READY with stable alias assigned. Public unauthenticated yield probe returned `available`, `apyPercent: "7.487914368164117"` and the pinned vault; public config advertises the yield endpoint. All 51 mobile tests, TypeScript and local Production build passed. No on-chain transaction or program upgrade was performed. PR #29 was merged into main on 2026-10-05.
+
+
+## Exponent availability update — 2026-10-05
+
+The Orca active price range moved to DynamicTickArray, which the previous fixed-only Safe ELF rejected. That incident was resolved by a **finalized Mainnet upgrade at slot 453510076**. Installed ELF SHA-256 `48da204eea62b79db16474045a2ede6e139c54e4d1023f99b09dfc3adfe7565d` (690944 bytes). Program address, owner/executor permissions, existing Safe/position schemas and instruction tags are unchanged. No migration is needed.
+
+The public API detects `deploymentVersion: dynamic_ticks` and `marketInfo.executionReady: true`. Wallet investment of 1 USDC, 50% PT exit and all-PT exit each returned 200 / ready with successful unsigned Mainnet simulations. Each Exponent plan quoted 19000-lamport network fee in this snapshot; request a fresh plan before signing. Kamino 1-USDC deposit also returned ready; Devnet remains independent and unchanged.
+
+The old reviewed fixed-only ELF is still recognized for fixed arrays. Dynamic arrays require the exact new on-chain ELF. Each selected Orca account is checked against the pinned pool, canonical PDA, owner and ABI. Unsupported or malformed routes return 422 without a signing payload; never bypass the availability guard. See [cause, tests, finalized transaction and costs](yield-ai-v2-exponent-dynamic-ticks.md).
+
+The upgrade used SOL only. Public probes did not sign/send USDC or PT transactions; funded owner/MWA entry/exit and interruption recovery remain to be accepted in the mobile application.

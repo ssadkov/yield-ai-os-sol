@@ -1,3 +1,4 @@
+import { ExponentRouteUnavailable } from './exponentOrca';
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { ACCOUNT_SIZE, TOKEN_PROGRAM_ID, unpackAccount } from "@solana/spl-token";
 import { createHash } from "node:crypto";
@@ -56,6 +57,10 @@ export async function mobileExponentPosition(request: Request) {
   return { state: c.inspected.state, market: EXPONENT_MARKET, position: c.position, balancesRaw: c.balances, setupRequired: !c.position, marketInfo: await marketInfo(c.connection) };
 }
 export async function mobileExponentPlan(request: Request, kind: "deposit" | "withdraw") {
+  try {return await exponentPlan(request,kind);}
+  catch(e){if(e instanceof ExponentRouteUnavailable)throw new MobileApiError(e.code,e.message,422);throw e;}
+}
+async function exponentPlan(request: Request, kind: "deposit" | "withdraw") {
   const { value, owner } = protocolRequest(await planBody(request), kind === "deposit" ? ["phase", "amount", "source", "market", "slippageBps"] : ["shares", "percent", "market", "slippageBps"]);
   if (value.market !== undefined && value.market !== EXPONENT_MARKET) throw new MobileApiError("INVALID_REQUEST", "Unsupported market");
   if (value.slippageBps !== undefined && (!Number.isInteger(value.slippageBps) || Number(value.slippageBps) < 2 || Number(value.slippageBps) > 100)) throw new MobileApiError("INVALID_REQUEST", "slippageBps must be 2..100");

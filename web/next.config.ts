@@ -22,9 +22,9 @@ const nextConfig: NextConfig = {
     "@orca-so/whirlpools-core",
   ],
   // Opaque dynamic imports are invisible to NFT; force the entire trees of the
-  // SDK and its runtime peers into the serverless bundle for all API routes.
+  // SDK and its runtime peers only into routes that use the opaque Jupiter loader.
   outputFileTracingIncludes: {
-    "/api/**/*": [
+    "/api/{jupiter,protocols/jupiter,earn-ideas,cron/rebalance,rebalance}{,/**}": [
       "./node_modules/@jup-ag/lend/**/*",
       "./node_modules/@jup-ag/lend-read/**/*",
       "./node_modules/jup-lend-read-sdk/**/*",
@@ -41,6 +41,9 @@ const nextConfig: NextConfig = {
       "./node_modules/@orca-so/whirlpools-core/**/*",
     ],
   },
+  // Source maps and declaration files are not executed by these Node handlers.
+  // Exclude them from deployment tracing to keep functions below 250 MB.
+  outputFileTracingExcludes: { "*": ["**/*.map", "**/*.d.ts"] },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "raw.githubusercontent.com" },

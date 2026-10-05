@@ -8,6 +8,8 @@ const nextConfig: NextConfig = {
   // from Vercel's NFT. Mark these packages external so Node resolves their
   // nested deps from node_modules at runtime.
   serverExternalPackages: [
+    "@exponent-labs/exponent-sdk",
+    "@orca-so/whirlpools-sdk",
     "@jup-ag/lend",
     "@jup-ag/lend-read",
     "@solana/web3.js",

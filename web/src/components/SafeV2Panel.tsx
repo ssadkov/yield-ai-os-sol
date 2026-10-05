@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL, PublicKey, type AddressLookupTableAccount, type TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -9,17 +10,20 @@ import { ShieldCheck, ArrowDownToLine, ArrowUpFromLine, Trash2, RefreshCw, Slide
 import { PROGRAM_ID, USDC_DECIMALS, USDC_MINT } from "@/lib/constants";
 import {
   DEVNET_GENESIS, MAINNET_GENESIS, explorerTx, ixCloseEmptyTokenAccount, ixCloseSafe, ixDepositUsdc,
-  ixInitialize, ixSetAllocation, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  ixInitialize, ixSetAllocation, ixSetExecutorLimits, ixSyncExecutor, ixWithdraw, ixWithdrawExcessLamports, readSafe, sendOwnerTransaction,
+  readExecutorLimits, readExecutorRegistry,
   safeCreationCostLamports, fetchKaminoAccounts, fetchKaminoMetrics, fetchKaminoWithdrawalPlan,
   ixKaminoDeposit, ixKaminoWithdraw, loadLookupTables,
   KAMINO_SHARES_MINT, MAX_ROUTES, MIN_FEE_LAMPORTS, ROUTE_KAMINO_USDC, ROUTES,
-  type KaminoMetrics, type SafeState, type SafeToken,
+  type ExecutorLimitsState, type ExecutorRegistryState, type KaminoMetrics, type SafeState, type SafeToken,
 } from "@/lib/safeV2";
 
 const WalletMultiButton = dynamic(
   () => import("@solana/wallet-adapter-react-ui").then((mod) => mod.WalletMultiButton),
   { ssr: false },
 );
+const PILOT_OWNER = "EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2";
+const PILOT_SAFE = "FuDCEZBgp8gxP3gafnHbUJRgGW63VAmtZwsjus1U5qSZ";
 
 function toRaw(ui: string, decimals: number): bigint | null {
   const match = /^(\d+)(?:\.(\d*))?$/.exec(ui.trim());
@@ -28,6 +32,15 @@ function toRaw(ui: string, decimals: number): bigint | null {
   if (fraction.length > decimals) return null;
   return BigInt(match[1]) * BigInt(10) ** BigInt(decimals) + BigInt(fraction || "0");
 }
+
+function fromRaw(raw: bigint, decimals: number): string {
+  const scale = BigInt(10) ** BigInt(decimals);
+  const fraction = (raw % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return `${raw / scale}${fraction ? `.${fraction}` : ""}`;
+}
+
+const PERCENT_SCALE = BigInt(100_000_000); // 100% with six decimal places.
+const KAMINO_MIN_DEPOSIT_RAW = BigInt(1_000_000); // 1 USDC succeeds on the current Mainnet vault; 0.1 USDC is rejected.
 
 function short(key: string) {
   return `${key.slice(0, 4)}…${key.slice(-4)}`;
@@ -39,11 +52,16 @@ export function SafeV2Panel() {
   const [mounted, setMounted] = useState(false);
   const [genesis, setGenesis] = useState<string | null>(null);
   const [safe, setSafe] = useState<SafeState | null>(null);
+  const [executorRegistry, setExecutorRegistry] = useState<ExecutorRegistryState | null>(null);
+  const [executorLimits, setExecutorLimits] = useState<ExecutorLimitsState | null>(null);
+  const [limitDraft, setLimitDraft] = useState({ action: "1000", volume: "1000", principal: "1000", enabled: true });
   const [walletUsdc, setWalletUsdc] = useState<bigint | null>(null);
   const [walletSol, setWalletSol] = useState<number | null>(null);
   const [creationCost, setCreationCost] = useState<number | null>(null);
   const [kaminoMetrics, setKaminoMetrics] = useState<KaminoMetrics | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
+  const [kaminoAmount, setKaminoAmount] = useState("");
+  const [partialWithdraw, setPartialWithdraw] = useState<{ mode: "amount" | "percent"; value: string }>({ mode: "amount", value: "" });
   const [withdrawAmounts, setWithdrawAmounts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   /** Draft targets in percent, indexed like ROUTES. */
@@ -52,8 +70,11 @@ export function SafeV2Panel() {
   useEffect(() => setMounted(true), []);
 
   const refresh = useCallback(async () => {
-    if (!publicKey) { setSafe(null); return; }
-    setGenesis(await connection.getGenesisHash());
+    if (!publicKey) { setSafe(null); setExecutorRegistry(null); setExecutorLimits(null); return; }
+    const chainGenesis = await connection.getGenesisHash();
+    setGenesis(chainGenesis);
+    setExecutorRegistry(chainGenesis === MAINNET_GENESIS ? await readExecutorRegistry(connection, publicKey) : null);
+    setExecutorLimits(chainGenesis === MAINNET_GENESIS ? await readExecutorLimits(connection, publicKey) : null);
     setSafe(await readSafe(connection, publicKey));
     setWalletSol(await connection.getBalance(publicKey, "confirmed"));
     setCreationCost(await safeCreationCostLamports(connection));
@@ -67,6 +88,14 @@ export function SafeV2Panel() {
   useEffect(() => {
     if (safe?.allocationBps) setAllocationDraft(ROUTES.map((route) => safe.allocationBps![route.index] / 100));
   }, [safe]);
+  useEffect(() => {
+    if (executorLimits) setLimitDraft({
+      action: fromRaw(executorLimits.maxActionUsdc, USDC_DECIMALS),
+      volume: fromRaw(executorLimits.max24hVolumeUsdc, USDC_DECIMALS),
+      principal: fromRaw(executorLimits.maxPrincipalUsdc, USDC_DECIMALS),
+      enabled: executorLimits.enabled,
+    });
+  }, [executorLimits]);
 
   const allocatedPercent = allocationDraft.reduce((sum, value) => sum + value, 0);
   const allocationChanged = !safe?.allocationBps
@@ -85,6 +114,22 @@ export function SafeV2Panel() {
   }
 
   const cluster = genesis === MAINNET_GENESIS ? "Mainnet" : genesis === DEVNET_GENESIS ? "Devnet" : "…";
+  const defaultExecutor = executorRegistry?.defaultExecutor;
+  const executorReady = !!defaultExecutor && !defaultExecutor.equals(PublicKey.default)
+    && executorRegistry!.approved.some((key) => key.equals(defaultExecutor));
+  const assignedAgent = safe?.agent;
+  const agentApproved = !!assignedAgent && !assignedAgent.equals(PublicKey.default)
+    && !!executorRegistry?.approved.some((key) => key.equals(assignedAgent));
+  const limitAmounts = [limitDraft.action, limitDraft.volume, limitDraft.principal]
+    .map((value) => toRaw(value, USDC_DECIMALS));
+  const validLimits = limitAmounts.every((value) => value !== null && value > BigInt(0))
+    && limitAmounts[1]! >= limitAmounts[0]!;
+  const limitsChanged = !executorLimits || executorLimits.enabled !== limitDraft.enabled
+    || executorLimits.maxActionUsdc !== limitAmounts[0]
+    || executorLimits.max24hVolumeUsdc !== limitAmounts[1]
+    || executorLimits.maxPrincipalUsdc !== limitAmounts[2];
+  const canSyncExecutor = !!safe?.exists && !!defaultExecutor && (executorReady || defaultExecutor.equals(PublicKey.default))
+    && !!assignedAgent && !assignedAgent.equals(defaultExecutor);
   const isMetaMask = wallet?.adapter.name.toLowerCase() === "metamask";
   const metaMaskBlocked = isMetaMask && cluster === "Devnet";
   const noFeeSol = walletSol !== null && walletSol < MIN_FEE_LAMPORTS;
@@ -97,19 +142,58 @@ export function SafeV2Panel() {
   const kaminoValue = kaminoEstimate !== null && Number.isFinite(kaminoEstimate) ? kaminoEstimate : null;
   const kaminoPrincipal = safe?.routePrincipal[ROUTE_KAMINO_USDC] ?? BigInt(0);
   const idleUsdc = safe?.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
+  const partialPercent = partialWithdraw.mode === "percent" ? toRaw(partialWithdraw.value, 6) : null;
+  const partialRaw = partialWithdraw.mode === "amount" ? toRaw(partialWithdraw.value, USDC_DECIMALS)
+    : partialPercent !== null && partialPercent <= PERCENT_SCALE ? idleUsdc * partialPercent / PERCENT_SCALE : null;
+  const partialAmountInput = partialWithdraw.mode === "amount" ? partialWithdraw.value
+    : partialRaw !== null ? fromRaw(partialRaw, USDC_DECIMALS) : "";
+  const partialPercentInput = partialWithdraw.mode === "percent" ? partialWithdraw.value
+    : partialRaw !== null && idleUsdc > BigInt(0) ? fromRaw(partialRaw * PERCENT_SCALE / idleUsdc, 6) : "";
+  const canPartialWithdraw = !!safe?.exists && idleUsdc > BigInt(0) && partialRaw !== null
+    && partialRaw > BigInt(0) && partialRaw <= idleUsdc;
   const kaminoBps = safe?.allocationBps?.[ROUTE_KAMINO_USDC] ?? 0;
-  // The program caps one deposit at idle x target; Kamino's minimum deposit is 0.001 USDC.
+  // The program caps one deposit at idle x target; use a Mainnet-simulated Kamino minimum.
   const kaminoPut = idleUsdc * BigInt(kaminoBps) / BigInt(10_000);
-  const canKaminoDeposit = isMainnet && kaminoPut >= BigInt(1_000);
+  const canKaminoDeposit = isMainnet && kaminoPut >= KAMINO_MIN_DEPOSIT_RAW;
+  const kaminoRaw = toRaw(kaminoAmount, USDC_DECIMALS);
+  const validKaminoAmount = !!safe?.exists && isMainnet && kaminoRaw !== null && kaminoRaw >= KAMINO_MIN_DEPOSIT_RAW;
+  const canInvestFromSafe = validKaminoAmount && kaminoRaw <= idleUsdc;
+  const canInvestFromWallet = validKaminoAmount && walletUsdc !== null && kaminoRaw <= walletUsdc;
   const usd = (raw: bigint) => (Number(raw) / 1e6).toFixed(2);
   const safeValue = kaminoShares > BigInt(0) && kaminoValue === null
     ? null : Number(idleUsdc) / 1e6 + (kaminoValue ?? 0);
   const showLabControls = process.env.NEXT_PUBLIC_V2_LAB_CONTROLS === "1";
+  const showPilotAllocation = showLabControls || (isMainnet && publicKey?.toBase58() === PILOT_OWNER
+    && safe?.vault.toBase58() === PILOT_SAFE);
 
   async function buildKaminoDeposit() {
     if (!publicKey) return [];
     const kamino = await fetchKaminoAccounts(publicKey, (Number(kaminoPut) / 1e6).toString());
     return { instructions: await ixKaminoDeposit(connection, publicKey, kaminoPut, kamino), lookupTables: await loadLookupTables(connection, kamino.lookupTables) };
+  }
+  async function buildOwnerKaminoDeposit(source: "safe" | "wallet", amount: bigint): Promise<Built> {
+    if (!publicKey || !isMainnet || amount < KAMINO_MIN_DEPOSIT_RAW) throw new Error("Use at least 1 USDC for this Kamino vault");
+    const current = await readSafe(connection, publicKey);
+    if (!current.exists || !current.allocationBps) throw new Error("Refresh the Safe before investing");
+    const available = current.tokens.find((token) => token.isUsdc)?.amount ?? BigInt(0);
+    if (source === "safe" && amount > available) throw new Error("Not enough available USDC in the Safe");
+    if (source === "wallet") {
+      const walletAta = getAssociatedTokenAddressSync(USDC_MINT, publicKey);
+      const balance = await connection.getTokenAccountBalance(walletAta, "confirmed");
+      if (amount > BigInt(balance.value.amount)) throw new Error("Not enough USDC in your wallet");
+    }
+
+    const plan = await fetchKaminoAccounts(publicKey, fromRaw(amount, USDC_DECIMALS));
+    const original = current.allocationBps;
+    const fullKamino = Array(MAX_ROUTES).fill(0) as number[];
+    fullKamino[ROUTE_KAMINO_USDC] = 10_000;
+    const needsTemporaryAllocation = original.some((bps, index) => bps !== fullKamino[index]);
+    const instructions: TransactionInstruction[] = [];
+    if (needsTemporaryAllocation) instructions.push(await ixSetAllocation(connection, publicKey, fullKamino));
+    if (source === "wallet") instructions.push(await ixDepositUsdc(connection, publicKey, amount));
+    instructions.push(...await ixKaminoDeposit(connection, publicKey, amount, plan));
+    if (needsTemporaryAllocation) instructions.push(await ixSetAllocation(connection, publicKey, original));
+    return { instructions, lookupTables: await loadLookupTables(connection, plan.lookupTables) };
   }
   async function buildKaminoWithdrawAll() {
     if (!publicKey) return [];
@@ -209,6 +293,7 @@ export function SafeV2Panel() {
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold"><ShieldCheck className="h-6 w-6 text-primary" /> Yield AI Safe v2</h1>
         <p className="text-muted-foreground">Your personal Solana Safe. Only your wallet can move funds out. Program {short(PROGRAM_ID.toBase58())} · {cluster}</p>
+        <Link className="text-primary underline" href="/v2/exponent">ONyc fixed income →</Link>
       </div>
       <WalletMultiButton />
     </header>
@@ -233,11 +318,19 @@ export function SafeV2Panel() {
           <dt className="text-muted-foreground">Wallet SOL</dt><dd>{walletSol === null ? "…" : `${sol(walletSol)} SOL`}</dd>
           <dt className="text-muted-foreground">Safe address</dt><dd>{safe?.vault.toBase58() ?? "…"}</dd>
           <dt className="text-muted-foreground">Status</dt><dd>{safe ? safe.exists ? "Active" : "Not created" : "…"}</dd>
+          {isMainnet && !safe?.exists && <><dt className="text-muted-foreground">Executor on creation</dt><dd>{executorReady ? defaultExecutor!.toBase58() : "Waiting for admin whitelist"}</dd></>}
           {safe?.exists && <><dt className="text-muted-foreground">Agent</dt><dd>{!safe.agent || safe.agent.equals(PublicKey.default) ? "None (owner-only)" : safe.agent.toBase58()}</dd></>}
         </dl>
         {safe && !safe.exists && <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
-          disabled={!!busy || metaMaskBlocked || cannotCreate} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
+          disabled={!!busy || metaMaskBlocked || cannotCreate || !genesis || (isMainnet && !executorReady)} onClick={() => void run("Create Safe", async () => [await ixInitialize(connection, publicKey)])}>
           <ShieldCheck className="h-4 w-4" /> Create Safe
+        </button>}
+        {safe && !safe.exists && isMainnet && !executorReady && <p className="text-amber-200">The admin must approve a default executor before Safe creation is enabled.</p>}
+        {safe?.exists && isMainnet && assignedAgent && !assignedAgent.equals(PublicKey.default) && !agentApproved &&
+          <p className="text-amber-200">This executor is no longer in the admin whitelist. Your wallet still controls the Safe.</p>}
+        {isMainnet && canSyncExecutor && <button type="button" className={`${button} border border-border hover:bg-accent`}
+          disabled={!!busy || metaMaskBlocked} onClick={() => void run("Update executor", async () => [await ixSyncExecutor(connection, publicKey)])}>
+          {defaultExecutor!.equals(PublicKey.default) ? "Disable executor" : "Update executor"}
         </button>}
         {safe && !safe.exists && creationCost !== null && <p className="text-muted-foreground">
           Creating the Safe costs about {sol(creationCost)} SOL of rent, refunded when you close it.{cannotCreate ? ` Your wallet has ${sol(walletSol ?? 0)} SOL.` : ""}
@@ -245,10 +338,63 @@ export function SafeV2Panel() {
         {safe && !safe.exists && safe.tokens.length > 0 && <p className="text-amber-200">This address already owns token accounts from a previous Safe. Creating the Safe again restores access to them.</p>}
       </section>
 
+      {safe?.exists && isMainnet && <section className={card}>
+        <h2 className="text-lg font-semibold">Executor security limits</h2>
+        <p className="text-muted-foreground">These limits apply to executor actions for this Safe. Your own signed deposits and withdrawals remain available. The executor service is not running yet.</p>
+        {!executorLimits && <p className="text-amber-200">This Safe predates security limits. The executor is blocked until you save them with your wallet. The first save needs refundable SOL rent for the new limits account.</p>}
+        {executorLimits && <p className="text-muted-foreground">Status: {executorLimits.enabled ? "Enabled" : "Paused"} · Counted toward the 24-hour limit: {fromRaw(executorLimits.used24hUsdc, USDC_DECIMALS)} / {fromRaw(executorLimits.max24hVolumeUsdc, USDC_DECIMALS)} USDC</p>}
+        <div className="grid gap-3 sm:grid-cols-3">
+          {([
+            ["action", "One action"], ["volume", "Rolling 24 hours"], ["principal", "Invested principal"],
+          ] as const).map(([key, label]) => <label key={key} className="block space-y-1">
+            <span className="block text-muted-foreground">{label} (USDC)</span>
+            <input className="w-full rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal"
+              value={limitDraft[key]} onChange={(e) => setLimitDraft((prev) => ({ ...prev, [key]: e.target.value }))} />
+          </label>)}
+        </div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={limitDraft.enabled}
+          onChange={(e) => setLimitDraft((prev) => ({ ...prev, enabled: e.target.checked }))} /> Allow executor actions</label>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || metaMaskBlocked || noFeeSol || !validLimits || !limitsChanged}
+            onClick={() => void run("Save executor limits", async () => [await ixSetExecutorLimits(connection, publicKey, {
+              maxActionUsdc: limitAmounts[0]!, max24hVolumeUsdc: limitAmounts[1]!,
+              maxPrincipalUsdc: limitAmounts[2]!, enabled: limitDraft.enabled,
+            })])}>Save limits</button>
+          {executorLimits?.enabled && <button type="button" className={`${button} border border-border hover:bg-accent`}
+            disabled={!!busy || metaMaskBlocked || noFeeSol}
+            onClick={() => void run("Pause executor", async () => [await ixSetExecutorLimits(connection, publicKey, {
+              maxActionUsdc: executorLimits.maxActionUsdc, max24hVolumeUsdc: executorLimits.max24hVolumeUsdc,
+              maxPrincipalUsdc: executorLimits.maxPrincipalUsdc, enabled: false,
+            })])}>Pause executor</button>}
+        </div>
+        <p className="text-muted-foreground">A deposit also cannot raise the total invested principal above its limit. Deposits and withdrawals share the 24-hour volume: after an executor deposits the full daily limit, only you can withdraw until that budget recovers or you raise it. Updating limits keeps already used volume.</p>
+      </section>}
+
       {safe?.exists && <section className={card}>
         <h2 className="text-lg font-semibold">Your Safe value</h2>
         <p className="text-3xl font-semibold tabular-nums">{safeValue === null ? "Value temporarily unavailable" : `${safeValue.toFixed(2)} USDC`}</p>
         <p className="text-muted-foreground">Includes {usd(idleUsdc)} USDC ready to withdraw{kaminoShares > BigInt(0) ? " and an estimated Kamino position" : ""}. The final amount is known after Kamino redemption and fees.</p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="space-y-1">
+            <span className="block text-muted-foreground">Withdraw available USDC</span>
+            <input className="w-36 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="Amount in USDC"
+              value={partialAmountInput} onChange={(e) => setPartialWithdraw({ mode: "amount", value: e.target.value })} />
+          </label>
+          <label className="space-y-1">
+            <span className="block text-muted-foreground">Percent of available</span>
+            <input className="w-28 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="0–100"
+              value={partialPercentInput} onChange={(e) => setPartialWithdraw({ mode: "percent", value: e.target.value })} />
+          </label>
+          <button type="button" className={`${button} border border-border hover:bg-accent`} onClick={() => setPartialWithdraw({ mode: "percent", value: "100" })}>Max</button>
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || !canPartialWithdraw || metaMaskBlocked}
+            onClick={() => { const token = safe.tokens.find((item) => item.isUsdc); if (token && partialRaw)
+              void run(`Withdraw ${fromRaw(partialRaw, USDC_DECIMALS)} USDC`, async () => [await ixWithdraw(connection, publicKey, token, partialRaw)]); }}>
+            <ArrowUpFromLine className="h-4 w-4" /> Withdraw amount
+          </button>
+        </div>
+        <p className="text-muted-foreground">The amount and percent use only the USDC currently in your Safe. Kamino funds must be redeemed first. Your wallet signs one transaction.</p>
         <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
           disabled={!!busy || !canFullExit || metaMaskBlocked}
           onClick={() => void runFullExit()}>
@@ -272,9 +418,35 @@ export function SafeV2Panel() {
         </div>
       </section>}
 
-      {showLabControls && safe?.exists && <section className={card}>
+      {safe?.exists && <section className={card}>
+        <h2 className="text-lg font-semibold">Invest in Kamino USDC</h2>
+        <p className="text-muted-foreground">Choose where the USDC starts. Your wallet signs once; Kamino shares stay in your Safe. This does not change your saved allocation.</p>
+        {!isMainnet && <p className="text-amber-200">This Kamino vault is available on Solana Mainnet only.</p>}
+        {isMainnet && <p className="text-amber-200">A small Mainnet Kamino deposit and full withdrawal succeeded. Each new deposit still carries vault and network risk; start small.</p>}
+        <p className="text-muted-foreground">Safe available: {fromRaw(idleUsdc, USDC_DECIMALS)} USDC · Wallet available: {walletUsdc === null ? "…" : fromRaw(walletUsdc, USDC_DECIMALS)} USDC</p>
+        <label className="block space-y-1">
+          <span className="block text-muted-foreground">Amount to invest (USDC)</span>
+          <input className="w-40 rounded-md border border-border bg-transparent px-3 py-2" inputMode="decimal" placeholder="0.00"
+            value={kaminoAmount} onChange={(e) => setKaminoAmount(e.target.value)} />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={`${button} border border-border hover:bg-accent`}
+            disabled={!!busy || !canInvestFromSafe || metaMaskBlocked || noFeeSol}
+            onClick={() => kaminoRaw && void run(`Invest ${fromRaw(kaminoRaw, USDC_DECIMALS)} USDC from Safe`, () => buildOwnerKaminoDeposit("safe", kaminoRaw))}>
+            <TrendingUp className="h-4 w-4" /> Invest from Safe
+          </button>
+          <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`}
+            disabled={!!busy || !canInvestFromWallet || metaMaskBlocked || noFeeSol}
+            onClick={() => kaminoRaw && void run(`Invest ${fromRaw(kaminoRaw, USDC_DECIMALS)} USDC from wallet`, () => buildOwnerKaminoDeposit("wallet", kaminoRaw))}>
+            <ArrowDownToLine className="h-4 w-4" /> Invest from wallet
+          </button>
+        </div>
+        <p className="text-muted-foreground">Minimum 1 USDC for this vault in the current Mainnet test. A new Kamino shares account may require refundable SOL rent. Investment and wallet transfer succeed together or both revert.</p>
+      </section>}
+
+      {showPilotAllocation && safe?.exists && <section className={card}>
         <h2 className="flex items-center gap-2 text-lg font-semibold"><SlidersHorizontal className="h-4 w-4" /> Allocation</h2>
-        <p className="text-muted-foreground">Your target split, stored in the Safe. The agent may only allocate within these limits once the Kamino and ONyc routes ship; today nothing is moved automatically.</p>
+        <p className="text-muted-foreground">Your target split, stored in the Safe. Set ONyc above 0% to enable PT purchases; you can keep a Kamino share as long as the total is at most 100%. Saving only updates targets and moves no USDC.</p>
         {!safe.allocationBps && <p className="text-amber-200">This Safe was created before allocation targets existed; saving will initialise them.</p>}
         {ROUTES.map((route, i) => <label key={route.key} className="block space-y-1">
           <span className="flex justify-between"><span>{route.label}</span><span className="tabular-nums">{allocationDraft[i]}%</span></span>

@@ -127,19 +127,74 @@ async function run() {
   const configState = await (program.account as any).config.fetch(config);
   assert.equal(configState.performanceFeeBps, 500);
   assert.equal((configState.admin as PublicKey).toBase58(), admin.publicKey.toBase58());
+  const [executorRegistry] = PublicKey.findProgramAddressSync([Buffer.from("executor_registry")], program.programId);
+  if (!onDevnet) {
+    const initRegistry = (signer: Keypair, defaultExecutor: PublicKey, approved: PublicKey[]) =>
+      (program.methods as any).initExecutorRegistry(defaultExecutor, approved)
+        .accounts({ admin: signer.publicKey, config, executorRegistry, systemProgram: SystemProgram.programId })
+        .signers([signer]).rpc();
+    await expectFailure("non-admin executor registry init", () =>
+      initRegistry(attacker, agent.publicKey, [agent.publicKey]), /ConstraintHasOne|Unauthorized/);
+    await expectFailure("default executor missing from whitelist", () =>
+      initRegistry(admin, agent.publicKey, [replacementAgent.publicKey]), /ExecutorNotApproved/);
+    await expectFailure("duplicate executor in whitelist", () =>
+      initRegistry(admin, agent.publicKey, [agent.publicKey, agent.publicKey]), /DuplicateExecutor/);
+    await initRegistry(admin, agent.publicKey, [agent.publicKey, replacementAgent.publicKey]);
+    const registry = await (program.account as any).executorRegistry.fetch(executorRegistry);
+    assert.equal(registry.defaultExecutor.toBase58(), agent.publicKey.toBase58());
+  }
 
   const mint = await createMint(connection, payer, payer.publicKey, null, 6);
   const ownerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, owner.publicKey)).address;
   const attackerAta = (await getOrCreateAssociatedTokenAccount(connection, payer, mint, attacker.publicKey)).address;
   await mintTo(connection, payer, mint, ownerAta, payer, 1_000_000);
   const [vault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), owner.publicKey.toBuffer()], program.programId);
+  const [executorLimits] = PublicKey.findProgramAddressSync([Buffer.from("executor_limits"), vault.toBuffer()], program.programId);
   const vaultAta = getAssociatedTokenAddressSync(mint, vault, true);
+  if (!onDevnet) {
+    await expectFailure("zero executor on owner-created Safe", () => program.methods
+      .initializeWithLimits(PublicKey.default, ZERO_ALLOCATION, [])
+      .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /InvalidExecutor/);
+    await expectFailure("unapproved executor on Safe creation", () => program.methods
+      .initializeWithLimits(attacker.publicKey, ZERO_ALLOCATION, [])
+      .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+        tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /ExecutorNotApproved/);
+  }
 
-  await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
+  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
+    .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
+  const initialLimits = await (program.account as any).executorLimits.fetch(executorLimits);
+  assert.equal(initialLimits.maxActionUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.max24HVolumeUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.maxPrincipalUsdc.toString(), "1000000000");
+  assert.equal(initialLimits.enabled, true);
+  const setLimits = (signer: Keypair, action: number, daily: number, principal: number, enabled: boolean) =>
+    (program.methods as any).setExecutorLimits(new BN(action), new BN(daily), new BN(principal), enabled)
+      .accounts({ owner: signer.publicKey, vault, executorLimits, systemProgram: SystemProgram.programId })
+      .signers([signer]).rpc();
+  await expectFailure("non-owner cannot change executor limits", () =>
+    setLimits(attacker, 1, 1, 1, true), /ConstraintSeeds|ConstraintHasOne/);
+  await expectFailure("daily limit below action limit", () =>
+    setLimits(owner, 200, 100, 300, true), /InvalidExecutorLimits/);
+  await setLimits(owner, 500_000_000, 1_000_000_000, 1_000_000_000, false);
+  await expectFailure("paused executor cannot enter Kamino", () =>
+    (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: agent.publicKey, vault, executorRegistry })
+      .remainingAccounts([{ pubkey: executorLimits, isSigner: false, isWritable: true }])
+      .signers([agent]).rpc(), /ExecutorPaused/);
+  await expectFailure("paused executor cannot exit Kamino", () =>
+    (program.methods as any).kaminoWithdraw(new BN(1), false)
+      .accounts({ authority: agent.publicKey, vault, executorRegistry, config,
+        treasuryUsdcAta: ownerAta, tokenProgram: TOKEN_PROGRAM_ID })
+      .remainingAccounts([{ pubkey: executorLimits, isSigner: false, isWritable: true }])
+      .signers([agent]).rpc(), /ExecutorPaused/);
+  await setLimits(owner, 500_000_000, 1_000_000_000, 1_000_000_000, true);
   await program.methods.deposit(new BN(1_000_000))
     .accounts({ owner: owner.publicKey, vault, usdcMint: mint, ownerUsdcAta: ownerAta,
       vaultUsdcAta: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
@@ -181,13 +236,26 @@ async function run() {
   }
 
   await expectFailure("non-owner agent rotation", () => (program.methods as any).setAgent(replacementAgent.publicKey)
-    .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne/);
+    .accounts({ owner: attacker.publicKey, vault, executorRegistry }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne/);
   await (program.methods as any).setAgent(PublicKey.default)
-    .accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc();
+    .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc();
   assert.equal(((await (program.account as any).vault.fetch(vault)).agent as PublicKey).toBase58(), PublicKey.default.toBase58());
   await (program.methods as any).setAgent(replacementAgent.publicKey)
-    .accounts({ owner: owner.publicKey, vault }).signers([owner]).rpc();
+    .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc();
   assert.equal(((await (program.account as any).vault.fetch(vault)).agent as PublicKey).toBase58(), replacementAgent.publicKey.toBase58());
+  if (!onDevnet) {
+    await expectFailure("non-admin whitelist change", () => (program.methods as any)
+      .setExecutorRegistry(attacker.publicKey, [attacker.publicKey])
+      .accounts({ admin: attacker.publicKey, config, executorRegistry }).signers([attacker]).rpc(), /ConstraintHasOne/);
+    await (program.methods as any).setExecutorRegistry(agent.publicKey, [agent.publicKey])
+      .accounts({ admin: admin.publicKey, config, executorRegistry }).signers([admin]).rpc();
+    await expectFailure("revoked executor cannot act", () => (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: replacementAgent.publicKey, vault, executorRegistry }).signers([replacementAgent]).rpc(), /ExecutorNotApproved/);
+    await expectFailure("owner remains able to act after executor revocation", () => (program.methods as any).kaminoDeposit(new BN(1))
+      .accounts({ authority: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc(), /InvalidKaminoAccounts/);
+    await expectFailure("revoked executor cannot be reassigned", () => (program.methods as any).setAgent(replacementAgent.publicKey)
+      .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc(), /ExecutorNotApproved/);
+  }
 
   const ownerRecovery = createTransferInstruction(vaultAta, ownerAta, vault, 200_000);
   await program.methods.executeProtocolCpi(Buffer.from(ownerRecovery.data))
@@ -206,7 +274,9 @@ async function run() {
     .accounts({ owner: signer.publicKey, vault, tokenAccount: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([signer]).rpc();
   const closeSafe = (signer: Keypair) => methods.closeSafe()
-    .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
+    .accounts({ owner: signer.publicKey, vault })
+    .remainingAccounts([{ pubkey: executorLimits, isSigner: false, isWritable: true }])
+    .signers([signer]).rpc();
   const withdrawExcess = (signer: Keypair) => methods.withdrawExcessLamports()
     .accounts({ owner: signer.publicKey, vault }).signers([signer]).rpc();
   const notOwner = /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/;
@@ -217,9 +287,10 @@ async function run() {
   // Close the Safe while its ATA still holds 800_000: the tokens must stay recoverable.
   await closeSafe(owner);
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
+  assert.equal(await connection.getAccountInfo(executorLimits), null, "Executor limits rent was not returned on close_safe");
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
-  await program.methods.initialize(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
-    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, vaultUsdcAta: vaultAta,
+  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
+    .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -250,6 +321,44 @@ async function run() {
   await closeSafe(owner);
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after final close_safe");
 
+  if (!onDevnet) {
+    // Reproduce the old production initialize account list exactly: no trailing policy account.
+    const legacyOwner = Keypair.generate();
+    await connection.confirmTransaction(await connection.requestAirdrop(legacyOwner.publicKey, 100_000_000), "confirmed");
+    const [legacyVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), legacyOwner.publicKey.toBuffer()], program.programId);
+    const [legacyLimits] = PublicKey.findProgramAddressSync([Buffer.from("executor_limits"), legacyVault.toBuffer()], program.programId);
+    const legacyAta = getAssociatedTokenAddressSync(mint, legacyVault, true);
+    const legacyIx = await methods.initialize(agent.publicKey, ZERO_ALLOCATION, [])
+      .accounts({ owner: legacyOwner.publicKey, vault: legacyVault, executorRegistry, usdcMint: mint,
+        vaultUsdcAta: legacyAta, tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId }).instruction();
+    await sendAndConfirmTransaction(connection, new Transaction().add(legacyIx), [legacyOwner], { commitment: "confirmed" });
+    assert.equal(await connection.getAccountInfo(legacyLimits), null);
+    await methods.setExecutorLimits(new BN(1_000_000_000), new BN(1_000_000_000), new BN(1_000_000_000), true)
+      .accounts({ owner: legacyOwner.publicKey, vault: legacyVault, executorLimits: legacyLimits, systemProgram: SystemProgram.programId })
+      .signers([legacyOwner]).rpc();
+    assert((await connection.getAccountInfo(legacyLimits)) !== null);
+    await methods.closeEmptyTokenAccount()
+      .accounts({ owner: legacyOwner.publicKey, vault: legacyVault, tokenAccount: legacyAta, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([legacyOwner]).rpc();
+    await methods.closeSafe().accounts({ owner: legacyOwner.publicKey, vault: legacyVault })
+      .signers([legacyOwner]).rpc();
+    assert.equal(await connection.getAccountInfo(legacyVault), null);
+    assert((await connection.getAccountInfo(legacyLimits)) !== null, "old close leaves policy rent until reinitialize");
+    await methods.initialize(agent.publicKey, ZERO_ALLOCATION, [])
+      .accounts({ owner: legacyOwner.publicKey, vault: legacyVault, executorRegistry, usdcMint: mint,
+        vaultUsdcAta: legacyAta, tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
+      .signers([legacyOwner]).rpc();
+    await methods.closeEmptyTokenAccount()
+      .accounts({ owner: legacyOwner.publicKey, vault: legacyVault, tokenAccount: legacyAta, tokenProgram: TOKEN_PROGRAM_ID })
+      .signers([legacyOwner]).rpc();
+    await methods.closeSafe().accounts({ owner: legacyOwner.publicKey, vault: legacyVault })
+      .remainingAccounts([{ pubkey: legacyLimits, isSigner: false, isWritable: true }])
+      .signers([legacyOwner]).rpc();
+    assert.equal(await connection.getAccountInfo(legacyLimits), null);
+  }
+
   // Sponsored creation: payer creates a Safe for an owner holding no SOL; only safe defaults are set.
   const sponsored = Keypair.generate();
   const [sponsoredVault] = PublicKey.findProgramAddressSync([Buffer.from("vault"), sponsored.publicKey.toBuffer()], program.programId);
@@ -264,6 +373,17 @@ async function run() {
   assert.equal((created.agent as PublicKey).toBase58(), PublicKey.default.toBase58());
   assert.deepEqual(created.allocationBps, ZERO_ALLOCATION);
   assert.equal(created.allowedPrograms.length, 0);
+  const [sponsoredLimits] = PublicKey.findProgramAddressSync(
+    [Buffer.from("executor_limits"), sponsoredVault.toBuffer()], program.programId);
+  assert.equal(await connection.getAccountInfo(sponsoredLimits), null);
+  await methods.setAgent(agent.publicKey)
+    .accounts({ owner: sponsored.publicKey, vault: sponsoredVault, executorRegistry }).signers([sponsored]).rpc();
+  await methods.setAllocation([10_000, 0, 0, 0, 0, 0, 0, 0])
+    .accounts({ owner: sponsored.publicKey, vault: sponsoredVault }).signers([sponsored]).rpc();
+  await expectFailure("legacy Safe without policy blocks executor", () =>
+    methods.kaminoDeposit(new BN(1))
+      .accounts({ authority: agent.publicKey, vault: sponsoredVault, executorRegistry })
+      .signers([agent]).rpc(), /ExecutorLimitsMissing/);
   await expectFailure("create_safe_for twice", createFor, /already in use|0x0/);
   const sponsoredRent = (await connection.getAccountInfo(sponsoredVault))!.lamports + (await connection.getAccountInfo(sponsoredAta))!.lamports;
   await methods.closeEmptyTokenAccount()
@@ -280,8 +400,8 @@ async function run() {
     await refund(attacker);
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
-  console.log("PASS: agent CPI drains rejected; owner rotation, CPI recovery, close/re-init recovery, " +
-    "empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
+  console.log("PASS: executor whitelist, default limits, owner-only changes, pause, missing-policy denial and policy rent recovery; " +
+    "agent CPI drains rejected; owner rotation, CPI recovery, legacy initialize/close_safe, close/re-init recovery, empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
     "config access control and the Kamino generic-CPI block succeeded");
 }
 

@@ -7,6 +7,8 @@ import {
 } from "@/server/agent/protocols/jupiterLendMarkets";
 
 export const runtime = "nodejs";
+// Live RPC discovery runs at request time; builds must not depend on RPC rate limits.
+export const dynamic = "force-dynamic";
 export const revalidate = 300;
 
 const ENDPOINTS = {

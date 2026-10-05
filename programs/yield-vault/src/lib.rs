@@ -11,13 +11,23 @@ use anchor_spl::token_interface::{
 
 declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
 
+mod exponent;
+mod exponent_accounts;
+pub use exponent::*;
+
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;
+/// Admin-managed executor keys. The separate PDA avoids changing the deployed Config account size.
+const MAX_EXECUTORS: usize = 16;
 /// Allocation routes, indexed into `Vault::allocation_bps`. Unused indices are reserved for future protocols.
 pub const MAX_ROUTES: usize = 8;
 pub const ROUTE_KAMINO_USDC: usize = 0;
 pub const ROUTE_ONYC: usize = 1;
 const BPS_DENOMINATOR: u32 = 10_000;
+// Current hour plus 24 previous hours: an action near an hour boundary is never dropped early.
+const EXECUTOR_VOLUME_HOURS: usize = 25;
+const SECONDS_PER_HOUR: i64 = 3_600;
+const DEFAULT_EXECUTOR_LIMIT_USDC: u64 = 1_000_000_000; // 1,000 USDC (six decimals)
 /// Hard cap on the protocol performance fee, whatever the admin configures.
 pub const MAX_PERFORMANCE_FEE_BPS: u16 = 2_000;
 
@@ -81,11 +91,140 @@ fn kamino_shares_ata(safe: &Pubkey) -> Pubkey {
     anchor_spl::associated_token::get_associated_token_address(safe, &KAMINO_USDC_KVAULT_SHARES)
 }
 
-/// Owner, or the configured agent (the default key means "no agent").
-fn require_owner_or_agent(vault: &Vault, authority: &Pubkey) -> Result<()> {
-    let is_agent = vault.agent != Pubkey::default() && *authority == vault.agent;
-    require!(*authority == vault.owner || is_agent, ErrorCode::Unauthorized);
+fn validate_executors(default_executor: Pubkey, approved: &[Pubkey]) -> Result<()> {
+    require!(approved.len() <= MAX_EXECUTORS, ErrorCode::TooManyExecutors);
+    for (index, executor) in approved.iter().enumerate() {
+        require!(*executor != Pubkey::default(), ErrorCode::InvalidExecutor);
+        require!(!approved[..index].contains(executor), ErrorCode::DuplicateExecutor);
+    }
+    require!(
+        default_executor == Pubkey::default() || approved.contains(&default_executor),
+        ErrorCode::ExecutorNotApproved
+    );
     Ok(())
+}
+
+/// The owner always retains control. An agent must match this Safe and the current admin whitelist.
+fn require_owner_or_agent(vault: &Vault, authority: &Pubkey, registry: &ExecutorRegistry) -> Result<()> {
+    if *authority == vault.owner {
+        return Ok(());
+    }
+    require!(vault.agent != Pubkey::default() && *authority == vault.agent, ErrorCode::Unauthorized);
+    require!(registry.approved.contains(authority), ErrorCode::ExecutorNotApproved);
+    Ok(())
+}
+
+/// Keep the original Kamino instruction account list stable. An executor appends the
+/// policy PDA after the Kamino accounts; owner-signed legacy transactions append nothing.
+fn executor_policy_from_tail(
+    vault: &Account<Vault>, policy_info: &AccountInfo,
+) -> Result<ExecutorLimits> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[b"executor_limits", vault.key().as_ref()], &crate::ID);
+    require_keys_eq!(policy_info.key(), expected, ErrorCode::InvalidExecutorLimits);
+    require_keys_eq!(*policy_info.owner, crate::ID, ErrorCode::InvalidExecutorLimits);
+    require!(policy_info.is_writable, ErrorCode::InvalidExecutorLimits);
+    let data = policy_info.try_borrow_data()?;
+    let limits = ExecutorLimits::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(ErrorCode::ExecutorLimitsMissing))?;
+    require_keys_eq!(limits.vault, vault.key(), ErrorCode::InvalidExecutorLimits);
+    require!(limits.enabled, ErrorCode::ExecutorPaused);
+    Ok(limits)
+}
+
+fn save_executor_policy(policy_info: &AccountInfo, limits: &ExecutorLimits) -> Result<()> {
+    let mut data = policy_info.try_borrow_mut_data()?;
+    limits.try_serialize(&mut &mut data[..])?;
+    Ok(())
+}
+
+/// Charge every executor-controlled USDC movement to a conservative rolling 24-hour budget.
+/// Whole hourly buckets can make the window up to one hour longer, never shorter.
+fn charge_executor_volume(
+    vault: &Account<Vault>,
+    authority: &Pubkey,
+    limits: Option<&mut ExecutorLimits>,
+    moved_usdc: u64,
+    principal_after_deposit: Option<u128>,
+    now: i64,
+) -> Result<()> {
+    if *authority == vault.owner { return Ok(()); }
+    let limits = limits.ok_or(ErrorCode::ExecutorLimitsMissing)?;
+    require_keys_eq!(limits.vault, vault.key(), ErrorCode::InvalidExecutorLimits);
+    charge_volume(limits, moved_usdc, principal_after_deposit, now)
+}
+
+fn charge_volume(
+    limits: &mut ExecutorLimits,
+    moved_usdc: u64,
+    principal_after_deposit: Option<u128>,
+    now: i64,
+) -> Result<()> {
+    require!(limits.enabled, ErrorCode::ExecutorPaused);
+    require!(moved_usdc > 0 && moved_usdc <= limits.max_action_usdc, ErrorCode::ExecutorActionLimit);
+    if let Some(principal) = principal_after_deposit {
+        require!(principal <= u128::from(limits.max_principal_usdc), ErrorCode::ExecutorPositionLimit);
+    }
+    let hour = now.div_euclid(SECONDS_PER_HOUR);
+    let index = hour.rem_euclid(EXECUTOR_VOLUME_HOURS as i64) as usize;
+    if limits.hour_epoch[index] != hour {
+        limits.hour_epoch[index] = hour;
+        limits.hour_volume[index] = 0;
+    }
+    let previous: u128 = (0..EXECUTOR_VOLUME_HOURS)
+        .filter(|&i| limits.hour_epoch[i] >= hour - (EXECUTOR_VOLUME_HOURS as i64 - 1)
+            && limits.hour_epoch[i] <= hour)
+        .map(|i| u128::from(limits.hour_volume[i]))
+        .sum();
+    require!(previous + u128::from(moved_usdc) <= u128::from(limits.max_24h_volume_usdc),
+        ErrorCode::ExecutorVolumeLimit);
+    limits.hour_volume[index] = limits.hour_volume[index]
+        .checked_add(moved_usdc).ok_or(ErrorCode::ExecutorVolumeLimit)?;
+    Ok(())
+}
+
+/// Cost-basis target: repeated deposits cannot turn a 50% owner target into nearly 100%.
+/// This is conservative accounting in USDC base units, not a live Kamino NAV oracle.
+fn total_principal_after(vault: &Vault, route: usize, principal_after: u64) -> u128 {
+    vault.route_principal.iter().enumerate()
+        .map(|(index, amount)| u128::from(if index == route { principal_after } else { *amount }))
+        .sum()
+}
+
+fn principal_within_target(vault: &Vault, route: usize, principal_after: u64, idle_after: u64) -> bool {
+    let total_principal = total_principal_after(vault, route, principal_after);
+    let total_basis = total_principal + u128::from(idle_after);
+    u128::from(principal_after) * u128::from(BPS_DENOMINATOR)
+        <= total_basis * u128::from(vault.allocation_bps[route])
+}
+
+fn initialize_vault_state(
+    vault: &mut Account<Vault>, bump: u8, owner: Pubkey, agent: Pubkey,
+    allocation_bps: [u16; MAX_ROUTES], allowed_programs: Vec<Pubkey>,
+    registry: &Account<ExecutorRegistry>,
+) -> Result<()> {
+    require!(allowed_programs.len() <= MAX_ALLOWED_PROGRAMS, ErrorCode::TooManyPrograms);
+    validate_allocation(&allocation_bps)?;
+    require!(agent != Pubkey::default(), ErrorCode::InvalidExecutor);
+    require!(registry.approved.contains(&agent), ErrorCode::ExecutorNotApproved);
+    vault.bump = bump;
+    vault.owner = owner;
+    vault.agent = agent;
+    vault.allocation_bps = allocation_bps;
+    vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
+    vault.allowed_programs = allowed_programs;
+    Ok(())
+}
+
+fn initialize_default_executor_limits(limits: &mut Account<ExecutorLimits>, vault: Pubkey, bump: u8) {
+    limits.vault = vault;
+    limits.bump = bump;
+    limits.enabled = true;
+    limits.max_action_usdc = DEFAULT_EXECUTOR_LIMIT_USDC;
+    limits.max_24h_volume_usdc = DEFAULT_EXECUTOR_LIMIT_USDC;
+    limits.max_principal_usdc = DEFAULT_EXECUTOR_LIMIT_USDC;
+    limits.hour_epoch = [0; EXECUTOR_VOLUME_HOURS];
+    limits.hour_volume = [0; EXECUTOR_VOLUME_HOURS];
 }
 
 /// The account must be an SPL Token / Token-2022 account whose authority is the Safe PDA.
@@ -143,24 +282,64 @@ fn invoke_kvault(
 pub mod yield_vault {
     use super::*;
 
+    pub fn init_exponent_position(ctx: Context<InitExponentPosition>, max_loss_bps: u16, max_slippage_bps: u16) -> Result<()> {
+        exponent::init(ctx, max_loss_bps, max_slippage_bps)
+    }
+    pub fn set_exponent_policy(ctx: Context<SetExponentPolicy>, enabled: bool, max_loss_bps: u16, max_slippage_bps: u16) -> Result<()> {
+        exponent::set_policy(ctx, enabled, max_loss_bps, max_slippage_bps)
+    }
+    pub fn exponent_buy_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::buy(ctx, order, false)
+    }
+    pub fn exponent_buy_pt_with_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::buy(ctx, order, true)
+    }
+    pub fn exponent_sell_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, false, false)
+    }
+    pub fn exponent_sell_pt_for_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, false, true)
+    }
+    pub fn exponent_redeem_pt<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, true, false)
+    }
+    pub fn exponent_redeem_pt_for_onyc<'info>(ctx: Context<'_, '_, 'info, 'info, ExponentAction<'info>>, order: ExponentOrder) -> Result<()> {
+        exponent::exit(ctx, order, true, true)
+    }
+    pub fn deposit_onyc(ctx: Context<OnycTransfer>, amount: u64) -> Result<()> {
+        exponent::transfer_onyc(ctx, amount, true)
+    }
+    pub fn withdraw_onyc(ctx: Context<OnycTransfer>, amount: u64) -> Result<()> {
+        exponent::transfer_onyc(ctx, amount, false)
+    }
+    pub fn recover_exponent(ctx: Context<RecoverExponent>, amount: u64) -> Result<()> {
+        exponent::recover(ctx, amount)
+    }
+
     pub fn initialize(
         ctx: Context<Initialize>,
         agent: Pubkey,
         allocation_bps: [u16; MAX_ROUTES],
         allowed_programs: Vec<Pubkey>,
     ) -> Result<()> {
-        require!(
-            allowed_programs.len() <= MAX_ALLOWED_PROGRAMS,
-            ErrorCode::TooManyPrograms
-        );
-        validate_allocation(&allocation_bps)?;
-        let vault = &mut ctx.accounts.vault;
-        vault.bump = ctx.bumps.vault;
-        vault.owner = ctx.accounts.owner.key();
-        vault.agent = agent;
-        vault.allocation_bps = allocation_bps;
-        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
-        vault.allowed_programs = allowed_programs;
+        initialize_vault_state(&mut ctx.accounts.vault, ctx.bumps.vault,
+            ctx.accounts.owner.key(), agent, allocation_bps, allowed_programs,
+            &ctx.accounts.executor_registry)
+    }
+
+    /// Current UI: creates a Safe and its default 1,000 USDC policy atomically.
+    /// The original `initialize` ABI remains available for already-open client tabs.
+    pub fn initialize_with_limits(
+        ctx: Context<InitializeWithLimits>,
+        agent: Pubkey,
+        allocation_bps: [u16; MAX_ROUTES],
+        allowed_programs: Vec<Pubkey>,
+    ) -> Result<()> {
+        initialize_vault_state(&mut ctx.accounts.vault, ctx.bumps.vault,
+            ctx.accounts.owner.key(), agent, allocation_bps, allowed_programs,
+            &ctx.accounts.executor_registry)?;
+        initialize_default_executor_limits(&mut ctx.accounts.executor_limits,
+            ctx.accounts.vault.key(), ctx.bumps.executor_limits);
         Ok(())
     }
 
@@ -212,6 +391,55 @@ pub mod yield_vault {
         Ok(())
     }
 
+    /// Owner-only policy. Until this PDA exists and is enabled, an executor cannot move USDC.
+    pub fn set_executor_limits(
+        ctx: Context<SetExecutorLimits>,
+        max_action_usdc: u64,
+        max_24h_volume_usdc: u64,
+        max_principal_usdc: u64,
+        enabled: bool,
+    ) -> Result<()> {
+        if enabled {
+            require!(max_action_usdc > 0 && max_24h_volume_usdc > 0 && max_principal_usdc > 0,
+                ErrorCode::InvalidExecutorLimits);
+            require!(max_24h_volume_usdc >= max_action_usdc, ErrorCode::InvalidExecutorLimits);
+        }
+        let limits = &mut ctx.accounts.executor_limits;
+        if limits.vault == Pubkey::default() {
+            limits.vault = ctx.accounts.vault.key();
+            limits.bump = ctx.bumps.executor_limits;
+        }
+        require_keys_eq!(limits.vault, ctx.accounts.vault.key(), ErrorCode::InvalidExecutorLimits);
+        limits.max_action_usdc = max_action_usdc;
+        limits.max_24h_volume_usdc = max_24h_volume_usdc;
+        limits.max_principal_usdc = max_principal_usdc;
+        limits.enabled = enabled;
+        Ok(())
+    }
+
+    /// One global executor registry per program. Only the current config admin can initialize it.
+    pub fn init_executor_registry(
+        ctx: Context<InitExecutorRegistry>, default_executor: Pubkey, approved: Vec<Pubkey>
+    ) -> Result<()> {
+        validate_executors(default_executor, &approved)?;
+        let registry = &mut ctx.accounts.executor_registry;
+        registry.bump = ctx.bumps.executor_registry;
+        registry.default_executor = default_executor;
+        registry.approved = approved;
+        Ok(())
+    }
+
+    /// Replacing the list can approve, revoke, or pause executors without a program upgrade.
+    pub fn set_executor_registry(
+        ctx: Context<SetExecutorRegistry>, default_executor: Pubkey, approved: Vec<Pubkey>
+    ) -> Result<()> {
+        validate_executors(default_executor, &approved)?;
+        let registry = &mut ctx.accounts.executor_registry;
+        registry.default_executor = default_executor;
+        registry.approved = approved;
+        Ok(())
+    }
+
     pub fn set_allowed_programs(
         ctx: Context<SetAllowedPrograms>,
         allowed_programs: Vec<Pubkey>,
@@ -228,11 +456,15 @@ pub mod yield_vault {
     /// The owner may rotate or revoke the agent. Pubkey::default() revokes it.
     /// Agent execution remains disabled for generic CPI instructions in v2.
     pub fn set_agent(ctx: Context<SetAgent>, agent: Pubkey) -> Result<()> {
+        if agent != Pubkey::default() {
+            require!(ctx.accounts.executor_registry.approved.contains(&agent), ErrorCode::ExecutorNotApproved);
+        }
         ctx.accounts.vault.agent = agent;
         Ok(())
     }
 
     pub fn deposit(ctx: Context<Deposit>, amount: u64) -> Result<()> {
+        require!(!exponent::protected_mint(&ctx.accounts.usdc_mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token::transfer(
             CpiContext::new(
@@ -255,6 +487,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         token_interface::transfer_checked(
             CpiContext::new(
@@ -275,6 +508,7 @@ pub mod yield_vault {
 
     /// Owner pulls USDC from the vault ATA. Authority on the vault token account is the vault PDA (`invoke_signed`).
     pub fn withdraw(ctx: Context<Withdraw>, amount: u64) -> Result<()> {
+        require!(!exponent::protected_mint(&ctx.accounts.usdc_mint.key()), exponent::ExponentError::ProtectedAsset);
         require!(amount > 0, ErrorCode::ZeroAmount);
         require_keys_neq!(ctx.accounts.usdc_mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
@@ -305,6 +539,7 @@ pub mod yield_vault {
         amount: u64,
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
+        require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
@@ -334,6 +569,7 @@ pub mod yield_vault {
     pub fn execute_swap_cpi(ctx: Context<ExecuteSwap>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
+        exponent::protect_generic(vault, ctx.remaining_accounts)?;
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();
@@ -377,6 +613,7 @@ pub mod yield_vault {
     pub fn execute_protocol_cpi(ctx: Context<ExecuteProtocol>, data: Vec<u8>) -> Result<()> {
         let vault = &mut ctx.accounts.vault;
         require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
+        exponent::protect_generic(vault, ctx.remaining_accounts)?;
         let rem = ctx.remaining_accounts;
         require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
         let program_id = rem[0].key();
@@ -423,11 +660,17 @@ pub mod yield_vault {
     ) -> Result<()> {
         require!(amount > 0, ErrorCode::ZeroAmount);
         let vault = &ctx.accounts.vault;
-        require_owner_or_agent(vault, &ctx.accounts.authority.key())?;
+        require_owner_or_agent(vault, &ctx.accounts.authority.key(), &ctx.accounts.executor_registry)?;
+        let (rem, mut policy) = if ctx.accounts.authority.key() == vault.owner {
+            (ctx.remaining_accounts, None)
+        } else {
+            let (policy_info, kamino_accounts) = ctx.remaining_accounts.split_last()
+                .ok_or(ErrorCode::ExecutorLimitsMissing)?;
+            (kamino_accounts, Some((policy_info, executor_policy_from_tail(vault, policy_info)?)))
+        };
         let target_bps = vault.allocation_bps[ROUTE_KAMINO_USDC];
         require!(target_bps > 0, ErrorCode::RouteDisabled);
 
-        let rem = ctx.remaining_accounts;
         require!(rem.len() > KV_DEPOSIT_FIXED_ACCOUNTS, ErrorCode::InvalidKaminoAccounts);
         let idle = safe_token_balance(&rem[1 + KV_DEPOSIT_USER_TOKEN_ATA], &vault.key())?;
         let cap = (u128::from(idle) * u128::from(target_bps) / u128::from(BPS_DENOMINATOR)) as u64;
@@ -440,8 +683,21 @@ pub mod yield_vault {
         // Cost basis = what actually left the Safe, not the requested amount.
         let idle_after = safe_token_balance(&rem[1 + KV_DEPOSIT_USER_TOKEN_ATA], &ctx.accounts.vault.key())?;
         let deposited = idle.saturating_sub(idle_after);
+        let principal_after = ctx.accounts.vault.route_principal[ROUTE_KAMINO_USDC]
+            .checked_add(deposited).ok_or(ErrorCode::ExecutorPositionLimit)?;
+        if ctx.accounts.authority.key() != ctx.accounts.vault.owner {
+            require!(principal_within_target(&ctx.accounts.vault, ROUTE_KAMINO_USDC,
+                principal_after, idle_after), ErrorCode::AllocationExceeded);
+        }
+        charge_executor_volume(&ctx.accounts.vault, &ctx.accounts.authority.key(),
+            policy.as_mut().map(|(_, limits)| limits), deposited,
+            Some(total_principal_after(&ctx.accounts.vault, ROUTE_KAMINO_USDC, principal_after)),
+            Clock::get()?.unix_timestamp)?;
+        if let Some((policy_info, limits)) = policy.as_ref() {
+            save_executor_policy(policy_info, limits)?;
+        }
         let vault = &mut ctx.accounts.vault;
-        vault.route_principal[ROUTE_KAMINO_USDC] = vault.route_principal[ROUTE_KAMINO_USDC].saturating_add(deposited);
+        vault.route_principal[ROUTE_KAMINO_USDC] = principal_after;
         vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
         Ok(())
     }
@@ -456,13 +712,20 @@ pub mod yield_vault {
     ) -> Result<()> {
         require!(shares > 0, ErrorCode::ZeroAmount);
         let vault_key = ctx.accounts.vault.key();
-        require_owner_or_agent(&ctx.accounts.vault, &ctx.accounts.authority.key())?;
+        require_owner_or_agent(&ctx.accounts.vault, &ctx.accounts.authority.key(), &ctx.accounts.executor_registry)?;
+        let (rem, mut policy) = if ctx.accounts.authority.key() == ctx.accounts.vault.owner {
+            (ctx.remaining_accounts, None)
+        } else {
+            let (policy_info, kamino_accounts) = ctx.remaining_accounts.split_last()
+                .ok_or(ErrorCode::ExecutorLimitsMissing)?;
+            (kamino_accounts, Some((policy_info,
+                executor_policy_from_tail(&ctx.accounts.vault, policy_info)?)))
+        };
         let (discriminator, fixed) = if from_reserve {
             (KVAULT_WITHDRAW, KV_WITHDRAW_FULL_FIXED_ACCOUNTS)
         } else {
             (KVAULT_WITHDRAW_FROM_AVAILABLE, KV_WITHDRAW_AVAILABLE_FIXED_ACCOUNTS)
         };
-        let rem = ctx.remaining_accounts;
         require!(rem.len() > fixed, ErrorCode::InvalidKaminoAccounts);
         let safe_usdc = &rem[1 + KV_WITHDRAW_USER_TOKEN_ATA];
         let shares_before = safe_token_balance(&rem[1 + KV_WITHDRAW_USER_SHARES_ATA], &vault_key)?;
@@ -482,6 +745,12 @@ pub mod yield_vault {
         let principal = ctx.accounts.vault.route_principal[ROUTE_KAMINO_USDC];
         let (principal_out, fee) = realize_exit(principal, burned, shares_before, received,
             ctx.accounts.config.performance_fee_bps);
+
+        charge_executor_volume(&ctx.accounts.vault, &ctx.accounts.authority.key(),
+            policy.as_mut().map(|(_, limits)| limits), received, None, Clock::get()?.unix_timestamp)?;
+        if let Some((policy_info, limits)) = policy.as_ref() {
+            save_executor_policy(policy_info, limits)?;
+        }
 
         if fee > 0 {
             // Fee goes only to the configured treasury's USDC account, signed by the Safe PDA.
@@ -590,7 +859,20 @@ pub mod yield_vault {
     /// Token accounts cannot be enumerated on-chain; the client must close or empty them first.
     /// Anything left behind stays recoverable: the PDA is derived from the owner, and
     /// `initialize` accepts an existing USDC ATA, so re-initializing restores control.
-    pub fn close_safe(_ctx: Context<CloseSafe>) -> Result<()> {
+    pub fn close_safe<'info>(ctx: Context<'_, '_, 'info, 'info, CloseSafe<'info>>) -> Result<()> {
+        // Legacy clients pass only owner + vault. Current clients append the
+        // policy PDA so its refundable rent is returned in the same transaction.
+        if let Some(policy_info) = ctx.remaining_accounts.first() {
+            require!(ctx.remaining_accounts.len() == 1, ErrorCode::InvalidExecutorLimits);
+            let vault_key = ctx.accounts.vault.key();
+            let (expected, _) = Pubkey::find_program_address(
+                &[b"executor_limits", vault_key.as_ref()], &crate::ID);
+            require_keys_eq!(policy_info.key(), expected, ErrorCode::InvalidExecutorLimits);
+            require!(policy_info.is_writable, ErrorCode::InvalidExecutorLimits);
+            let policy = Account::<ExecutorLimits>::try_from(policy_info)?;
+            require_keys_eq!(policy.vault, vault_key, ErrorCode::InvalidExecutorLimits);
+            policy.close(ctx.accounts.owner.to_account_info())?;
+        }
         Ok(())
     }
 }
@@ -621,6 +903,29 @@ pub struct Config {
     pub bump: u8,
 }
 
+#[account]
+#[derive(InitSpace)]
+pub struct ExecutorRegistry {
+    pub bump: u8,
+    pub default_executor: Pubkey,
+    #[max_len(16)]
+    pub approved: Vec<Pubkey>,
+}
+
+/// Per-Safe owner policy. Every executor USDC movement shares one volume ledger across routes.
+#[account]
+#[derive(InitSpace)]
+pub struct ExecutorLimits {
+    pub vault: Pubkey,
+    pub bump: u8,
+    pub enabled: bool,
+    pub max_action_usdc: u64,
+    pub max_24h_volume_usdc: u64,
+    pub max_principal_usdc: u64,
+    pub hour_epoch: [i64; EXECUTOR_VOLUME_HOURS],
+    pub hour_volume: [u64; EXECUTOR_VOLUME_HOURS],
+}
+
 #[event]
 pub struct RouteExit {
     pub vault: Pubkey,
@@ -642,18 +947,36 @@ pub struct Initialize<'info> {
         bump
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
     pub usdc_mint: Account<'info, Mint>,
-    // init_if_needed: after close_safe the ATA may still exist; re-initializing must reuse it.
-    #[account(
-        init_if_needed,
-        payer = owner,
-        associated_token::mint = usdc_mint,
-        associated_token::authority = vault,
-    )]
+    #[account(init_if_needed, payer = owner, associated_token::mint = usdc_mint,
+        associated_token::authority = vault)]
     pub vault_usdc_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeWithLimits<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(init, payer = owner, space = 8 + Vault::INIT_SPACE,
+        seeds = [b"vault", owner.key().as_ref()], bump)]
+    pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
+    pub usdc_mint: Account<'info, Mint>,
+    #[account(init_if_needed, payer = owner, associated_token::mint = usdc_mint,
+        associated_token::authority = vault)]
+    pub vault_usdc_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
+    #[account(init_if_needed, payer = owner, space = 8 + ExecutorLimits::INIT_SPACE,
+        seeds = [b"executor_limits", vault.key().as_ref()], bump)]
+    pub executor_limits: Account<'info, ExecutorLimits>,
 }
 
 #[derive(Accounts)]
@@ -721,6 +1044,8 @@ pub struct SetAgent<'info> {
         has_one = owner,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -875,6 +1200,8 @@ pub struct KaminoAction<'info> {
         bump = vault.bump,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -887,6 +1214,8 @@ pub struct KaminoWithdraw<'info> {
         bump = vault.bump,
     )]
     pub vault: Account<'info, Vault>,
+    #[account(seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, Config>,
     /// Treasury USDC account; owner and mint are checked in the handler when a fee is due.
@@ -923,6 +1252,53 @@ pub struct SetConfig<'info> {
     pub admin: Signer<'info>,
     #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
+}
+
+#[derive(Accounts)]
+pub struct SetExecutorLimits<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    #[account(
+        seeds = [b"vault", owner.key().as_ref()],
+        bump = vault.bump,
+        has_one = owner,
+    )]
+    pub vault: Account<'info, Vault>,
+    #[account(
+        init_if_needed,
+        payer = owner,
+        space = 8 + ExecutorLimits::INIT_SPACE,
+        seeds = [b"executor_limits", vault.key().as_ref()],
+        bump,
+    )]
+    pub executor_limits: Account<'info, ExecutorLimits>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitExecutorRegistry<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + ExecutorRegistry::INIT_SPACE,
+        seeds = [b"executor_registry"],
+        bump,
+    )]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetExecutorRegistry<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    #[account(mut, seeds = [b"executor_registry"], bump = executor_registry.bump)]
+    pub executor_registry: Account<'info, ExecutorRegistry>,
 }
 
 #[derive(Accounts)]
@@ -1019,6 +1395,26 @@ pub enum ErrorCode {
     InsufficientShares,
     #[msg("This protocol must be used through its dedicated instruction")]
     UseDedicatedInstruction,
+    #[msg("Too many executor keys in the global whitelist")]
+    TooManyExecutors,
+    #[msg("The executor key cannot be the default pubkey")]
+    InvalidExecutor,
+    #[msg("Duplicate executor key in the global whitelist")]
+    DuplicateExecutor,
+    #[msg("Executor is not in the current admin whitelist")]
+    ExecutorNotApproved,
+    #[msg("Executor limits for this Safe are missing")]
+    ExecutorLimitsMissing,
+    #[msg("Executor limits do not belong to this Safe or are invalid")]
+    InvalidExecutorLimits,
+    #[msg("Executor is paused by the Safe owner")]
+    ExecutorPaused,
+    #[msg("Executor action exceeds its USDC limit")]
+    ExecutorActionLimit,
+    #[msg("Executor movement exceeds the rolling 24-hour USDC limit")]
+    ExecutorVolumeLimit,
+    #[msg("Executor deposit exceeds the Safe's principal limit")]
+    ExecutorPositionLimit,
     #[msg("Lamports underflow")]
     LamportsUnderflow,
     #[msg("Lamports overflow")]
@@ -1055,5 +1451,51 @@ mod tests {
     #[test]
     fn zero_fee_config() {
         assert_eq!(realize_exit(1, 1, 1, 2, 0), (1, 0));
+    }
+
+    fn test_limits() -> ExecutorLimits {
+        ExecutorLimits {
+            vault: Pubkey::new_unique(), bump: 0, enabled: true,
+            max_action_usdc: 1_000, max_24h_volume_usdc: 1_000, max_principal_usdc: 1_000,
+            hour_epoch: [0; EXECUTOR_VOLUME_HOURS], hour_volume: [0; EXECUTOR_VOLUME_HOURS],
+        }
+    }
+
+    #[test]
+    fn executor_volume_covers_repeated_deposit_and_exit_without_reset_on_limit_change() {
+        let mut limits = test_limits();
+        let now = 100 * SECONDS_PER_HOUR;
+        charge_volume(&mut limits, 600, Some(600), now).unwrap();
+        assert!(charge_volume(&mut limits, 500, Some(900), now).is_err());
+        assert_eq!(limits.hour_volume[100 % EXECUTOR_VOLUME_HOURS], 600);
+        assert!(charge_volume(&mut limits, 500, None, now + 23 * SECONDS_PER_HOUR).is_err());
+        // Owner changes caps without clearing the spent ledger.
+        limits.max_24h_volume_usdc = 700;
+        assert!(charge_volume(&mut limits, 101, None, now + 23 * SECONDS_PER_HOUR).is_err());
+        assert!(charge_volume(&mut limits, 101, None, now + 24 * SECONDS_PER_HOUR).is_err());
+        charge_volume(&mut limits, 500, None, now + 25 * SECONDS_PER_HOUR).unwrap();
+    }
+
+    #[test]
+    fn executor_action_position_and_pause_limits_fail_closed() {
+        let mut limits = test_limits();
+        assert!(charge_volume(&mut limits, 1_001, None, SECONDS_PER_HOUR).is_err());
+        assert!(charge_volume(&mut limits, 1, Some(1_001), SECONDS_PER_HOUR).is_err());
+        assert_eq!(limits.hour_volume[1], 0);
+        limits.enabled = false;
+        assert!(charge_volume(&mut limits, 1, None, SECONDS_PER_HOUR).is_err());
+    }
+
+    #[test]
+    fn repeated_executor_deposits_cannot_exceed_owner_allocation() {
+        let mut vault = Vault {
+            bump: 0, owner: Pubkey::new_unique(), agent: Pubkey::new_unique(),
+            allocation_bps: [5_000, 0, 0, 0, 0, 0, 0, 0], last_rebalance_ts: 0,
+            allowed_programs: Vec::new(), route_principal: [0; MAX_ROUTES],
+        };
+        assert!(principal_within_target(&vault, ROUTE_KAMINO_USDC, 50, 50));
+        vault.route_principal[ROUTE_KAMINO_USDC] = 50;
+        assert!(!principal_within_target(&vault, ROUTE_KAMINO_USDC, 75, 25));
+        assert!(principal_within_target(&vault, ROUTE_KAMINO_USDC, 50, 50));
     }
 }

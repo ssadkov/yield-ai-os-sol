@@ -1,0 +1,549 @@
+{
+  "runtime": "LiteSVM 1.5.0",
+  "safeArtifactSha256": "9543eb14e69694d25d6a4d1bba2a5bcc7f00f1d34a095112d0b898764805269f",
+  "snapshot": {
+    "slot": 452216889,
+    "fetchedAt": "2026-10-01T07:13:30.303Z"
+  },
+  "programs": [
+    {
+      "name": "exponent_core",
+      "programId": "ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7",
+      "sha256": "da24871272cc63323e05143d5073c21cbe76bd87c4c76e662c98cc741af319b8"
+    },
+    {
+      "name": "exponent_clmm",
+      "programId": "XPC1MM4dYACDfykNuXYZ5una2DsMDWL24CrYubCvarC",
+      "sha256": "a5fe0275c624c16dd8fdaada13e2cbe7e1d39f04f14ff340efbfd2acced133e2"
+    },
+    {
+      "name": "generic_sy",
+      "programId": "XP1BRLn8eCYSygrd8er5P4GKdzqKbC3DLoSsS5UYVZy",
+      "sha256": "2ca83734aedbae54a870f9b91faa7ddf0bad22fdec8e738018eb1b51e73bc4c5"
+    },
+    {
+      "name": "whirlpool",
+      "programId": "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",
+      "sha256": "610b1e394973bd1b86de8afc983524bd21dea177e87bfae75ec289d4c350f9ae"
+    }
+  ],
+  "cycles": [
+    {
+      "dollars": 100,
+      "pt": "103271094890",
+      "entryNavWords": [
+        "1151213761000",
+        "0",
+        "0",
+        "0"
+      ],
+      "buyCu": 448885,
+      "sellCu": 357687,
+      "buyBytes": 1014,
+      "sellBytes": 1014,
+      "earlyExitUsdc": "99869184",
+      "buyQuote": {
+        "market": "onyc-10jan27",
+        "action": "buy",
+        "owner": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+        "authority": "G7kWM2ehDn1Mzrycdke1TpHYLCcBzi6ysBC1Z4afDwXt",
+        "asset": "USDC",
+        "input": {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw": "100000000"
+        },
+        "intermediate": {
+          "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "expectedRaw": "86868738667",
+          "minRaw": "86651566821"
+        },
+        "output": {
+          "mint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "expectedRaw": "103268710071",
+          "minRaw": "102753012023"
+        },
+        "slot": "452216889",
+        "chainTime": 1790838809,
+        "expiresAt": 1790838899,
+        "slippageBps": 50,
+        "nav": "1.151213761",
+        "navSource": "on-chain Scope 108",
+        "oracleTimestamp": 1790838792,
+        "oracleSlot": "452216824",
+        "redemptionRate": null,
+        "redemptionRateFrozen": false,
+        "basisUsdc": null,
+        "inputBasisUsdc": "100000000",
+        "lossFloorUsdc": null,
+        "economicAllowed": true,
+        "position": {
+          "address": "HEq8VRBJ1jjSf2qnVZz3DxVJGP6pMuf3LgTLwqM14DKh",
+          "safe": "DwBx1PdhrYeYUCXUuKt6Yk4o9HG3RohqQcoP1Na5uyn1",
+          "market": "7f1PgxY3kGsPqLAKpwcduZkcBEhpjMz7U1iJ4pcCCzDy",
+          "ptMint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "baseMint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "maturity": 1799586000,
+          "enabled": true,
+          "maxLossBps": 500,
+          "maxSlippageBps": 50,
+          "feeBps": 0,
+          "trackedPt": "0",
+          "principalUsdc": "0",
+          "totalSpentUsdc": "0",
+          "totalReceivedUsdc": "0",
+          "realizedBasisUsdc": "0",
+          "feesPaidUsdc": "0",
+          "recoveredBasisUsdc": "0",
+          "entryNavWords": [
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "entryCoreRateWords": [
+            "0",
+            "0",
+            "0",
+            "0"
+          ],
+          "entrySlot": "0",
+          "entryTimestamp": "0"
+        },
+        "pilotFeeBps": 0,
+        "pilotFeeUsdc": "0",
+        "previewOnly": false,
+        "executionReady": false,
+        "maturityPreview": {
+          "ptRaw": "103268710071",
+          "onycRaw": "89704200531",
+          "usdcAtCurrentDexRaw": "103243422",
+          "projectedFutureProfitFeeUsdc": "162171",
+          "projectedNetUsdc": "103081251",
+          "grossApyBeforeDexFees": "0.122951878436464275518473300057942189357",
+          "netApyAfterCurrentDexAndFutureProfitFee": "0.11562009664323784664773349992440749551",
+          "displayProfitFeeBps": 500,
+          "assumption": "Current NAV and current DEX liquidity; maturity NAV, liquidity and fees are unknown"
+        },
+        "route": {
+          "dex": "Orca Whirlpool direct ONyc/USDC",
+          "pool": "7jhhyxPUKpu42hPGSYwgMXbR2dtVJHKhs8DW3sAAgAvX",
+          "pt": "Exponent CLMM",
+          "routerFeeBps": 0,
+          "networkFeeIncluded": false,
+          "rentIncluded": false
+        },
+        "quoteId": "09789d2c78bdcc33fafbe8c3ca29ef28f6a6849141c738164a5aa9f3b7e6eac8"
+      }
+    },
+    {
+      "dollars": 1000,
+      "pt": "1032708817771",
+      "entryNavWords": [
+        "1151213761000",
+        "0",
+        "0",
+        "0"
+      ],
+      "buyCu": 446973,
+      "sellCu": 357835,
+      "buyBytes": 1014,
+      "sellBytes": 1014,
+      "earlyExitUsdc": "998691854",
+      "buyQuote": {
+        "market": "onyc-10jan27",
+        "action": "buy",
+        "owner": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+        "authority": "G7kWM2ehDn1Mzrycdke1TpHYLCcBzi6ysBC1Z4afDwXt",
+        "asset": "USDC",
+        "input": {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw": "1000000000"
+        },
+        "intermediate": {
+          "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "expectedRaw": "868687321917",
+          "minRaw": "866515603613"
+        },
+        "output": {
+          "mint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "expectedRaw": "1032684966214",
+          "minRaw": "1027528001324"
+        },
+        "slot": "452216889",
+        "chainTime": 1790838809,
+        "expiresAt": 1790838899,
+        "slippageBps": 50,
+        "nav": "1.151213761",
+        "navSource": "on-chain Scope 108",
+        "oracleTimestamp": 1790838792,
+        "oracleSlot": "452216824",
+        "redemptionRate": null,
+        "redemptionRateFrozen": false,
+        "basisUsdc": null,
+        "inputBasisUsdc": "1000000000",
+        "lossFloorUsdc": null,
+        "economicAllowed": true,
+        "position": {
+          "address": "HEq8VRBJ1jjSf2qnVZz3DxVJGP6pMuf3LgTLwqM14DKh",
+          "safe": "DwBx1PdhrYeYUCXUuKt6Yk4o9HG3RohqQcoP1Na5uyn1",
+          "market": "7f1PgxY3kGsPqLAKpwcduZkcBEhpjMz7U1iJ4pcCCzDy",
+          "ptMint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "baseMint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "maturity": 1799586000,
+          "enabled": true,
+          "maxLossBps": 500,
+          "maxSlippageBps": 50,
+          "feeBps": 0,
+          "trackedPt": "0",
+          "principalUsdc": "0",
+          "totalSpentUsdc": "100000000",
+          "totalReceivedUsdc": "99869184",
+          "realizedBasisUsdc": "100000000",
+          "feesPaidUsdc": "0",
+          "recoveredBasisUsdc": "0",
+          "entryNavWords": [
+            "1151213761000",
+            "0",
+            "0",
+            "0"
+          ],
+          "entryCoreRateWords": [
+            "1151213761000",
+            "0",
+            "0",
+            "0"
+          ],
+          "entrySlot": "452216889",
+          "entryTimestamp": "1790838809"
+        },
+        "pilotFeeBps": 0,
+        "pilotFeeUsdc": "0",
+        "previewOnly": false,
+        "executionReady": false,
+        "maturityPreview": {
+          "ptRaw": "1032684966214",
+          "onycRaw": "897040151185",
+          "usdcAtCurrentDexRaw": "1032432013",
+          "projectedFutureProfitFeeUsdc": "1621600",
+          "projectedNetUsdc": "1030810413",
+          "grossApyBeforeDexFees": "0.122943512325178828957422286484598494133",
+          "netApyAfterCurrentDexAndFutureProfitFee": "0.11561191440867721955626887997302250154",
+          "displayProfitFeeBps": 500,
+          "assumption": "Current NAV and current DEX liquidity; maturity NAV, liquidity and fees are unknown"
+        },
+        "route": {
+          "dex": "Orca Whirlpool direct ONyc/USDC",
+          "pool": "7jhhyxPUKpu42hPGSYwgMXbR2dtVJHKhs8DW3sAAgAvX",
+          "pt": "Exponent CLMM",
+          "routerFeeBps": 0,
+          "networkFeeIncluded": false,
+          "rentIncluded": false
+        },
+        "quoteId": "07eacd59083e925aad4210678b0d383f7253c84e8d7e2f5f8acc412722db77e7"
+      }
+    },
+    {
+      "dollars": 10000,
+      "pt": "10326875037482",
+      "entryNavWords": [
+        "1151213761000",
+        "0",
+        "0",
+        "0"
+      ],
+      "buyCu": 409647,
+      "sellCu": 386039,
+      "buyBytes": 1014,
+      "sellBytes": 1014,
+      "earlyExitUsdc": "9986918664",
+      "buyQuote": {
+        "market": "onyc-10jan27",
+        "action": "buy",
+        "owner": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+        "authority": "G7kWM2ehDn1Mzrycdke1TpHYLCcBzi6ysBC1Z4afDwXt",
+        "asset": "USDC",
+        "input": {
+          "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "raw": "10000000000"
+        },
+        "intermediate": {
+          "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "expectedRaw": "8686866740396",
+          "minRaw": "8665149573546"
+        },
+        "output": {
+          "mint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "expectedRaw": "10326636626691",
+          "minRaw": "10275068552439"
+        },
+        "slot": "452216889",
+        "chainTime": 1790838809,
+        "expiresAt": 1790838899,
+        "slippageBps": 50,
+        "nav": "1.151213761",
+        "navSource": "on-chain Scope 108",
+        "oracleTimestamp": 1790838792,
+        "oracleSlot": "452216824",
+        "redemptionRate": null,
+        "redemptionRateFrozen": false,
+        "basisUsdc": null,
+        "inputBasisUsdc": "10000000000",
+        "lossFloorUsdc": null,
+        "economicAllowed": true,
+        "position": {
+          "address": "HEq8VRBJ1jjSf2qnVZz3DxVJGP6pMuf3LgTLwqM14DKh",
+          "safe": "DwBx1PdhrYeYUCXUuKt6Yk4o9HG3RohqQcoP1Na5uyn1",
+          "market": "7f1PgxY3kGsPqLAKpwcduZkcBEhpjMz7U1iJ4pcCCzDy",
+          "ptMint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+          "baseMint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+          "maturity": 1799586000,
+          "enabled": true,
+          "maxLossBps": 500,
+          "maxSlippageBps": 50,
+          "feeBps": 0,
+          "trackedPt": "0",
+          "principalUsdc": "0",
+          "totalSpentUsdc": "1100000000",
+          "totalReceivedUsdc": "1098561038",
+          "realizedBasisUsdc": "1100000000",
+          "feesPaidUsdc": "0",
+          "recoveredBasisUsdc": "0",
+          "entryNavWords": [
+            "1151213761000",
+            "0",
+            "0",
+            "0"
+          ],
+          "entryCoreRateWords": [
+            "1151213761000",
+            "0",
+            "0",
+            "0"
+          ],
+          "entrySlot": "452216889",
+          "entryTimestamp": "1790838809"
+        },
+        "pilotFeeBps": 0,
+        "pilotFeeUsdc": "0",
+        "previewOnly": false,
+        "executionReady": false,
+        "maturityPreview": {
+          "ptRaw": "10326636626691",
+          "onycRaw": "8970216458949",
+          "usdcAtCurrentDexRaw": "10324099208",
+          "projectedFutureProfitFeeUsdc": "16204960",
+          "projectedNetUsdc": "10307894248",
+          "grossApyBeforeDexFees": "0.122859997167673589651549875154122794655",
+          "netApyAfterCurrentDexAndFutureProfitFee": "0.115530023437950127103857239200044199955",
+          "displayProfitFeeBps": 500,
+          "assumption": "Current NAV and current DEX liquidity; maturity NAV, liquidity and fees are unknown"
+        },
+        "route": {
+          "dex": "Orca Whirlpool direct ONyc/USDC",
+          "pool": "7jhhyxPUKpu42hPGSYwgMXbR2dtVJHKhs8DW3sAAgAvX",
+          "pt": "Exponent CLMM",
+          "routerFeeBps": 0,
+          "networkFeeIncluded": false,
+          "rentIncluded": false
+        },
+        "quoteId": "69651c2277baae74d033776df4682d37e19f04323de8bf409a79711ecabcf0b5"
+      }
+    }
+  ],
+  "negative": [
+    "executor action cap",
+    "executor paused",
+    "foreign signer",
+    "executor daily cap",
+    "executor principal cap",
+    "expired quote",
+    "widened slippage",
+    "substituted market",
+    "substituted recipient",
+    "unsatisfied minimum rolls back Orca",
+    "native buy impossible PT minimum rolls back",
+    "native exit wrong ONyc recipient"
+  ],
+  "nativeOnyc": {
+    "depositedRaw": "150000000000",
+    "pt": "118881763702",
+    "exitToOwnerRaw": "99889162176",
+    "remainingSafeRaw": "0",
+    "buyBytes": 810,
+    "exitBytes": 843
+  },
+  "maturity": {
+    "pt": "1151590025642",
+    "usdcToOwner": "575654092",
+    "onycToOwner": "500163420840",
+    "redeemCu": 366873,
+    "bytes": 1014,
+    "clock": "1799586060",
+    "assumption": "First half at snapshot NAV; second half after synthetic +10% Scope update, DEX pool held fixed",
+    "quote": {
+      "market": "onyc-10jan27",
+      "action": "redeem",
+      "owner": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+      "authority": "G7kWM2ehDn1Mzrycdke1TpHYLCcBzi6ysBC1Z4afDwXt",
+      "asset": "USDC",
+      "input": {
+        "mint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+        "raw": "575795012821"
+      },
+      "intermediate": {
+        "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+        "expectedRaw": "500163420841",
+        "minRaw": "498913012289"
+      },
+      "output": {
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "expectedRaw": "575654092",
+        "minRaw": "572779420"
+      },
+      "slot": "452216890",
+      "chainTime": 1799586060,
+      "expiresAt": 1799586150,
+      "slippageBps": 50,
+      "nav": "1.151213761",
+      "navSource": "on-chain Scope 108",
+      "oracleTimestamp": 1799586060,
+      "oracleSlot": "452216890",
+      "redemptionRate": "1.151213761",
+      "redemptionRateFrozen": true,
+      "basisUsdc": "557560688",
+      "inputBasisUsdc": null,
+      "lossFloorUsdc": "529682654",
+      "economicAllowed": true,
+      "position": {
+        "address": "HEq8VRBJ1jjSf2qnVZz3DxVJGP6pMuf3LgTLwqM14DKh",
+        "safe": "DwBx1PdhrYeYUCXUuKt6Yk4o9HG3RohqQcoP1Na5uyn1",
+        "market": "7f1PgxY3kGsPqLAKpwcduZkcBEhpjMz7U1iJ4pcCCzDy",
+        "ptMint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+        "baseMint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+        "maturity": 1799586000,
+        "enabled": true,
+        "maxLossBps": 500,
+        "maxSlippageBps": 50,
+        "feeBps": 0,
+        "trackedPt": "1151590025642",
+        "principalUsdc": "1115121377",
+        "totalSpentUsdc": "12330242754",
+        "totalReceivedUsdc": "11085479702",
+        "realizedBasisUsdc": "11215121377",
+        "feesPaidUsdc": "0",
+        "recoveredBasisUsdc": "0",
+        "entryNavWords": [
+          "1151213761000",
+          "0",
+          "0",
+          "0"
+        ],
+        "entryCoreRateWords": [
+          "1151213761000",
+          "0",
+          "0",
+          "0"
+        ],
+        "entrySlot": "452216889",
+        "entryTimestamp": "1790838809"
+      },
+      "pilotFeeBps": 0,
+      "pilotFeeUsdc": "0",
+      "previewOnly": false,
+      "executionReady": false,
+      "maturityPreview": null,
+      "route": {
+        "dex": "Orca Whirlpool direct ONyc/USDC",
+        "pool": "7jhhyxPUKpu42hPGSYwgMXbR2dtVJHKhs8DW3sAAgAvX",
+        "pt": "Exponent Core merge",
+        "routerFeeBps": 0,
+        "networkFeeIncluded": false,
+        "rentIncluded": false
+      },
+      "quoteId": "84bb140b2064aad66d2757ff01388ebb129c0b4be4ee08cea4b5756a32427ba6"
+    },
+    "lateQuote": {
+      "market": "onyc-10jan27",
+      "action": "redeem",
+      "owner": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+      "authority": "DsbT4gM7yxFv2vX4SGAWGWHdCjGf7uS4ppYpYFPmb8rq",
+      "asset": "ONYC",
+      "input": {
+        "mint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+        "raw": "575795012821"
+      },
+      "intermediate": {
+        "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+        "expectedRaw": "500163420841",
+        "minRaw": "498913012289"
+      },
+      "output": {
+        "mint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+        "expectedRaw": "500163420841",
+        "minRaw": "497662603737"
+      },
+      "slot": "452216890",
+      "chainTime": 1799586060,
+      "expiresAt": 1799586150,
+      "slippageBps": 50,
+      "nav": "1.2663351371",
+      "navSource": "on-chain Scope 108",
+      "oracleTimestamp": 1799586060,
+      "oracleSlot": "452216890",
+      "redemptionRate": "1.151213761",
+      "redemptionRateFrozen": true,
+      "basisUsdc": "557560689",
+      "inputBasisUsdc": null,
+      "lossFloorUsdc": null,
+      "economicAllowed": true,
+      "position": {
+        "address": "HEq8VRBJ1jjSf2qnVZz3DxVJGP6pMuf3LgTLwqM14DKh",
+        "safe": "DwBx1PdhrYeYUCXUuKt6Yk4o9HG3RohqQcoP1Na5uyn1",
+        "market": "7f1PgxY3kGsPqLAKpwcduZkcBEhpjMz7U1iJ4pcCCzDy",
+        "ptMint": "HH7FiYbEfDwQoK2ZJpkMz1T6wG6TqPsWcxWCtEVgigrZ",
+        "baseMint": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+        "maturity": 1799586000,
+        "enabled": true,
+        "maxLossBps": 500,
+        "maxSlippageBps": 50,
+        "feeBps": 0,
+        "trackedPt": "575795012821",
+        "principalUsdc": "557560689",
+        "totalSpentUsdc": "12330242754",
+        "totalReceivedUsdc": "11661133794",
+        "realizedBasisUsdc": "11772682065",
+        "feesPaidUsdc": "0",
+        "recoveredBasisUsdc": "0",
+        "entryNavWords": [
+          "1151213761000",
+          "0",
+          "0",
+          "0"
+        ],
+        "entryCoreRateWords": [
+          "1151213761000",
+          "0",
+          "0",
+          "0"
+        ],
+        "entrySlot": "452216889",
+        "entryTimestamp": "1790838809"
+      },
+      "pilotFeeBps": 0,
+      "pilotFeeUsdc": "0",
+      "previewOnly": false,
+      "executionReady": false,
+      "maturityPreview": null,
+      "route": {
+        "dex": null,
+        "pool": null,
+        "pt": "Exponent Core merge",
+        "routerFeeBps": 0,
+        "networkFeeIncluded": false,
+        "rentIncluded": false
+      },
+      "quoteId": "dec541e2c6f16bb3ff73922937d1c0b4b0a57cba6b0d8677fcc1cd47583b02ee"
+    },
+    "lateCu": 274921
+  }
+}

@@ -158,3 +158,22 @@ Public stable Mainnet API now reports `deploymentVersion: dynamic_ticks`, `execu
 Existing pilot position still has **533605536 raw PT**. These quotes are snapshot examples, expire normally, and are not future proceeds guarantees. Devnet config separately returned 200 with its original program `8xa1D9Tydju5HqnRPVSJwNbjJGAdY55WKjbf9ijpz3D5`; it was not upgraded.
 
 On-chain operations in this release were **only loader preparation, upload and upgrade**. No user USDC/PT was transferred. Funded owner API/MWA entry, exit and interruption recovery remain the integration acceptance gate. RPC keys remained local, no Vercel secret was changed, and PR merge is separate from this completed program upgrade.
+
+## PR #32 integration check — 2026-10-05
+
+The original `yield-ai-os-sol` Preview deployments `dpl_EM5nh5P9QTtjr5W5VzQqYLy9UgFY` (PR #31) and `dpl_EoVSVgMwBAd9Rnm4DNx4WsywRBBA` (PR #32) failed TypeScript validation: `exponentOrca.ts` imports `exponentV2.ts`, while the historical contract branch lacked `allowImportingTsExtensions`. This was a web build failure; it did not undo the finalized Mainnet program upgrade.
+
+PR #29 and PR #30 were merged into `main`. PR #31 was merged into `codex/exponent-fixed-income`, not directly into `main`. PR #32 brings that contract/source/UI history into `main`. The PR branch was synchronized with `main`, keeping the current mobile planners, wallet-funded Exponent transactions, Config discriminator validation, simulation slots, dependency lockfile and Vercel tracing limits. Existing Rust error variants retain their order; the two variants from `main` follow them. This source merge is not another program deployment and is not a claim that the merged source reproduces the installed ELF.
+
+The legacy `/api/earn-ideas` route now resolves live RPC data at request time instead of during static generation. Without this change, a local build repeatedly received public RPC HTTP 429 responses and retried page generation.
+
+Public endpoints checked separately from the failing Preview:
+
+- Devnet: `https://yield-ai-solana-devnet.vercel.app/api/mobile/v1/config` returned HTTP 200. Scope: Solana Safe creation, atomic creation plus first deposit, wallet-to-Safe deposit, idle USDC withdrawal and transaction status. No Kamino or Exponent execution on this deployment.
+- Mainnet: `https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1/config` returned HTTP 200. Kamino yield returned `available`. Exponent position reported `dynamic_ticks`, `executionReady: true`.
+- Unsigned Mainnet plans for pilot owner `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2`: 1 USDC Kamino wallet deposit `ready` (159087 CU); 1 USDC Exponent wallet investment `ready` (567178 CU); 50% PT withdrawal `ready` (428441 CU). These probes did not sign or send transactions.
+- All 56 mobile tests passed and all 15 Rust host tests passed after resolving the source conflicts.
+
+Vlad can integrate against the two public base URLs and the documents on `main`: `docs/yield-ai-v2-solana-safe-api.md` and `docs/yield-ai-v2-owner-protocol-api.md`. The remaining mobile acceptance check is a funded wallet/MWA entry and exit, including timeout/status recovery. Unsigned simulation readiness is not that funded acceptance result.
+
+The integrated PR #32 Production build (`npm run build` in `web`) passed after the above fixes, including TypeScript validation and static generation.

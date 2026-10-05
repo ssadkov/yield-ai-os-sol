@@ -9,6 +9,7 @@ import {
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountIdempotentInstruction,
+  createCloseAccountInstruction,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
@@ -17,6 +18,7 @@ import {
 import { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket } from "@/lib/jupiterBorrowMarkets";
 import { fetchPrices, type JupiterPriceEntry } from "@/lib/jupiter";
 import { fetchJupiterLendMarkets } from "@/server/agent/protocols/jupiterLendMarkets";
+import { encodeRefundExcessLamportsData } from "../swap/anchorIx";
 import { wrapProtocolCpiIx } from "./wrapCpi";
 
 export const JUPITER_LEND_PROGRAM_ID = new PublicKey("jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi");
@@ -47,6 +49,7 @@ const COMPUTE_UNIT_LIMIT = 1_400_000;
 // real on-chain costs; the previous 0.05 SOL was wasteful and drained
 // user wallets across repeated activations.
 const VAULT_PDA_LAMPORT_BUFFER = 25_000_000;
+const VAULT_PDA_REFUND_RESERVE = 1_000_000;
 // Reserve on the authority wallet so it can still pay tx fees after the
 // top-up transfer goes out.
 const AUTHORITY_FEE_RESERVE = 5_000_000;
@@ -89,6 +92,32 @@ async function planVaultTopUp(args: {
     topUpLamports,
     currentVaultLamports,
   };
+}
+
+function buildVaultLamportRefundIx(args: {
+  vaultProgramId: PublicKey;
+  authority: PublicKey;
+  vault: PublicKey;
+  maxAmountLamports: number;
+}): TransactionInstruction | null {
+  if (args.maxAmountLamports <= 0) return null;
+  return new TransactionInstruction({
+    programId: args.vaultProgramId,
+    keys: [
+      { pubkey: args.authority, isSigner: true, isWritable: true },
+      { pubkey: args.vault, isSigner: false, isWritable: true },
+    ],
+    data: encodeRefundExcessLamportsData(BigInt(args.maxAmountLamports), BigInt(VAULT_PDA_REFUND_RESERVE)),
+  });
+}
+
+function appendIxToLastTx(
+  txs: { label: string; ixs: TransactionInstruction[] }[],
+  ix: TransactionInstruction | null,
+): boolean {
+  if (!ix || txs.length === 0) return false;
+  txs[txs.length - 1].ixs.push(ix);
+  return true;
 }
 
 export { JUPITER_XSTOCKS_USDC_MARKETS, type JupiterBorrowCollateralMarket };
@@ -581,6 +610,17 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
       ],
     })),
   ];
+  const refundCount = appendIxToLastTx(
+    txs,
+    buildVaultLamportRefundIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      maxAmountLamports: topUpLamports,
+    }),
+  )
+    ? 1
+    : 0;
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -591,7 +631,7 @@ export async function buildJupiterBorrowCollateralDepositTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length + topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length + refundCount,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -758,6 +798,17 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
       ],
     })),
   ];
+  const refundCount = appendIxToLastTx(
+    txs,
+    buildVaultLamportRefundIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      maxAmountLamports: topUpLamports,
+    }),
+  )
+    ? 1
+    : 0;
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -768,7 +819,7 @@ export async function buildJupiterBorrowCollateralWithdrawTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length + topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length + refundCount,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -862,6 +913,17 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
       ],
     })),
   ];
+  const refundCount = appendIxToLastTx(
+    txs,
+    buildVaultLamportRefundIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      maxAmountLamports: topUpLamports,
+    }),
+  )
+    ? 1
+    : 0;
 
   return {
     requiredPrograms: [JUPITER_LEND_PROGRAM_ID.toBase58()],
@@ -872,7 +934,7 @@ export async function buildJupiterBorrowUsdcBorrowTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length + topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length + refundCount,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -1045,6 +1107,17 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
       ],
     })),
   ];
+  const refundCount = appendIxToLastTx(
+    txs,
+    buildVaultLamportRefundIx({
+      vaultProgramId: args.vaultProgramId,
+      authority: args.authority,
+      vault: args.vault,
+      maxAmountLamports: topUpLamports,
+    }),
+  )
+    ? 1
+    : 0;
 
   const note =
     repayMode === "max_full_close"
@@ -1062,7 +1135,7 @@ export async function buildJupiterBorrowUsdcRepayTx(args: {
     summary: {
       vaultId: args.vaultId,
       nftId: args.positionId,
-      directCount: directIxs.length + topUpIxs.length,
+      directCount: directIxs.length + topUpIxs.length + refundCount,
       cpiCount: cpiIxs.length,
       sdkIxCount: built.ixs.length,
       topUpLamports,
@@ -1121,6 +1194,13 @@ export async function buildJupiterBorrowInitPositionSetupTx(args: {
           args.authority,
           BigInt(1),
           0,
+          [],
+          TOKEN_PROGRAM_ID,
+        ),
+        createCloseAccountInstruction(
+          executorPositionAta,
+          args.authority,
+          args.authority,
           [],
           TOKEN_PROGRAM_ID,
         ),

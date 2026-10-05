@@ -1,7 +1,7 @@
 import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { createHash } from 'node:crypto';
-import manifest from './exponent-onyc-10jan27.json';
+import manifest from './exponent-onyc-10jan27.json' with { type: 'json' };
 
 export const EXPONENT_MARKET = 'onyc-10jan27';
 export const SAFE_PROGRAM = new PublicKey('yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih');

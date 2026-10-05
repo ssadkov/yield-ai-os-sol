@@ -111,6 +111,8 @@ Execution model:
 - The vault program wraps Jupiter Borrow `Operate` through `execute_protocol_cpi`.
 - The vault PDA signs the inner Jupiter instructions with `invoke_signed`.
 - Initial position NFT creation is paid by the executor because a program-owned vault PDA cannot pay System Program rent directly.
+- After the position NFT is transferred to the vault PDA, the executor-owned temporary position ATA is closed back to the executor.
+- When the executor temporarily tops up the vault PDA for Jupiter setup rent, the follow-up refund instruction returns remaining excess SOL back to the executor, capped by that operation's top-up amount.
 
 Known behavior:
 - Jupiter Borrow position accounting uses 9-decimal internal precision even when the collateral token has 8 decimals.

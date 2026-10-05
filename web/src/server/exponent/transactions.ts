@@ -4,6 +4,7 @@ import { PDAUtil, ORCA_WHIRLPOOL_PROGRAM_ID } from '@orca-so/whirlpools-sdk';
 import { EXPONENT, SAFE_PROGRAM, type ExponentAction, rawAmount, safeAddress, positionAddress, tokenAddress, instructionTag, exponentAccounts, assertExponentInstruction } from '../../lib/exponentV2';
 import { quote, type QuoteRequest, type Loaded, dex, supportsDynamicTicksFromQuote } from './adapter';
 import Decimal from 'decimal.js';
+import { createHash } from 'node:crypto';
 import { exponentDeploymentReady } from './deployment';
 import { checkedOrcaTickArrays } from '../../lib/exponentOrca';
 
@@ -26,7 +27,7 @@ export function positionSetup(owner:PublicKey,lossBps=500,slippageBps=50) {
 }
 async function treasuryAddress(connection:Connection) {
   const info=await connection.getAccountInfo(policyAddress('config'),'confirmed');
-  if(!info||!info.owner.equals(SAFE_PROGRAM)||info.data.length<74)throw Error('Safe config unavailable');
+  if(!info||!info.owner.equals(SAFE_PROGRAM)||info.data.length!==75||!info.data.subarray(0,8).equals(createHash('sha256').update('account:Config').digest().subarray(0,8)))throw Error('Safe config unavailable');
   return new PublicKey(info.data.subarray(40,72));
 }
 async function serialize(connection:Connection,payer:PublicKey,ixs:TransactionInstruction[],withTables:boolean) {
@@ -41,7 +42,7 @@ async function serialize(connection:Connection,payer:PublicKey,ixs:TransactionIn
   const deployed=await exponentDeploymentReady(connection);
   const executionReady=sim.value.err===null&&deployed;
   return {unsignedTransaction:Buffer.from(bytes).toString('base64'),blockhash,lastValidBlockHeight,serializedBytes:bytes.length,requiredSigners:[payer.toBase58()],
-    simulation:{error:sim.value.err,unitsConsumed:sim.value.unitsConsumed??null,logs:sim.value.logs??[]},
+    simulation:{slot:sim.context.slot,error:sim.value.err,unitsConsumed:sim.value.unitsConsumed??null,logs:sim.value.logs??[]},
     networkFeeLamports:(await connection.getFeeForMessage(tx.message,'confirmed')).value,executionReady,
     deploymentStatus:!deployed?'Reviewed Safe ELF not deployed on Mainnet':sim.value.err===null?'Reviewed Safe ELF verified on Mainnet':'Transaction simulation failed; Safe ELF verified on Mainnet'};
 }
@@ -68,7 +69,7 @@ export async function unsignedOnycTransfer(connection:Connection,ownerString:str
     data:Buffer.concat([instructionTag(action),data])});
   return {action,owner:ownerString,safe:safe.toBase58(),amountRaw:amountString,...await serialize(connection,owner,[ix],false)};
 }
-export async function unsignedTransaction(connection:Connection,request:QuoteRequest & {minimumOutput?:string;quotedAt?:number}) {
+export async function unsignedTransaction(connection:Connection,request:QuoteRequest & {minimumOutput?:string;quotedAt?:number}, walletFunding=false) {
   if(!request.owner)throw Error('owner required');
   const owner=new PublicKey(request.owner),authority=new PublicKey(request.authority??request.owner),safe=safeAddress(owner);
   const q=await quote(connection,request),p=q.public.position;
@@ -105,5 +106,11 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
     'exponent_'+request.action+'_pt_for_onyc';
   const action=new TransactionInstruction({programId:SAFE_PROGRAM,keys:[...fixed,...nativeRecipient,...(request.action==='buy'?[...orca,...exp]:[...exp,...orca])],
     data:Buffer.concat([instructionTag(actionName),data])});
-  return {quote:q.public,minimumOutputRaw:minOut.toString(),safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[action],true)};
+  const prefix:TransactionInstruction[]=[];
+  if(walletFunding) {
+    if(request.action!=='buy'||q.public.asset!=='USDC'||!authority.equals(owner))throw Error('invalid wallet funding');
+    const funding=Buffer.alloc(8);funding.writeBigUInt64LE(rawAmount(request.amount));
+    prefix.push(new TransactionInstruction({programId:SAFE_PROGRAM,keys:[meta(owner,true,true),meta(safe,true),meta(new PublicKey(EXPONENT.usdc)),meta(tokenAddress(owner,EXPONENT.usdc),true),meta(tokenAddress(safe,EXPONENT.usdc),true),meta(TOKEN_PROGRAM_ID)],data:Buffer.concat([instructionTag('deposit'),funding])}));
+  }
+  return {quote:q.public,minimumOutputRaw:minOut.toString(),safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[...prefix,action],true)};
 }

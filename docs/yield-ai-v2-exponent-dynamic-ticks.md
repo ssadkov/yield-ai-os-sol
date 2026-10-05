@@ -176,5 +176,4 @@ Public endpoints checked separately from the failing Preview:
 
 Vlad can integrate against the two public base URLs and the documents on `main`: `docs/yield-ai-v2-solana-safe-api.md` and `docs/yield-ai-v2-owner-protocol-api.md`. The remaining mobile acceptance check is a funded wallet/MWA entry and exit, including timeout/status recovery. Unsigned simulation readiness is not that funded acceptance result.
 
-The integrated PR #32 Production build (
-pm run build in web) passed after the above fixes, including TypeScript validation and static generation.
+The integrated PR #32 Production build (`npm run build` in `web`) passed after the above fixes, including TypeScript validation and static generation.

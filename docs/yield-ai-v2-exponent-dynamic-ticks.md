@@ -46,9 +46,13 @@ ProgramData recipient: `GYgDydSMpo3RbbPRgg4bA71czMM7PKQbLqWyDjWb2ukY`.
 
 At slot 453494117: deployer **3.660720821 SOL**, ProgramData 687005 bytes / 3.490635640 SOL.
 
-- Candidate ProgramData: 690989 bytes; minimum rent **3.510874360 SOL**.
-- Permanent rent increment: **0.020238720 SOL**.
+- Candidate ELF requires 3984 extra bytes, but unsigned Mainnet loader simulation rejects extensions below **10240 bytes**. The successful unsigned simulation (2520 CU, fee 5000 lamports) extends ProgramData to **697245 bytes**, minimum rent **3.542654840 SOL**. No simulation changes chain state.
+- Permanent rent increment: **0.052019200 SOL**.
 - Temporary upload buffer: 690981 bytes; rent **3.510833720 SOL**, refunded on successful upgrade/close.
-- Network fees are additional. Use a **0.01 SOL fee cap** and recheck balances/rent immediately before submission; total permanent debit cap **0.030238720 SOL**, peak rent-plus-fee requirement **3.541072440 SOL**. The quoted balance is sufficient.
+- Network fees are additional. Use a **0.01 SOL fee cap** and recheck balances/rent immediately before submission; total permanent debit cap **0.062019200 SOL**, peak rent-plus-fee requirement **3.572852920 SOL**. The quoted balance is sufficient.
 
 **No upgrade is authorized by these tests or this document.** Obtain separate Mainnet approval with the exact artifact, payer/program/rent recipients and fee cap. After upgrade verify actual ProgramData hash, authority and rent; then probe 1-USDC invest plus partial/full exit unsigned plans. Funded owner/MWA entry/exit and interruption recovery remain the live acceptance gate. Preserve the previous ELF for rollback; do not rotate authority or touch USDC in the upgrade.
+
+## Published API recovery state
+
+API PR #30 (main), contract PR #31 (historical deployed source lineage). Public Mainnet Production `dpl_7VNySwuvkXjek7wtABk1AE4rtQPx`, runtime SHA `17e693e57ed81fbda13ca7c886d0d740480247d0`, **READY**. Public 1-USDC Exponent investment and all-PT exit both return 422 / `EXPONENT_UPGRADE_REQUIRED` without payload; position returns 200 with `533605536` raw PT and explicit blocked state. Mainnet and Devnet config endpoints each return 200 for their own pinned cluster/program; Mainnet Kamino APY returns 200 / available. This repairs diagnosis and fail-closed state; it does not claim the contract upgrade is complete.

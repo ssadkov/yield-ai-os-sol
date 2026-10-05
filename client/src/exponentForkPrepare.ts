@@ -3,10 +3,10 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import manifest from '../../web/src/lib/exponent-onyc-10jan27.json' with {type:'json'};
-import { ParsableWhirlpool } from '@orca-so/whirlpools-sdk';
+import { ParsableWhirlpool, TickUtil, PDAUtil, ORCA_WHIRLPOOL_PROGRAM_ID } from '@orca-so/whirlpools-sdk';
 
 const out=process.env.EXPONENT_FORK_DIR;if(!out)throw Error('EXPONENT_FORK_DIR required');mkdirSync(out,{recursive:true});
-const connection=new Connection('https://api.mainnet-beta.solana.com',{commitment:'confirmed',fetch:(url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(30_000)})});
+const connection=new Connection(process.env.EXPONENT_READ_RPC || 'https://solana-rpc.publicnode.com',{commitment:'confirmed',fetch:(url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(30_000)})});
 const programs=[['exponent_core','ExponentnaRg3CQbW6dqQNZKXp7gtZ9DGMp1cwC4HAS7'],['exponent_clmm','XPC1MM4dYACDfykNuXYZ5una2DsMDWL24CrYubCvarC'],['generic_sy','XP1BRLn8eCYSygrd8er5P4GKdzqKbC3DLoSsS5UYVZy'],['whirlpool','whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc']];
 const keys=new Set<string>([...manifest.lookupTables,manifest.coreVault,manifest.syMeta,manifest.scope,manifest.whirlpool,
   '4SNzvPoPnnzR6sz5GdEnUpSFoZQUSnpX6KpXRKzDDfLh','EFK2eCu8FoEJerhf9P877oT3wWuq5ciAGWHR21jJaebY',
@@ -15,6 +15,9 @@ const keys=new Set<string>([...manifest.lookupTables,manifest.coreVault,manifest
 for(const a of Object.values(manifest.actions))for(const k of a.accounts)if(k.role===0)keys.add(k.key);
 const poolAddress=new PublicKey(manifest.whirlpool),poolInfo=await connection.getAccountInfo(poolAddress);
 const pool=poolInfo&&ParsableWhirlpool.parse(poolAddress,poolInfo);if(!pool)throw Error('missing Whirlpool');
+const tickStart=TickUtil.getStartTickIndex(pool.tickCurrentIndex, pool.tickSpacing);
+const tickCandidates=Array.from({length:7},(_,i)=>PDAUtil.getTickArray(ORCA_WHIRLPOOL_PROGRAM_ID,poolAddress,tickStart+(i-3)*88*pool.tickSpacing).publicKey.toBase58());
+for(const key of tickCandidates)keys.add(key);
 for(const reward of pool.rewardInfos)if(!reward.mint.equals(PublicKey.default)){keys.add(reward.mint.toBase58());keys.add(reward.vault.toBase58());}
 for(const [name,id] of programs) {
   const info=await connection.getAccountInfo(new PublicKey(id));if(!info||info.data.length!==36||info.data.readUInt32LE()!==2)throw Error('unexpected program loader');
@@ -27,9 +30,9 @@ const accounts:{address:string;lamports:number;owner:string;executable:boolean;d
 const optional=['2xBrZFinVdw1Z88kBXcnTEw8TYr8WUUSJaNcrKB5pode','2qFqt7c5teKuuTMT7FCG24DzvsUwicuYovGpKAoB2XnK',
   '8gPKRueXeCRggCpndh25KAcwwBbfSx1QhgRY7qEfB2bT']; // Core vault authority, signer PDA without data
 const oracle=PublicKey.findProgramAddressSync([Buffer.from('oracle'),new PublicKey(manifest.whirlpool).toBuffer()],new PublicKey(programs[3][1]))[0].toBase58();
-all.push(oracle);optional.push(oracle);
-for(let i=0;i<all.length;i+=40) {
- const batch=all.slice(i,i+40),data=await connection.getMultipleAccountsInfo(batch.map(k=>new PublicKey(k)));
+all.push(oracle);optional.push(oracle,...tickCandidates);
+for(let i=0;i<all.length;i+=10) {
+ const batch=all.slice(i,i+10),data=await connection.getMultipleAccountsInfo(batch.map(k=>new PublicKey(k)));
  data.forEach((info,index)=>{if(!info){if(optional.includes(batch[index]))return;throw Error('missing upstream account '+batch[index]);}accounts.push({address:batch[index],lamports:info.lamports,owner:info.owner.toBase58(),executable:info.executable,data:info.data.toString('base64')});});
 }
 const file={fetchedAt:new Date().toISOString(),slot:await connection.getSlot(),programs:programs.map(([name,id])=>({name,programId:id})),accounts};

@@ -1,5 +1,6 @@
+import { createKaminoYieldReader } from "./kaminoYield";
 import { Connection } from "@solana/web3.js";
-import { mobileKaminoPositionState, kaminoDepositPlan, kaminoWithdrawalPlan, kaminoReturnPlan, creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
+import { MOBILE_KAMINO, mobileKaminoPositionState, kaminoDepositPlan, kaminoWithdrawalPlan, kaminoReturnPlan, creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
 import { v2MainnetRpcHeaders, V2_MAINNET_RPC_URL } from "./v2MainnetRpc.server";
 
 // Deployment selects one cluster. Requests cannot choose a program, mint, RPC or executor.
@@ -30,7 +31,7 @@ export async function mobileApi(action: () => Promise<unknown>) {
 export async function mobileConfig() {
   const { network, connection } = mobileSafeRuntime();
   if (await connection.getGenesisHash() !== network.genesis) throw new MobileApiError("RPC_CLUSTER_MISMATCH", "Configured RPC points to a different Solana cluster", 503);
-  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", rpcTransport: "/api/mobile/v1/rpc", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, createAndDeposit: true, transactionStatus: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: network.cluster === "mainnet", protocolWithdrawals: network.cluster === "mainnet", protocolRoutes: network.cluster === "mainnet" ? ["kamino_usdc", "exponent_onyc_10jan27"] : [], allocation: false, withdrawalScope: "idle_usdc_or_explicit_protocol", sponsoredGas: false, transactionSubmissionEnabled: mobileSubmissionEnabled(network) } };
+  return { version: 1, network, supportedOwnerTypes: ["solana"], transactionSigning: "wallet", transactionSubmission: "wallet", rpcTransport: "/api/mobile/v1/rpc", amounts: "decimal strings, USDC six decimals; SOL costs in lamport strings", timeUnit: "unix_ms", capabilities: { safeCreation: true, createAndDeposit: true, transactionStatus: true, evmOwner: false, deposits: true, withdrawals: true, protocolDeposits: network.cluster === "mainnet", protocolWithdrawals: network.cluster === "mainnet", protocolRoutes: network.cluster === "mainnet" ? ["kamino_usdc", "exponent_onyc_10jan27"] : [], kaminoYield: network.cluster === "mainnet", kaminoYieldEndpoint: network.cluster === "mainnet" ? "/api/mobile/v1/protocols/kamino/yield?cluster=mainnet" : null, allocation: false, withdrawalScope: "idle_usdc_or_explicit_protocol", sponsoredGas: false, transactionSubmissionEnabled: mobileSubmissionEnabled(network) } };
 }
 export function mobileSubmissionEnabled(network: { cluster: string }) {
   return network.cluster === "devnet" || process.env.V2_MOBILE_MAINNET_SEND_ENABLED === "1";
@@ -124,4 +125,15 @@ export async function mobileKaminoPosition(request: Request) {
   requireCluster(url.searchParams.get("cluster"), network);
   const owner = solanaOwner({ type: url.searchParams.get("ownerType"), address: url.searchParams.get("address") });
   return mobileKaminoPositionState(connection, network, owner);
+}
+
+const readKaminoYield = createKaminoYieldReader(MOBILE_KAMINO.vault);
+export async function mobileKaminoYield(request: Request) {
+  const url = new URL(request.url);
+  if ([...url.searchParams.keys()].some(key => key !== "cluster") || url.searchParams.getAll("cluster").length !== 1) throw new MobileApiError("INVALID_REQUEST", "Use only cluster=mainnet");
+  const { network } = mobileSafeRuntime();
+  requireCluster(url.searchParams.get("cluster"), network);
+  if (network.cluster !== "mainnet") throw new MobileApiError("UNSUPPORTED_CLUSTER", "Kamino yield is available on Mainnet only", 422);
+  try { return await readKaminoYield(); }
+  catch { throw new MobileApiError("YIELD_UNAVAILABLE", "Kamino yield is temporarily unavailable; no fresh rate issued", 503); }
 }

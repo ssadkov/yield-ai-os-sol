@@ -82,3 +82,23 @@ New Vercel project: `yield-ai-solana-mainnet`, id `prj_tQiZKhw25G02iz76wgTBlLxdc
 - Public unauthenticated probes: `/config` 200 with pinned Mainnet genesis/program; Kamino wallet deposit 1 USDC 200/ready (161801 CU, fee 5000 lamports); Exponent wallet buy 1 USDC 200/ready (450753 CU, fee 19000 lamports); Exponent all-PT exit 200/ready (418336 CU, fee 19000 lamports, minimum 513073 raw USDC). Zero-shares Kamino exit returns `redeemed`, no steps. Legacy agent/cron/RPC routes return 404.
 - The first public build used the official shared Solana RPC: config and Kamino worked, Exponent returned sanitized 503. Switching to public PublicNode passed both protocol probes without transferring a secret. Private Helius is an optional later configuration that still requires destination-specific consent.
 - Fixed Vercel bundling limit by restricting forced Jupiter runtime tracing to Jupiter/agent routes and excluding source maps/declaration files. Traced sizes: legacy Kamino 76.56 MB (was 270.21 MB), Exponent deposit 40.36 MB, mobile Kamino withdrawal 22.37 MB. Final Vercel Production and existing app Preview builds pass. These HTTP checks only simulate unsigned plans; no user funds were sent.
+
+## Kamino yield for the mobile strategy card
+
+`GET /api/mobile/v1/protocols/kamino/yield?cluster=mainnet` is public and requires no owner or existing Safe. `/config` advertises `capabilities.kaminoYield` and `kaminoYieldEndpoint`. Devnet cannot serve Mainnet yield as testnet yield.
+
+The current pinned route is **Kamino Private Credit USDC**, vault `91b1opzHNUQobfLZxGMNYT5qDRKoqV8FdsdQBmH4wBxy`. It is the same vault used by the typed owner deposit/withdrawal API.
+
+- `apyRatio`: decimal string from Kamino's published `apy`, e.g. `"0.07487914368164117"`.
+- `apyPercent`: exact percentage string, e.g. `"7.487914368164117"`; round to two decimals for display, do not multiply this field again.
+- `historicalApyRatio`: published `24h`, `7d`, `30d`, `90d`, `180d`, `365d` ratios. Missing/invalid optional values are `null`, never zero.
+- `rateType: variable`, `guaranteed: false`: published indicative/trailing metrics, not a guaranteed future rate or the user's realized PnL.
+- `source` and `sourceField`: fixed official Kamino metrics URL and `apy`. See [official APY documentation](https://kamino.com/docs/build/earn/get-vault-apys).
+- `fetchedAt`, `expiresAt`: Unix milliseconds, at most 60 seconds of server cache. `sourceUpdatedAt: null`: Kamino does not provide a metrics generation timestamp here; retrieval time must not be represented as that timestamp.
+- `feeScope: kamino_published`, `yieldAiPerformanceFeeIncluded: false`, `networkFeeIncluded: false`: not a net Yield AI/user return. Safe performance fee is charged separately on positive realized profit.
+
+Invalid required APY, timeout or failed upstream refresh returns HTTP 503 / `YIELD_UNAVAILABLE`; expired cached rates are not served as fresh. Show unavailable/last known with a visible timestamp in the app, not 0% or a silently retained rate. Wrong/unknown request fields return 400. The endpoint never signs, builds or submits a transaction.
+
+**Creation default remains idle:** new Safe allocation is `[0,0,0,0,0,0,0,0]`. Creating or funding Safe does not auto-invest into Kamino. Manual Kamino deposit temporarily sets the required target and restores the owner's allocation in the same transaction.
+
+Verification: four yield tests (decimal/percent units, missing/corrupt/negative/zero metrics, 60-second cache and refresh failures, malformed/oversized responses); 51 total mobile tests. Official source snapshot on 2026-10-05: APY ~7.49%, seven-day APY ~7.64%; examples, never hardcode them.

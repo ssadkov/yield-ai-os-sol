@@ -115,3 +115,35 @@ The public API detects `deploymentVersion: dynamic_ticks` and `marketInfo.execut
 The old reviewed fixed-only ELF is still recognized for fixed arrays. Dynamic arrays require the exact new on-chain ELF. Each selected Orca account is checked against the pinned pool, canonical PDA, owner and ABI. Unsupported or malformed routes return 422 without a signing payload; never bypass the availability guard. See [cause, tests, finalized transaction and costs](yield-ai-v2-exponent-dynamic-ticks.md).
 
 The upgrade used SOL only. Public probes did not sign/send USDC or PT transactions; funded owner/MWA entry/exit and interruption recovery remain to be accepted in the mobile application.
+
+## Public Exponent yield before wallet connection
+
+GET `/api/mobile/v1/protocols/exponent/yield?cluster=mainnet`
+
+This read-only endpoint quotes the reviewed PT-ONyc market for exactly **100 USDC** with `action=buy`, `asset=USDC`, `slippageBps=50` and **no owner or authority**. No Safe, prepared position, token balance, wallet connection or signature is required. It returns no transaction and cannot move funds. Only `cluster=mainnet` is accepted; owner, arbitrary amounts, markets, duplicate cluster values and other query parameters are rejected.
+
+| Field | Meaning |
+|---|---|
+| `status` | `available` for a fresh validated quote |
+| `referenceAmountUsdc` | Decimal string `100`; this is the quoted reference amount |
+| `apyRatio` / `apyPercent` | Exact `maturityPreview.netApyAfterCurrentDexAndFutureProfitFee` from the buy quote; percent = ratio × 100 |
+| `aprRatio` / `aprPercent` | Simple annualized net return, distinct from compounded APY |
+| `maturity` | ISO timestamp `2027-01-10T13:00:00.000Z` |
+| `fetchedAt` / `expiresAt` | Unix **milliseconds**; refresh by expiry. Cache maximum 60 seconds, shortened to the quote/oracle deadline |
+| `chainTimeUnixSeconds` | Chain clock in **seconds**, explicitly named |
+| `quoteId` / `slot` | Reference quote identity and chain snapshot |
+| `projectedNetUsdc` | Decimal USDC proceeds for the 100-USDC reference at maturity using today's NAV/DEX |
+| `projectedFutureProfitFeeUsdc` | Future display policy: 5% of positive projected profit only |
+| `pilotProfitFeeBps` / `displayProfitFeeBps` | Current Exponent pilot charges 0; displayed future profit fee policy is 500 bps |
+| `indicative` / `guaranteed` | `true` / `false`; this is a quote-based maturity scenario |
+| `networkFeeIncluded` / `rentIncluded` | Both false |
+
+APR = (projected net proceeds / 100 USDC − 1) × 31,536,000 / seconds until maturity. APY is the existing compounded quote calculation; do not relabel an APY value as APR. The Kamino yield endpoint returns APY, so the Flexible card must say APY when displaying `apyPercent`.
+
+The reference includes current entry/estimated maturity-exit DEX economics and projected future profit fee. PT maturity payoff and the future **USDC** conversion are different: future ONyc NAV and DEX liquidity/fees are unknown. A card may display `aprPercent` as “estimated APR until maturity” or `apyPercent` as “estimated APY”; the amount-specific invest quote remains the pre-signing source of truth. Do not describe the reference USDC proceeds as guaranteed. For “If you deposit” on 1k/10k, multiplying the 100-USDC preview is only an estimate and does not include size-dependent price impact; refresh an actual invest plan before signing.
+
+Fresh requests share an in-flight quote/cache within each function instance. Expired results are never returned after an upstream failure. HTTP 503 returns the standard error envelope with `error.code=YIELD_UNAVAILABLE` and `error.details={status:"unavailable",apyRatio:null,aprRatio:null}`; no private RPC URL or raw SDK exception is exposed. Missing/unsupported query values are HTTP 400. Devnet has no reviewed Exponent market and does not expose an execution route; querying this endpoint on a Devnet deployment is rejected.
+
+`/config` advertises `capabilities.exponentYield` and `capabilities.exponentYieldEndpoint`. No program upgrade or on-chain transaction is needed to add the endpoint.
+
+Verification of the ownerless yield addition (2026-10-05): all 62 mobile tests passed; the existing app Vercel Preview build succeeded. Dedicated Mainnet API Preview `dpl_14EAtb2hGMuqM2P89S8qqcAj36YX` returned HTTP 200, `Cache-Control: no-store`, `status=available` without any owner. At fetchedAt `1791208851979`, reference 100 USDC produced APR `11.446320247816978327951630327736760115313680667053` percent, APY `11.93604798176184764` percent, and projected net proceeds `103.040574` USDC. These are an expiring snapshot, not a static promised rate. Foreign owner/duplicate cluster/wrong cluster probes returned HTTP 400. Production release of reviewed code SHA `ad3ce0e888fb95122f4007bd16c23681483684a6` is READY in deployment `dpl_Hf9YTvsmdgXnwxZXHXKwzeX3Ca1L`. The stable public Mainnet URL returned HTTP 200 / available at fetchedAt `1791209090156`; config advertises the endpoint and keeps transaction submission enabled. Kamino yield remained available and the core owner deposit plan returned ready after unsigned simulation. Both Vercel builds completed with TypeScript validation. PR #33 carries the source and documentation.

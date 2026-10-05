@@ -103,4 +103,11 @@ Invalid required APY, timeout or failed upstream refresh returns HTTP 503 / `YIE
 
 Verification: four yield tests (decimal/percent units, missing/corrupt/negative/zero metrics, 60-second cache and refresh failures, malformed/oversized responses); 51 total mobile tests. Official source snapshot on 2026-10-05: APY ~7.49%, seven-day APY ~7.64%; examples, never hardcode them.
 
-Published APY addition: commit `2540b681b2fc838e4c92bb8af067d954623e2a71`, Production deployment `dpl_5zEtqwE2hxxfbwhepyenVdeAAV6n`, READY with stable alias assigned. Public unauthenticated yield probe returned `available`, `apyPercent: "7.487914368164117"` and the pinned vault; public config advertises the yield endpoint. All 51 mobile tests, TypeScript and local Production build passed. No on-chain transaction or program upgrade was performed. PR #29 remains the merge target.
+Published APY addition: commit `2540b681b2fc838e4c92bb8af067d954623e2a71`, Production deployment `dpl_5zEtqwE2hxxfbwhepyenVdeAAV6n`, READY with stable alias assigned. Public unauthenticated yield probe returned `available`, `apyPercent: "7.487914368164117"` and the pinned vault; public config advertises the yield endpoint. All 51 mobile tests, TypeScript and local Production build passed. No on-chain transaction or program upgrade was performed. PR #29 was merged into main on 2026-10-05.
+
+
+## Exponent availability update — 2026-10-05
+
+The ready probes above are historical. The Orca active price range now uses DynamicTickArray, unsupported by the current fixed-only Safe ELF. This is not an RPC failure. API investment/USDC exit returns **422 `EXPONENT_UPGRADE_REQUIRED`**, with no signing payload; position reads expose `marketInfo.executionReady: false` and `unavailableCode`. Do not present Exponent as executable until the reviewed upgrade is actually on-chain.
+
+The API also recognizes candidate ELF SHA-256 `48da204eea62b79db16474045a2ede6e139c54e4d1023f99b09dfc3adfe7565d` (690944 bytes), but enables dynamic arrays only when its exact on-chain hash matches. Each selected Orca tick account remains bound to the pinned pool, canonical PDA and reviewed ABI. Kamino/core Safe and Devnet behavior are unchanged. See [recovery evidence, upgrade budget and acceptance boundary](yield-ai-v2-exponent-dynamic-ticks.md).

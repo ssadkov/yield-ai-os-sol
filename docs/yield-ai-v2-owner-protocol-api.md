@@ -193,3 +193,14 @@ These are synthetic wallet augmentations of a real unsigned API plan, not captur
 
 Local verification: all 85 mobile tests passed, including 14 new broadcast compatibility/security tests. The previous transport test now uses a real local test signature instead of fabricated nonzero signature bytes.
 TypeScript no-emit validation and diff whitespace check also passed.
+
+### Priority-fee ceiling correction (2026-10-07)
+
+A subsequent Seeker deposit was rejected by our transport with `Compute unit price exceeds transport limit`. This is the backend's 500000 micro-lamports/CU ceiling from the first wallet-guard patch, not an on-chain program failure. The screenshot alone does not provide the wallet's actual CU price/limit, and its displayed network cost includes rent; it cannot establish the final wallet-modified fee. The rejection occurs before upstream submission.
+
+The corrected policy limits **total priority fee to 1000000 lamports (0.001 SOL)**, rather than limiting price per CU. Calculate `ceil(priceMicroLamports * requestedCuLimit / 1000000)` using BigInt, after reviewing all budget instructions regardless of position. The existing CU-limit ceiling stays 1400000; without an explicit limit, use that conservative upper bound. Duplicate budget variants are rejected, consistent with the runtime, so a later low price/limit cannot mask an earlier expensive value. The cap excludes the base fee and rent. Example: 3000000 micro-lamports/CU at 300000 CU costs 900000 lamports (0.0009 SOL) and is now permitted, despite exceeding the previous per-CU ceiling.
+
+Over-budget responses retain HTTP 400 / `INVALID_TRANSACTION` and include safe decimal-string diagnostics in `error.details`: `priorityFeeLamports`, `maxPriorityFeeLamports`, `computeUnitPriceMicroLamports`, `computeUnitLimit`, and `conservativeLimit`. No signed bytes, private RPC URLs or credentials are returned. Signature, owner/payer, Safe/ATA, Lighthouse discriminator 6, packet size and mandatory-preflight checks remain in place. No transaction is rewritten after the wallet signs. Mobile request shape and the contract are unchanged.
+
+Primary reference: [Solana compute budget and fee constraints](https://solana.com/docs/core/fees/compute-budget). Acceptance still requires the rejected wallet's actual price/limit or expired payload, and then a funded Seeker retry after the corrected API is released. Do not claim the pictured transaction has been accepted based on synthetic regression tests alone.
+Verification: all 89 mobile tests passed, including high-price/low-total acceptance, exact ceiling round-up, conservative missing-limit handling, u64 extremes and duplicate-budget rejection.

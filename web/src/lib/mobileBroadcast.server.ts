@@ -4,13 +4,13 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { MobileApiError } from "./mobileSafe.ts";
 const allowed = new Set(["initialize_with_limits", "deposit", "withdraw", "set_allocation", "kamino_deposit", "kamino_withdraw", "init_exponent_position", "exponent_buy_pt", "exponent_sell_pt", "exponent_redeem_pt"].map(name => createHash("sha256").update("global:" + name).digest().subarray(0,8).toString("hex")));
 export const LIGHTHOUSE_PROGRAM = new PublicKey("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
-export const MAX_COMPUTE_UNIT_PRICE = BigInt(500_000); // micro-lamports/CU; <= 0.0007 SOL priority at 1.4M CU.
+export const MAX_PRIORITY_FEE_LAMPORTS = BigInt(1_000_000); // 0.001 SOL priority, excluding base fee and rent.
 function invalid(message: string): never { throw new MobileApiError("INVALID_TRANSACTION", message); }
 function validateBudget(ix: TransactionInstruction) {
   if (ix.keys.length || !ix.data.length) invalid("Malformed compute budget instruction");
   const tag = ix.data[0];
   if (tag === 3) {
-    if (ix.data.length !== 9 || ix.data.readBigUInt64LE(1) > MAX_COMPUTE_UNIT_PRICE) invalid("Compute unit price exceeds transport limit");
+    if (ix.data.length !== 9) invalid("Malformed compute unit price instruction");
   } else if ([1, 2, 4].includes(tag)) {
     if (ix.data.length !== 5) invalid("Malformed compute budget instruction");
     const value = ix.data.readUInt32LE(1);
@@ -45,8 +45,19 @@ export async function validateMobileBroadcast(connection: Connection, network: {
   catch { return invalid("Malformed transaction account indices"); }
   const program = new PublicKey(network.programId);
   let safeActions = 0;
+  const budgetTypes = new Set<number>();
+  let computeUnitLimit = BigInt(1_400_000); // Conservative upper bound when the wallet omits an explicit limit.
+  let computeUnitPrice = BigInt(0);
   for (const ix of message.instructions) {
-    if (ix.programId.equals(ComputeBudgetProgram.programId)) { validateBudget(ix); continue; }
+    if (ix.programId.equals(ComputeBudgetProgram.programId)) {
+      validateBudget(ix);
+      const type = ix.data[0];
+      if (budgetTypes.has(type)) invalid("Duplicate compute budget instruction");
+      budgetTypes.add(type);
+      if (type === 2) computeUnitLimit = BigInt(ix.data.readUInt32LE(1));
+      if (type === 3) computeUnitPrice = ix.data.readBigUInt64LE(1);
+      continue;
+    }
     if (ix.programId.equals(LIGHTHOUSE_PROGRAM)) { validateLighthouse(ix); continue; }
     if (ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)) continue;
     if (!ix.programId.equals(program) || !allowed.has(ix.data.subarray(0,8).toString("hex"))) invalid("Transport supports reviewed Safe operations only");
@@ -54,6 +65,13 @@ export async function validateMobileBroadcast(connection: Connection, network: {
     safeActions++;
   }
   if (!safeActions) invalid("Missing Safe operation");
+  // Solana charges for the requested CU limit, not units actually consumed. Round up using integers.
+  const priorityFee = (computeUnitPrice * computeUnitLimit + BigInt(999_999)) / BigInt(1_000_000);
+  if (priorityFee > MAX_PRIORITY_FEE_LAMPORTS) throw new MobileApiError("INVALID_TRANSACTION", "Priority fee exceeds transport limit", 400, {
+    priorityFeeLamports: priorityFee.toString(), maxPriorityFeeLamports: MAX_PRIORITY_FEE_LAMPORTS.toString(),
+    computeUnitPriceMicroLamports: computeUnitPrice.toString(), computeUnitLimit: computeUnitLimit.toString(),
+    conservativeLimit: !budgetTypes.has(2),
+  });
 }
 export async function submitMobileBroadcast(connection: Connection, network: { programId: string }, wire: Buffer) {
   await validateMobileBroadcast(connection, network, wire);

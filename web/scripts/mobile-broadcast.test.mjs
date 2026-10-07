@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { AddressLookupTableAccount, ComputeBudgetProgram, Keypair, PublicKey, SendTransactionError, SystemProgram, Transaction, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { createAssociatedTokenAccountIdempotentInstruction, getAssociatedTokenAddressSync } from '@solana/spl-token';
-import { validateMobileBroadcast, submitMobileBroadcast, LIGHTHOUSE_PROGRAM, MAX_COMPUTE_UNIT_PRICE } from '../src/lib/mobileBroadcast.server.ts';
+import { validateMobileBroadcast, submitMobileBroadcast, LIGHTHOUSE_PROGRAM, MAX_PRIORITY_FEE_LAMPORTS } from '../src/lib/mobileBroadcast.server.ts';
 import { MOBILE_NETWORKS, safeAddresses } from '../src/lib/mobileSafe.ts';
 
 // Local, deterministic test signer only. Nothing from these fixtures is sent to a real RPC.
@@ -73,13 +73,43 @@ test('Reject malformed Lighthouse data or extra/missing target accounts',async()
   for(const data of [Buffer.alloc(0),Buffer.from([6]),Buffer.from([6,4])]) {const ix=guard();ix.data=data;await rejects(signed([safe(),ix]));}
   for(const count of [0,2]) {const ix=guard();ix.keys=count ? [...ix.keys,{pubkey:a.safe,isSigner:false,isWritable:false}] : [];await rejects(signed([safe(),ix]));}
 });
-test('Budget cap admits observed prices and rejects expensive/unknown/malformed budgets',async()=>{
-  await validateMobileBroadcast(noTables,network,signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:MAX_COMPUTE_UNIT_PRICE}),guard()]));
-  await rejects(signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:MAX_COMPUTE_UNIT_PRICE+1n})]));
+test('Budget accepts observed prices and rejects excessive totals/unknown/malformed instructions',async()=>{
+  await validateMobileBroadcast(noTables,network,signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:500000}),guard()]));
+  await rejects(signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:1000000})]));
   await rejects(signed([safe(),ComputeBudgetProgram.setComputeUnitLimit({units:1400001})]));
   for(const data of [Buffer.from([0,1,2,3,4]),Buffer.from([3,1]),Buffer.from([2]),Buffer.from([255])]) {
     await rejects(signed([safe(),new TransactionInstruction({programId:ComputeBudgetProgram.programId,keys:[],data})]));
   }
+});
+test('High wallet CU price passes when requested total priority fee stays within 0.001 SOL',async()=>{
+  for (const trailingPrice of [false,true]) {
+    const limit=ComputeBudgetProgram.setComputeUnitLimit({units:300000});
+    const price=ComputeBudgetProgram.setComputeUnitPrice({microLamports:3000000});
+    const ixs=trailingPrice ? [limit,safe(),price,guard(5)] : [price,guard(4),safe(),limit];
+    await validateMobileBroadcast(noTables,network,signed(ixs));
+  }
+});
+test('Total fee cap uses exact round-up and exposes precise safe diagnostics at the boundary',async()=>{
+  const wire=price=>signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:price}),ComputeBudgetProgram.setComputeUnitLimit({units:300000}),guard()]);
+  await validateMobileBroadcast(noTables,network,wire(3333333n)); // ceil(999999.9) = 1000000.
+  await assert.rejects(()=>validateMobileBroadcast(noTables,network,wire(3333334n)),e=>{
+    assert.equal(e.code,'INVALID_TRANSACTION');assert.equal(e.status,400);
+    assert.deepEqual(e.details,{priorityFeeLamports:'1000001',maxPriorityFeeLamports:String(MAX_PRIORITY_FEE_LAMPORTS),computeUnitPriceMicroLamports:'3333334',computeUnitLimit:'300000',conservativeLimit:false});
+    return true;
+  });
+  await rejects(wire((1n<<64n)-1n));
+});
+test('Missing CU limit uses conservative 1.4M bound; zero price needs no limit',async()=>{
+  await validateMobileBroadcast(noTables,network,signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:0})]));
+  await validateMobileBroadcast(noTables,network,signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:714285})]));
+  await assert.rejects(()=>validateMobileBroadcast(noTables,network,signed([safe(),ComputeBudgetProgram.setComputeUnitPrice({microLamports:714286})])),e=>e.code==='INVALID_TRANSACTION'&&e.details.conservativeLimit&&e.details.priorityFeeLamports==='1000001');
+});
+test('Duplicate budgets cannot select a cheaper limit/price to bypass the fee ceiling',async()=>{
+  for (const variants of [
+    [ComputeBudgetProgram.setComputeUnitPrice({microLamports:30000000}),ComputeBudgetProgram.setComputeUnitPrice({microLamports:1})],
+    [ComputeBudgetProgram.setComputeUnitLimit({units:1400000}),ComputeBudgetProgram.setComputeUnitLimit({units:1})],
+    [ComputeBudgetProgram.requestHeapFrame({bytes:32768}),ComputeBudgetProgram.requestHeapFrame({bytes:32768})],
+  ]) await assert.rejects(()=>validateMobileBroadcast(noTables,network,signed([variants[0],safe(),variants[1],guard()])),e=>e.code==='INVALID_TRANSACTION'&&e.message==='Duplicate compute budget instruction');
 });
 test('Reject invalid, absent, or stale owner signature after message tampering',async()=>{
   const wire=signed([safe(),guard()]);

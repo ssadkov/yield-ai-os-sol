@@ -168,3 +168,28 @@ Local patched **unsigned Mainnet** simulations with the configured Helius provid
 | `EP9fKzBpQzyZC2GYjjAF9tKEeUwi7dqNqMStmxdYu4h2` | ready / no simulation error | 569770 | 1083 | 19000 lamports | `[5000,5000,0,0,0,0,0,0]`; no override needed |
 
 No transaction was signed or broadcast. These results do not prove a funded mobile deposit. Wallet-added Lighthouse compatibility is a separate transport issue and is not changed by this patch. A wallet-modified packet must still fit the 1232-byte limit; the bytes above are before wallet augmentation. Production must deploy this reviewed patch before the mobile app can use the corrected owner plan.
+
+## Phantom / Solflare wallet guards (2026-10-07)
+
+The mobile `/rpc` transport now accepts the wallet augmentation reported on Seeker: Lighthouse `L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95` **discriminator 6 (`AssertAccountInfoMulti`) only**, with one target account. It may occur anywhere, repeatedly, within the unchanged 1232-byte packet limit. Both reported data prefixes `06 04` and `06 05` are supported; the assertion body is decoded by mandatory RPC preflight. This is intentionally narrower than permitting every Lighthouse command: memory write/close and all other unreviewed discriminators remain `400 INVALID_TRANSACTION`. Account flags are global in Solana messages, so a guard reading the writable owner/Safe is not rejected just because decompilation shows writable/signer flags.
+
+Source review: the [generated instruction SDK](https://github.com/Jac0xb/lighthouse/blob/main/clients/js/src/generated/instructions/assertAccountInfoMulti.ts) pins discriminator 6 and a single target; the [processor](https://github.com/Jac0xb/lighthouse/blob/main/programs/lighthouse/src/processor/assert_target_account.rs) and [account-info evaluation](https://github.com/Jac0xb/lighthouse/blob/main/programs/lighthouse/src/types/assert/account_info.rs) only inspect state. Unsigned Mainnet probes against the deployed program confirmed both log variants and rejected a false assertion with custom error 6400. No signature or broadcast was performed.
+
+ComputeBudget instructions may appear before or after Safe instructions. Supported variants are heap frame, compute-unit limit, compute-unit price and loaded-account data limit; their data lengths and bounds are checked. Price is capped at **500000 micro-lamports/CU**. This admits the reported Phantom 375000 and Solflare 100000 values. With the 1400000 CU ceiling, priority fee cannot exceed 700000 lamports (0.0007 SOL), plus base fee and any account rent. The plan's cost is the original unsigned estimate; if the wallet changes its budget, its final fee can differ. This patch does not add automatic priority-price selection to Seed Vault plans.
+
+Envelope validation still requires v0, one owner signature/payer, at most four active LUTs, a reviewed Safe operation and no unrelated top-level programs. The owner signature is now verified locally; each Safe authority must equal that payer. Safe/ATA instructions are never rewritten by the transport. Existing on-chain account/mint/recipient validation stays authoritative. The transport has no stored plan/planId comparison; it does not claim to compare signed Safe/ATA bytes or a re-signed blockhash with a server-side original plan. Clients must continue checking the unsigned plan before asking the wallet to sign.
+
+`/rpc` invokes `sendRawTransaction` once with `skipPreflight:false`, `preflightCommitment:confirmed`, `maxRetries:2`. An explicit RPC error response before acceptance is sanitized as HTTP 422 / `SIMULATION_FAILED`; transport validation stays HTTP 400 / `INVALID_TRANSACTION`. Unknown network/provider failures remain 503: they can occur after submission, so query signature status before re-signing. Error envelope shape is unchanged and private provider URLs/logs are never returned.
+
+Unsigned Mainnet create-and-deposit **0.5 USDC** simulations for owner `CK2uPRmqnZSC4txzhu9upPpEDETiJfPg2axhU3Fx9YcK`, prospective Safe `J62yL3Wb3UrdTSME35TSpN6LppzFYtuhxegJLy542XM8`:
+
+| Fixture | Simulation | CU | Packet bytes |
+| --- | --- | ---: | ---: |
+| Original Seed Vault plan | success | 62378 | 593 |
+| Phantom-style: two guards, 375000 price | success | 64479 | 657 |
+| Solflare-style: trailing price 100000 and `06 05` guard | success | 63506 | 647 |
+
+These are synthetic wallet augmentations of a real unsigned API plan, not captured wallet payloads or funded Seeker acceptance. After release, Vlad should repeat setup and Flexible deposit/withdraw with Phantom and Solflare on the same app build, then check Seed Vault. If a wallet emits another Lighthouse discriminator/account shape, retain the rejection and capture the full expired plan/signed payload for review. No contract upgrade or mobile request-format change is needed. The dedicated Mainnet API project must deploy the merged fix; deploying only the web UI project does not update this host.
+
+Local verification: all 85 mobile tests passed, including 14 new broadcast compatibility/security tests. The previous transport test now uses a real local test signature instead of fabricated nonzero signature bytes.
+TypeScript no-emit validation and diff whitespace check also passed.

@@ -48,20 +48,21 @@ test("u64 bounds, minima and proportional basis keep integer safety", () => {
 // Transport is only for reviewed signed owner operations, not a public generic RPC.
 test("broadcast rejects unsigned packets, generic CPI and extra transfers", async () => {
   const { validateMobileBroadcast } = await import("../src/lib/mobileBroadcast.server.ts");
-  const { TransactionMessage, VersionedTransaction, SystemProgram } = await import("@solana/web3.js");
+  const { TransactionMessage, VersionedTransaction, SystemProgram, Keypair } = await import("@solana/web3.js");
   const program = new PublicKey("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
   const { createHash } = await import("node:crypto");
+  const signer = Keypair.fromSeed(new Uint8Array(32).fill(23));
   const packet = (name, extra=false) => {
-    const ix = new TransactionInstruction({programId:program,keys:[],data:createHash("sha256").update("global:"+name).digest().subarray(0,8)});
-    const instructions=[ix,...(extra?[SystemProgram.transfer({fromPubkey:owner,toPubkey:program,lamports:1})]:[])];
-    return new VersionedTransaction(new TransactionMessage({payerKey:owner,recentBlockhash:String(PublicKey.default),instructions}).compileToV0Message());
+    const ix = new TransactionInstruction({programId:program,keys:[{pubkey:signer.publicKey,isSigner:true,isWritable:true}],data:createHash("sha256").update("global:"+name).digest().subarray(0,8)});
+    const instructions=[ix,...(extra?[SystemProgram.transfer({fromPubkey:signer.publicKey,toPubkey:program,lamports:1})]:[])];
+    return new VersionedTransaction(new TransactionMessage({payerKey:signer.publicKey,recentBlockhash:String(PublicKey.default),instructions}).compileToV0Message());
   };
   const unsigned=packet("deposit");
   await assert.rejects(validateMobileBroadcast({}, {programId:String(program)}, Buffer.from(unsigned.serialize())));
   for(const [name,extra] of [["execute_protocol_cpi",false],["deposit",true]]) {
-    const tx=packet(name,extra);tx.signatures[0].fill(1);
+    const tx=packet(name,extra);tx.sign([signer]);
     await assert.rejects(validateMobileBroadcast({}, {programId:String(program)}, Buffer.from(tx.serialize())));
   }
-  const tx=packet("exponent_sell_pt");tx.signatures[0].fill(1);
+  const tx=packet("exponent_sell_pt");tx.sign([signer]);
   await assert.doesNotReject(validateMobileBroadcast({}, {programId:String(program)}, Buffer.from(tx.serialize())));
 });

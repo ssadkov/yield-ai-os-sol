@@ -1,5 +1,5 @@
 import { mobileApi, mobileSafeRuntime, mobileSubmissionEnabled } from "@/lib/mobileSafeApi.server";
-import { validateMobileBroadcast } from "@/lib/mobileBroadcast.server";
+import { submitMobileBroadcast } from "@/lib/mobileBroadcast.server";
 import { MobileApiError } from "@/lib/mobileSafe";
 
 export const runtime = "nodejs";
@@ -36,9 +36,8 @@ export async function POST(request: Request) {
       if (call.params.length > 2 || typeof call.params[0] !== "string" || call.params[0].length > 1644 || !/^[A-Za-z0-9+/]+={0,2}$/.test(call.params[0])) throw new MobileApiError("INVALID_REQUEST", "Expected one base64 signed transaction");
       const wire = Buffer.from(call.params[0], "base64");
       if (wire.length > 1232) throw new MobileApiError("INVALID_REQUEST", "Transaction exceeds packet size");
-      await validateMobileBroadcast(connection, network, wire);
       // RPC verifies signatures and simulates. Caller cannot disable preflight or retries policy.
-      result = await connection.sendRawTransaction(wire, { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 2 });
+      result = await submitMobileBroadcast(connection, network, wire);
     } else throw new MobileApiError("RPC_METHOD_NOT_ALLOWED", "RPC method not allowed", 400);
     return { jsonrpc: "2.0", id: call.id, result };
   });

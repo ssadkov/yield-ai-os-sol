@@ -95,7 +95,7 @@ async function exponentPlan(request: Request, kind: "deposit" | "withdraw") {
   if (!clock || clock.data.length !== 40) throw new MobileApiError("CLOCK_UNAVAILABLE", "Chain clock unavailable", 503);
   const action = kind === "deposit" ? "buy" : Number(clock.data.readBigInt64LE(32)) >= EXPONENT.maturity ? "redeem" : "sell";
   const built = await unsignedTransaction(c.connection, { market: EXPONENT_MARKET, action, amount: String(amount), owner: owner.toBase58(), authority: owner.toBase58(), asset: "USDC", slippageBps: Number(value.slippageBps ?? 50) }, kind === "deposit" && value.source === "wallet");
-  return { ...await envelope(c, built, "exponent_" + action), phase: action, source: value.source ?? "safe", amountRaw: String(amount), atomic: true,
+  return { ...await envelope(c, built, "exponent_" + action), phase: action, source: value.source ?? "safe", amountRaw: String(amount), atomic: true, allocationBpsAfter: built.allocationBpsAfter,
     destination: kind === "withdraw" ? tokenAddress(owner, EXPONENT.usdc).toBase58() : tokenAddress(c.inspected.addresses.safe, EXPONENT.pt).toBase58(),
     settlement: kind === "withdraw" ? "usdc_to_owner_wallet" : "pt_in_safe", pilotPerformanceFeeUsdc: "0" };
 }

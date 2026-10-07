@@ -1,4 +1,5 @@
 import { createKaminoYieldReader } from "./kaminoYield";
+import { pacedRpcReadFetch } from "./rpcReadFetch";
 import { Connection } from "@solana/web3.js";
 import { MOBILE_KAMINO, mobileKaminoPositionState, kaminoDepositPlan, kaminoWithdrawalPlan, kaminoReturnPlan, creationPlan, inspectSafe, MobileApiError, MOBILE_NETWORKS, requireCluster, solanaOwner, usdcTransferPlan, transactionStatus } from "./mobileSafe";
 import { v2MainnetRpcHeaders, V2_MAINNET_RPC_URL } from "./v2MainnetRpc.server";
@@ -12,7 +13,7 @@ export function mobileSafeRuntime() {
   return { network, connection: new Connection(endpoint, {
     commitment: "confirmed", disableRetryOnRateLimit: true,
     httpHeaders: cluster === "mainnet" ? v2MainnetRpcHeaders() : undefined,
-    fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15_000) }),
+    fetch: new URL(endpoint).hostname === "mainnet.helius-rpc.com" ? pacedRpcReadFetch : (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15_000) }),
   }) };
 }
 export async function mobileApi(action: () => Promise<unknown>) {

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-mainnet.test.mjs scripts/mobile-kamino.test.mjs scripts/mobile-protocol.test.mjs scripts/mobile-kamino-yield.test.mjs scripts/mobile-exponent-orca.test.mjs scripts/mobile-exponent-yield.test.mjs",
+    "test:mobile-safe": "node --experimental-strip-types --test scripts/mobile-safe.test.mjs scripts/mobile-mainnet.test.mjs scripts/mobile-kamino.test.mjs scripts/mobile-protocol.test.mjs scripts/mobile-kamino-yield.test.mjs scripts/mobile-exponent-orca.test.mjs scripts/mobile-exponent-yield.test.mjs scripts/mobile-exponent-allocation.test.mjs scripts/mobile-rpc-read.test.mjs",
     "probe:mobile-mainnet": "node --experimental-strip-types scripts/mobile-mainnet-http-probe.mjs"
   },
   "dependencies": {

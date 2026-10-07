@@ -7,6 +7,7 @@ import Decimal from 'decimal.js';
 import { createHash } from 'node:crypto';
 import { exponentDeploymentReady } from './deployment';
 import { checkedOrcaTickArrays } from '../../lib/exponentOrca';
+import { exponentOwnerAllocation } from '../../lib/exponentOwnerAllocation';
 
 export const policyAddress=(seed:string,safe?:PublicKey)=>PublicKey.findProgramAddressSync([Buffer.from(seed),...(safe?[safe.toBuffer()]:[])],SAFE_PROGRAM)[0];
 const meta=(pubkey:PublicKey,isWritable=false,isSigner=false)=>({pubkey,isWritable,isSigner});
@@ -89,7 +90,7 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
   if(bundle.ixs.length!==1)throw Error('unsupported pre/post instructions');
   assertExponentInstruction(request.action,safe,bundle.ixs[0]);
   const safeInfo=await connection.getAccountInfo(safe,'confirmed');
-  if(!safeInfo||!safeInfo.owner.equals(SAFE_PROGRAM)||safeInfo.data.length<73
+  if(!safeInfo||!safeInfo.owner.equals(SAFE_PROGRAM)||safeInfo.data.length<89
     ||!new PublicKey(safeInfo.data.subarray(9,41)).equals(owner))throw Error('invalid Safe owner');
   const fixed=[meta(authority,true,true),meta(safe,true),meta(policyAddress('executor_registry')),meta(policyAddress('executor_limits',safe),true),
     meta(positionAddress(safe),true),meta(policyAddress('config')),
@@ -112,5 +113,9 @@ export async function unsignedTransaction(connection:Connection,request:QuoteReq
     const funding=Buffer.alloc(8);funding.writeBigUInt64LE(rawAmount(request.amount));
     prefix.push(new TransactionInstruction({programId:SAFE_PROGRAM,keys:[meta(owner,true,true),meta(safe,true),meta(new PublicKey(EXPONENT.usdc)),meta(tokenAddress(owner,EXPONENT.usdc),true),meta(tokenAddress(safe,EXPONENT.usdc),true),meta(TOKEN_PROGRAM_ID)],data:Buffer.concat([instructionTag('deposit'),funding])}));
   }
-  return {quote:q.public,minimumOutputRaw:minOut.toString(),safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',...await serialize(connection,authority,[...prefix,action],true)};
+  const originalAllocation=Array.from({length:8},(_,i)=>safeInfo.data.readUInt16LE(73+i*2));
+  const allocation=exponentOwnerAllocation(owner,authority,request.action,originalAllocation);
+  return {quote:q.public,minimumOutputRaw:minOut.toString(),safe:safe.toBase58(),pilotPerformanceFeeUsdc:'0',
+    allocationBpsAfter:allocation.allocationBpsAfter,
+    ...await serialize(connection,authority,[...allocation.before,...prefix,action,...allocation.after],true)};
 }

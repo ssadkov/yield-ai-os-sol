@@ -64,7 +64,7 @@ Execution requires the exact reviewed Mainnet ELF SHA-256 `9543eb14e69694d25d6a4
 
 1. Decode the unsigned packet. Verify v0, <=1232 bytes, one connected-owner signer/payer, pinned chain/program, exact amounts/deadlines and canonical accounts. Resolve LUTs from a trusted Mainnet RPC and inspect all instructions.
 2. `mobileSafeWallet.ts` is the strict **core** checker and deliberately rejects protocol plans. Protocol validation uses `web/src/idl/yield_vault_protocols.json`, the reviewed Kamino validators and `web/src/lib/exponent-onyc-10jan27.json`. Do not allow arbitrary extra instructions to make the core checker accept them.
-3. MWA signs; returned message must equal the requested message. Persist signed bytes/signature/owner/cluster/target/expiry **before** sending.
+3. MWA signs. Wallets may insert reviewed Lighthouse assertions and bounded ComputeBudget instructions; the requested Safe/ATA instructions, their account permissions, owner and amounts must remain unchanged. Compare decompiled instructions rather than requiring whole-message byte equality. Persist the final wallet-returned signed bytes/signature/owner/cluster/target/expiry **before** sending. The transport checks permitted operation families, not equality against a stored plan; the client must check its requested operation.
 4. Send through a trusted RPC or API `POST /rpc`: JSON-RPC `sendTransaction`, params `["BASE64_SIGNED_TX",{"encoding":"base64"}]`. Mandatory preflight; only reviewed Safe operation families are accepted. This transport has no private signer and is not a job queue.
 5. Use `GET /transactions/SIGNATURE?cluster=mainnet&lastValidBlockHeight=HEIGHT`. After a timeout retransmit only identical signed bytes while valid; never request a fresh transfer before reconciliation. Refresh portfolio state after confirmation.
 
@@ -204,3 +204,43 @@ Over-budget responses retain HTTP 400 / `INVALID_TRANSACTION` and include safe d
 
 Primary reference: [Solana compute budget and fee constraints](https://solana.com/docs/core/fees/compute-budget). Acceptance still requires the rejected wallet's actual price/limit or expired payload, and then a funded Seeker retry after the corrected API is released. Do not claim the pictured transaction has been accepted based on synthetic regression tests alone.
 Verification: all 89 mobile tests passed, including high-price/low-total acceptance, exact ceiling round-up, conservative missing-limit handling, u64 extremes and duplicate-budget rejection.
+
+
+## Lighthouse assertion families: 2026-10-08
+
+This supersedes the discriminator-6-only policy above. Phantom's reported wallet `4qMokYU7riMKgtG7zf4S22oFimcooAfPXySSc4XWMgkE` can create its Safe, but a token-moving Kamino deposit adds other assertion families and the old transport rejects it before submission. This is an API transport change; no contract upgrade, new mobile API URL or request-format change is needed.
+
+### Reviewed policy
+
+The exact Lighthouse program remains `L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95`. Source reviewed at [Jac0xb/lighthouse commit 4c57947](https://github.com/Jac0xb/lighthouse/blob/4c579479c98635e419b1b167f08be02a71604a71/programs/lighthouse/src/instruction.rs), including assertion processors, evaluation macros, program validation and CPI targets. All currently defined assertion discriminators **2 through 17** are accepted anywhere/repeatedly within the packet limit:
+
+| Tags | Assertions | Account shape |
+| --- | --- | --- |
+| 2, 3 | Account data, single/multi | 1 target |
+| 4 | Account delta | 2 targets |
+| 5, 6 | Account info, single/multi | 1 target |
+| 7, 8 | Mint, single/multi | 1 target |
+| 9, 10 | Token account, single/multi | 1 target |
+| 11, 12 | Stake, single/multi | 1 target |
+| 13, 14 | Upgradeable loader, single/multi | 1 target |
+| 15 | Sysvar clock | No accounts |
+| 16 | Merkle tree | Tree, root, pinned compression program, optional proof accounts |
+| 17 | Bubblegum tree config | 1 target |
+
+MemoryWrite **0**, MemoryClose **1**, every unknown discriminator and malformed account shapes remain `400 INVALID_TRANSACTION`. Merkle verification calls only the fixed verify-leaf instruction of `cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK` with read-only accounts; that program is pinned both upstream and in our transport. Assertion logging may use fixed SPL Noop with no accounts. Mint evaluation borrows data mutably in upstream Rust, but the reviewed macro only reads values. These assertion paths do not transfer funds or create/close accounts.
+
+Full assertion payload decoding and success/failure remain enforced by mandatory RPC preflight. A malformed/false assertion is not bypassed or removed. Wallet-returned signed bytes are submitted unchanged. Existing signature, owner/payer, Safe operation allowlist, ATA, v0, LUT and packet checks remain; the PR #36 **0.001 SOL total priority-fee cap** also remains. Assertion account flags may appear writable/signer due to Solana's message-global permissions.
+
+### Evidence and limits
+
+- 94 deterministic API tests pass, including all 16 assertion families, every rejected byte discriminator, token/mint guards with deposit/withdraw operation families, active LUTs, malformed account shapes, foreign Merkle program, mandatory preflight and unchanged-wire submission. Fixtures exercise transport validation; they do not claim every assertion body is valid on chain.
+- Reproducible unsigned probe: `web/scripts/mobile-lighthouse-probe.mjs`, using server-only `V2_MAINNET_RPC_URL`. It requests a fresh wallet-source 1 USDC Kamino plan and only calls simulateTransaction with zero signatures.
+- Reported Phantom owner, Safe `BuUfTrud6jrK1CHSreiBE2Cjh6KsQVCe5r5YpLcNMnai`: actual Mainnet plan with synthetic AssertTokenAccount (9), AssertMintAccount (7), AssertTokenAccountMulti (10) passed at slot **454560517**, **185442 CU**, **837 bytes**. Final wallet USDC balance was asserted against the 1 USDC debit.
+- Increasing that asserted final balance by one raw unit failed at slot **454560518**, Lighthouse custom **6401**, proving the post-transfer check is still evaluated.
+- No transaction was signed or broadcast. These probes use synthetic guards, not the original Phantom-returned packet. Funded Seeker acceptance is still required after deployment.
+
+### Release and Vlad's acceptance
+
+At verification time the dedicated Mainnet API host still serves PR #35 (commit `30ef1f3`); merged PR #36 is not yet released there. Release the reviewed merged commit of this fix to **yield-ai-solana-mainnet**, which includes both fixes. An app/UI Preview or GitHub merge alone does not update the manually released API host.
+
+On the existing mobile build and same API URL, obtain a **fresh deposit plan** for the already-created Safe (skip setup), sign a 1 USDC Kamino deposit with Phantom, then test partial/full return. Repeat token-moving entry/exit with Solflare; smoke-test Seed Vault. Verify wallet/Safe/share balances and explorer receipt. For errors before broadcast show **Not submitted**, not Not signed or Solana rejected: the backend already checked a valid wallet signature. Reconcile any ambiguous previous send before requesting another transfer. If rejected again, capture error details plus the final decoded instruction tags, budget and packet length (never seed/private keys).

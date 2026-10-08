@@ -19,13 +19,22 @@ function validateBudget(ix: TransactionInstruction) {
     if (tag === 4 && (!value || value > 67_108_864)) invalid("Invalid loaded accounts data limit");
   } else invalid("Unsupported compute budget instruction");
 }
+// Pinned source review: Jac0xb/lighthouse 4c579479c98635e419b1b167f08be02a71604a71.
+const LIGHTHOUSE_ASSERTIONS = new Set([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+const LIGHTHOUSE_COMPRESSION_PROGRAM = new PublicKey("cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK");
 function validateLighthouse(ix: TransactionInstruction) {
-  // Reviewed public SDK discriminator 6 = AssertAccountInfoMulti, one target account.
-  // Verified unsigned against Mainnet: prefixes 06 04 and 06 05 pass; a false assertion fails.
-  // MemoryWrite/MemoryClose and every other unreviewed discriminator remain rejected.
+  if (ix.data.length < 3) invalid("Malformed Lighthouse assertion");
+  const tag = ix.data[0];
+  // 0/1 allocate/write/close memory; unknown future commands require another source review.
+  if (!LIGHTHOUSE_ASSERTIONS.has(tag)) invalid("Unsupported Lighthouse instruction; assertions only");
+  // Delta reads two accounts, Clock reads the sysvar internally, Merkle includes proof accounts.
+  const accountCount = tag === 4 ? 2 : tag === 15 ? 0 : 1;
+  if (tag === 16) {
+    if (ix.keys.length < 3 || !ix.keys[2].pubkey.equals(LIGHTHOUSE_COMPRESSION_PROGRAM))
+      invalid("Invalid Lighthouse Merkle assertion accounts");
+  } else if (ix.keys.length !== accountCount) invalid("Invalid Lighthouse assertion account count");
   // Writability/signership is message-global: assertions may observe the owner or writable Safe.
-  if (ix.data.length < 3 || ix.data[0] !== 6 || ix.keys.length !== 1) invalid("Only Lighthouse account-info assertions are supported");
-  // The remaining assertion/log-level encoding is decoded by mandatory RPC preflight, never by the transport.
+  // Mandatory preflight decodes/evaluates the full assertion body; signed bytes are never rewritten.
 }
 export async function validateMobileBroadcast(connection: Connection, network: { programId: string }, wire: Buffer) {
   if (wire.length > 1232) invalid("Transaction exceeds packet size");

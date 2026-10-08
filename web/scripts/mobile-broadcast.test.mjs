@@ -64,7 +64,7 @@ test('Reject foreign program, System transfer, unknown Safe action and Lighthous
   await rejects(signed([guard()]));
 });
 test('Reject Lighthouse memory commands and every unreviewed discriminator',async()=>{
-  for (const discriminator of [0,1,2,3,4,5,7,8,9,10,11,12,13,14,15,16,17,255]) {
+  for (const discriminator of [0,1,...Array.from({length:238},(_,i)=>i+18)]) {
     const ix=guard();ix.data[0]=discriminator;
     await rejects(signed([safe(),ix]));
   }
@@ -135,4 +135,47 @@ test('Explicit RPC preflight rejection is sanitized 422; unknown send failure st
   await assert.rejects(()=>submitMobileBroadcast(connection,network,wire),e=>e.code==='SIMULATION_FAILED' && e.status===422 && !e.message.includes('private'));assert.equal(calls,1);
   const unknown=Error('timeout after send');connection.sendRawTransaction=async()=>{calls++;throw unknown;};
   await assert.rejects(()=>submitMobileBroadcast(connection,network,wire),e=>e===unknown);assert.equal(calls,2);
+});
+
+// These are transport shape fixtures; mandatory on-chain preflight owns full payload decoding.
+const compression = new PublicKey('cmtDvXumGCrqC1Age74AVPhSRVXJMd8PJS91L8KbNCK');
+function assertion(tag) {
+  const ix=guard();ix.data[0]=tag;
+  if(tag===4) ix.keys.push({pubkey:a.safe,isSigner:false,isWritable:false});
+  if(tag===15) ix.keys=[];
+  if(tag===16) ix.keys.push({pubkey:a.safe,isSigner:false,isWritable:false},{pubkey:compression,isSigner:false,isWritable:false},{pubkey:foreign.publicKey,isSigner:false,isWritable:false});
+  return ix;
+}
+test('All reviewed Lighthouse assertion families 2..17 pass transport shape validation',async()=>{
+  for(let tag=2;tag<=17;tag++) await validateMobileBroadcast(noTables,network,signed([assertion(tag),safe(),assertion(tag)]));
+});
+test('Phantom/Solflare token and mint assertions accompany owner deposit and withdrawal',async()=>{
+  for(const operation of ['deposit','kamino_deposit','kamino_withdraw','withdraw','exponent_buy_pt','exponent_sell_pt'])
+    for(const level of [4,5]) {
+      const token=assertion(10);token.data[1]=level;
+      await validateMobileBroadcast(noTables,network,signed([guard(level),assertion(7),safe(operation),ComputeBudgetProgram.setComputeUnitPrice({microLamports:100000}),token,assertion(9)]));
+    }
+});
+test('Token assertions retain support for writable targets resolved through an active LUT',async()=>{
+  const table=new AddressLookupTableAccount({key:foreign.publicKey,state:{deactivationSlot:(1n<<64n)-1n,lastExtendedSlot:1,lastExtendedSlotStartIndex:0,authority:undefined,addresses:[a.safe]}});
+  const token=assertion(10);token.keys[0].pubkey=a.safe;
+  const wire=signed([safe(),token],[table]);
+  assert.equal(VersionedTransaction.deserialize(wire).message.addressTableLookups.length,1);
+  await validateMobileBroadcast({getAddressLookupTable:async()=>({value:table})},network,wire);
+});
+test('Reject malformed delta/clock/Merkle shapes and foreign Merkle CPI program',async()=>{
+  for(const tag of [4,15,16]) {
+    const ix=assertion(tag);ix.keys=tag===15 ? guard().keys : [];
+    await rejects(signed([safe(),ix]));
+  }
+  const merkle=assertion(16);merkle.keys[2].pubkey=foreign.publicKey;
+  await rejects(signed([safe(),merkle]));
+});
+test('Malformed assertion bodies reach compulsory preflight, whose rejection remains not submitted',async()=>{
+  const wire=signed([safe(),assertion(10)]);let calls=0;
+  await assert.rejects(()=>submitMobileBroadcast({...noTables,sendRawTransaction:async(actual,options)=>{
+    calls++;assert.deepEqual(actual,wire);assert.equal(options.skipPreflight,false);
+    throw new SendTransactionError({action:'simulate',signature:'',transactionMessage:'InvalidInstructionData',logs:[]});
+  }},network,wire),e=>e.code==='SIMULATION_FAILED'&&e.status===422);
+  assert.equal(calls,1);
 });

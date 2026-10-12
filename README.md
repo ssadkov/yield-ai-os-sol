@@ -1,333 +1,163 @@
-# Yield AI — Agent-safe execution on Solana
+# Yield AI — USDC savings, flexible or fixed
 
-> **Yield AI v2 work in progress:** see [the Colosseum MVP plan and acceptance gates](docs/yield-ai-v2.md). The existing generic CPI allowlist does not constrain an agent's instruction data or destination accounts. The v2 branch restricts those entrypoints to the owner while purpose-built agent actions are developed; the live deployment and the current main branch should not be treated as having that v2 protection.
+Deposit USDC from a phone, choose **flexible** or **fixed**, and keep custody. Funds sit in a
+personal **Safe** on Solana that only the owner can withdraw from. An agent can act on the Safe
+only through typed instructions and within limits the owner sets.
 
-[![Solana](https://img.shields.io/badge/Solana-mainnet-9945FF)](https://solana.com)
-<!-- [![License: MIT](https://img.shields.io/badge/License-MIT-14F195.svg)](LICENSE) — add LICENSE at repo root, then uncomment -->
-<!-- [![CI](INSERT_CI_BADGE_MARKDOWN)](INSERT_CI_ACTIONS_URL) -->
-<!-- [![Hackathon](INSERT_HACKATHON_BADGE_MARKDOWN)](INSERT_HACKATHON_URL) -->
+[Mobile app (Android / Seeker)](https://github.com/ssadkov/yield-ai-mobile) ·
+[Program on Solscan](https://solscan.io/account/yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih) ·
+[Mainnet API config](https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1/config) ·
+[Owner protocol API](docs/yield-ai-v2-owner-protocol-api.md) ·
+[X](https://x.com/yieldai_app)
 
-> **Yield AI is an agent-safe execution layer for Solana.** A PDA vault with a **program allowlist** lets AI agents put user capital to work **without ever holding the keys**. **Live on mainnet today**, with a working consumer flow that **earns USDC yield on stock positions without selling them**.
+| | |
+|---|---|
+| Program (mainnet) | `yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih` |
+| Flexible | USDC supplied to the Kamino USDC kVault. Variable APY, withdraw any time. |
+| Fixed | USDC converted into an Exponent principal token (PT) maturing 2027-01-10. Rate locked at entry; exit before maturity sells at the market price. |
+| Clients | Native Android app for Solana Mobile ([repo](https://github.com/ssadkov/yield-ai-mobile)); Next.js web app and unsigned-transaction API in [`web/`](web/) |
 
-[Live app](https://yield-ai-os-sol.vercel.app/) · [Demo video](https://youtu.be/_a5KCpidm6Y) · [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing) · [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai) · [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl) · [X](https://x.com/yieldai_app)
+## Why we built it
 
----
+We already run [Yield AI on Aptos](https://defillama.com/protocol/yield-ai): **$540k TVL on
+DefiLlama as of 2026-10-09**, from real depositors. Talking to them showed three things:
 
-<!-- ![Hero screenshot](INSERT_PATH_TO_SCREENSHOT.png) -->
+- People understand stablecoins. Choosing between four AI-built strategies was too much, so the
+  product is now two plans: flexible or fixed.
+- Many of them bridge in from EVM chains. Entering a new chain is the main barrier, so the next
+  step is USDC in from other chains (see [Roadmap](#roadmap)).
+- "Where does the yield come from?" is the most common question. Every position and transaction
+  is visible on-chain and linked from the app.
 
-## Hackathon / submission
+Solana has the liquidity and the protocols to compose these products (Kamino, Exponent, Orca,
+Jupiter). The Safe program below is the Solana version, built during the Crypto World's Fair
+hackathon.
 
-| Name | Role | Notes |
-|------|------|-------|
-| Sergei Sadkov | CEO and core developer | [YouTube](https://www.youtube.com/@crypto_rentier) · [X](https://x.com/ssadkov) · [Telegram](https://t.me/ssadkov) · Superteam Kazakhstan |
-| Andrey Aniskov | Core developer | Integrations: Jupiter + Kamino |
-| Alexander Rybakov | Marketing & growth | [X](https://x.com/rybakov_alv) |
+## What the program guarantees
 
----
+The Solana program (`programs/yield-vault`, Anchor 0.32.1) holds each user's funds in a Safe PDA
+derived from the owner's wallet (`["vault", owner]`).
 
-## Problem → solution
+- **Only the owner withdraws.** Every instruction that moves tokens or SOL out to an arbitrary
+  destination requires the owner's signature. Owner withdrawal works with no executor running.
+- **The agent has no generic access.** `execute_swap_cpi` and `execute_protocol_cpi` are
+  owner-only, and they cannot touch Kamino kVault shares or Exponent position tokens. An approved
+  executor can call only typed instructions: `kamino_deposit` / `kamino_withdraw` and Exponent
+  `buy` / `sell` / `redeem`.
+- **Executors are allowlisted and limited.** A global executor registry (max 16, admin-managed)
+  plus per-Safe limits set by the owner: allowed actions, rolling 24-hour USDC volume, principal.
+  No executor can move USDC until the owner enables limits for that Safe.
+- **Fixed-income guardrails.** Each Exponent position stores a maximum loss and maximum slippage;
+  exits that breach them fail. Exit proceeds go straight to the owner's USDC account.
+- **Fees are capped in code.** A performance fee applies only to realized profit, hard-capped at
+  20% (`MAX_PERFORMANCE_FEE_BPS`). The Exponent pilot charges 0%.
+- **Nothing is lost by closing.** The Safe address is deterministic; re-initializing restores
+  control of every remaining token account and position.
 
-| # | Problem | How Yield AI addresses it |
-|---|---------|---------------------------|
-| 1 | **AI + capital = custody risk** — users fear sending funds to an opaque “agent wallet.” | Funds stay in a [**vault PDA**](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl); there is **no private key** for the vault authority. |
-| 2 | Automation needs **on-chain execution**, not chat-only advice. | A designated **agent** pubkey can drive **whitelisted CPIs**; **withdrawals stay owner-only**. |
-| 3 | Open-ended CPIs are dangerous. | **`execute_swap_cpi`** only targets **`allowed_programs`** (max 16), controlled by the owner. |
-| 4 | Users want **yield** without necessarily exiting risk assets (e.g. tokenized equities). | **Mainnet** consumer flow: strategy targets, Jupiter routing, and integrations for **USDC yield** while retaining vault-held positions (see live app and technical section below). |
+Instructions by role:
 
----
+| Role | Instructions |
+|---|---|
+| Owner | `initialize`, `initialize_with_limits`, `deposit`, `deposit_spl`, `withdraw`, `withdraw_spl`, `set_allocation`, `set_agent`, `set_executor_limits`, `set_allowed_programs`, `execute_swap_cpi`, `execute_protocol_cpi`, `init_exponent_position`, `set_exponent_policy`, `deposit_onyc`, `withdraw_onyc`, `recover_exponent`, `close_empty_token_account`, `withdraw_excess_lamports`, `close_safe` |
+| Owner or approved executor, within limits | `kamino_deposit`, `kamino_withdraw`, `exponent_buy_pt`, `exponent_sell_pt`, `exponent_redeem_pt` |
+| Admin | `init_config`, `set_config` (treasury, fee ≤ 20%), `init_executor_registry`, `set_executor_registry` |
+| Anyone | `create_safe_for` (sponsored Safe creation; the PDA is bound to the owner), transfers into the Safe |
 
-## Why Solana
+## What is live, and what is not
 
-- **Native custody model** — PDAs + `invoke_signed` for non-custodial vaults agents can interact with.
-- **Composability** — one vault, many protocols; the allowlist is how automation **safely** opens that surface.
-- **Market depth** — access to RWAs (e.g. tokenized equities) and a large ecosystem of DeFi protocols with deep on-chain liquidity.
+| Component | Status |
+|---|---|
+| Safe program, owner deposit and withdrawal | Mainnet |
+| Executor registry and per-Safe limits | Mainnet |
+| Kamino flexible: entry and exit by owner and by executor | Mainnet, with transaction receipts in [`docs/`](docs/) |
+| Exponent fixed: entry and early exit | Mainnet pilot |
+| Mobile transaction API: unsigned plans, preflight, Lighthouse assertions, priority-fee cap | Mainnet ([spec](docs/yield-ai-v2-owner-protocol-api.md)) |
+| Android app with Mobile Wallet Adapter / Seed Vault | Mainnet ([repo](https://github.com/ssadkov/yield-ai-mobile)) |
+| USDC from Base via Circle CCTP into the Safe | Testnet only |
+| Safe owned by an EVM address (EIP-712 signatures, relayer) | Devnet only |
+| Upgrade authority in a Squads 2-of-3 multisig with timelock | Rehearsed on devnet; mainnet authority is still a single key |
+| Autonomous agent with a decision journal | Not built yet |
 
-**RWA momentum & liquidity** — Solana’s RWAs (e.g. **xStocks**, **OnRe**) plus deep **Kamino** and **Jupiter** liquidity make it a strong fit for **managed-yield retail flows** that keep users in risk assets while harvesting stablecoin yield.
+### Deployed binary
 
----
+| | |
+|---|---|
+| Installed ELF SHA-256 | `48da204eea62b79db16474045a2ede6e139c54e4d1023f99b09dfc3adfe7565d` (690,944 bytes) |
+| Last upgrade | slot 453510076, [transaction](https://solscan.io/tx/4VcAVvujJXqwJ13wnJU6YHpwEWGHQhahvFrSmcw8DnfeBJQ3Gu7PppVjhXkigfssZzsxxwdcsfgvQWLgQMjKzJg4) ([record](docs/yield-ai-v2-exponent-dynamic-ticks.md)) |
+| Upgrade authority | `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` (single key) |
 
-## What ships today (summary)
+The hash was re-checked against a fresh mainnet dump on 2026-10-12. The deployed source is
+`main` without one later instruction, `refund_excess_lamports`, which is **not deployed**. The
+build is not yet registered as a verifiable build (OtterSec); that, the multisig and a
+`security.txt` come with the next program upgrade.
 
-- **Anchor vault** — [PDA custody](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl), owner withdrawals, allowlisted CPI execution path for the agent.
-- **Next.js app (`web/`)** — wallet + deposit, vault lifecycle, portfolio charts, **strategy rebalance / convert-all**, **Kamino kVault** earn/withdraw, **Jupiter Lend** collateral + borrow/repay USDC flows, and **Earn Ideas** cards (server-backed APY hints) — [live app](https://yield-ai-os-sol.vercel.app/).
-- **Jupiter** — Price API, Swap V2 build for vault CPI swaps, Lend/Borrow SDK usage from server routes.
-- **Kamino** — kVault deposit/withdraw + position reads for the vault UI.
-- **Birdeye** — historical candles for token charts.
+## How a deposit works
 
----
-
-## Tech stack (summary)
-
-| Layer | Stack |
-|-------|--------|
-| On-chain | Rust · Anchor |
-| App & APIs | Next.js · React · TypeScript |
-| Wallet | Solana Wallet Adapter |
-| AI / automation | Vercel AI SDK · OpenRouter · **optional** chat UI (`SHOW_AI_CHAT` in `web/src/config/features.ts`) · Earn Ideas + rebalance orchestration in `web/src/server/agent/` |
-| Liquidity / routes | Jupiter API (swap build, prices) · Jupiter Lend (`@jup-ag/lend`, `@jup-ag/lend-read`) |
-| Yield protocols | Kamino (kVaults) |
-| Market data | Birdeye (charts) |
-
----
-
-## Live application (`web/`)
-
-The dashboard is a **three-column** layout driven by [`web/src/app/page.tsx`](web/src/app/page.tsx):
-
-| Column | What runs |
-|--------|-------------|
-| **Wallet** | `DepositCard`, `WalletAssetsCard` — connect wallet, deposit to vault, see wallet balances. |
-| **Vault** | `CreateVaultCard`, `VaultCard` — initialize vault, holdings, allocation chart, **rebalance / convert-all**, **Kamino kVault** loop, **Jupiter Lend** borrow/repay/collateral actions, Birdeye chart. |
-| **Ideas / assistant** | `EarnIdeasCards` — always-on **Earn Ideas** (calls `GET /api/earn-ideas`). **`AIChat`** is **gated** by `SHOW_AI_CHAT` in [`web/src/config/features.ts`](web/src/config/features.ts) (currently `false` for the public demo). |
-
-Server logic for swaps, rebalance, Kamino, and Jupiter Borrow lives under [`web/src/server/agent/`](web/src/server/agent/) and is invoked from `web/src/app/api/**` routes — there is **no separate production “agent service”** for the live app.
-
----
-
-## Quick start (demo + local)
-
-```bash
-git clone https://github.com/ssadkov/yield-ai-os-sol.git
-cd yield-ai-os-sol
-
-anchor build
-
-cd web
-npm install
-cp .env.local.example .env.local   # then fill RPC, program id, optional API keys (see below)
-npm run dev
+```
+ Phone wallet (Seed Vault / Phantom / Solflare over MWA)
+        │  one signature per action; the user is the only signer and fee payer
+        ▼
+ Yield AI API (web/) ── builds an unsigned plan; the app checks programs, accounts,
+        │               network and blockhash before asking for a signature
+        ▼
+ yield_vault program (yie1…)
+        ├─ Safe PDA ["vault", owner]  ─ owner, agent, allocation, route principal
+        ├─ Safe token accounts        ─ authority = Safe PDA
+        ├─ Kamino kVault shares       ─ flexible
+        └─ Exponent PT position       ─ fixed, with max-loss / max-slippage policy
 ```
 
-Env and RPC: see **Environment variables** in the technical section below. Full spec: [what-we-build.md](what-we-build.md).
+Flexible deposit is atomic: wallet → Safe → Kamino in one transaction.
 
----
+## Repository
+
+| Path | What |
+|---|---|
+| [`programs/yield-vault`](programs/yield-vault/) | Anchor program: Safe, executor limits, Kamino and Exponent instructions, unit tests |
+| [`web/`](web/) | Next.js app and API routes, including the mobile v1 API |
+| [`client/`](client/) | TypeScript probes and operator scripts |
+| [`docs/`](docs/) | Design notes, mainnet receipts, API specs ([start here](docs/yield-ai-v2.md)) |
+
+## Build and test
+
+- Rust from [rust-toolchain.toml](rust-toolchain.toml) (1.89.x), Anchor CLI **0.32.1**, Solana /
+  Agave CLI **3.1.12**. On Windows, build in WSL.
+
+```bash
+cargo test -p yield-vault        # program unit tests
+anchor build                     # ELF and IDL in target/
+```
+
+The web app: copy [`web/.env.local.example`](web/.env.local.example), then `npm install` and
+`npm run dev` in `web/`. Network, program ID and RPC are set there.
+
+## Business model
+
+A performance fee on realized profit for enabled routes, configured per route and capped at 20%
+in the program. The Exponent pilot charges no fee. Live fee settlement on positive profit is still
+being validated.
 
 ## Roadmap
 
-- [x] PDA vault + owner withdraw + allowlisted agent CPI path
-- [x] Next.js dashboard + Jupiter-backed rebalance
-- [ ] More strategies (preset + custom) and strategy marketplace
-- [ ] Open SDK for third-party agents and strategies (revenue share)
-- [ ] Cron-driven automation: scheduled rebalance / risk checks / auto-exit
-- [ ] AI agent cost optimization (caching, smaller models, structured routing)
-- [ ] Solana Seeker app publication + deeper mobile ↔ vault flows (wallet connect demo: https://youtube.com/shorts/QRY5nAQKfqY)
-- [ ] AI chat with confirm-gated tools + allowlist update flow (post-hackathon; currently hidden in UI for demo)
+1. Move upgrade authority to a Squads multisig with a timelock; publish a verifiable build.
+2. USDC in from EVM chains: CCTP into the Safe, then Safes owned by an EVM address so users
+   without a Solana wallet can deposit and withdraw.
+3. An executor that rebalances within the owner's limits and records why it acted.
+4. More strategies on the same rails, including delta-neutral positions requested by our larger
+   depositors.
 
----
+## Prior work
 
-## License
+Yield AI started on Aptos (live, see DefiLlama above). An earlier Solana vault program
+(`3Vtz…`) is closed. The v2 Safe program, executor limits, Kamino and Exponent integrations, the
+mobile API and the Android app were built during the hackathon, from 2026-09-23.
 
-MIT — add a `LICENSE` file at the repository root when you publish the repo publicly.
+## Team
 
----
+| Name | Role |
+|---|---|
+| Sergei Sadkov | Founder, product and core development. Built and sold AutoOffice, a SaaS CRM with 200,000+ users. [X](https://x.com/ssadkov) · [YouTube](https://www.youtube.com/@crypto_rentier) |
+| Andrey Aniskov | Core developer: Jupiter and Kamino integrations |
+| Alexander Rybakov | Marketing and growth. [X](https://x.com/rybakov_alv) |
 
-## Resources
-
-- [Live app](https://yield-ai-os-sol.vercel.app/)
-- [Demo video](https://youtu.be/_a5KCpidm6Y)
-- [Deck](https://docs.google.com/presentation/d/1uNP_oQGHiexqK5tfzzEXstdt2RMw7j-J5KfFZZaSuXw/edit?usp=sharing)
-- [Hackathon submission](https://arena.colosseum.org/projects/explore/yield-ai)
-- [Vault program (Anchor IDL)](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl)
-- [X / @yieldai_app](https://x.com/yieldai_app)
-
----
-
-## Technical documentation
-
-The sections below are the **developer-focused** reference (program instructions, architecture diagram, API list, env vars, toolchain).
-
-## 🚀 What it does today
-
-### ⛓️ On-chain vault (Solana / Anchor)
-The vault program is the **security boundary**. Funds live in SPL token accounts controlled by a **Program Derived Address (PDA)** tied to the user. Program + Anchor IDL on Orb: [3Vtz…WEFp5s](https://orbmarkets.io/address/3VtzVhc9vFWb7GaV7TtbZ1nytGzqNsASShAHjiWEFp5s/anchor-idl).
-
-**Instructions**
-- **`initialize(agent, strategy, allowed_programs)`**
-  - Creates a per-owner vault PDA.
-  - Stores the vault owner, the designated `agent` pubkey, the strategy, and an allowlist of CPI program IDs (`allowed_programs`, max 16).
-  - Creates the vault USDC ATA (authority = vault PDA).
-- **`deposit(amount)`**: Transfers USDC from the owner’s USDC ATA into the vault USDC ATA.
-- **`withdraw(amount)`** (**owner-only**): Transfers USDC from the vault USDC ATA back to the owner via `invoke_signed` (PDA authority).
-- **`withdraw_spl(amount)`** (**owner-only**): Same as `withdraw`, but for **any SPL/Token-2022 mint** (pulls from a vault-owned token account to the owner’s ATA for that mint).
-- **`set_allowed_programs(allowed_programs)`** (**owner-only**): Updates the CPI program allowlist (max 16).
-- **`execute_swap_cpi(data)`**: Performs a CPI into a **whitelisted** program ID using `invoke_signed`. Caller must be either `Vault.owner` or `Vault.agent`.
-
-### 💻 Web app (Next.js)
-A dashboard to manage the vault and visualize portfolio state (see **Live application (`web/`)** above for the layout).
-
-- **Wallet (Solana Wallet Adapter)**: connect + sign transactions (initialize, deposit, withdraw, allowlist updates, swaps, Kamino, Jupiter Borrow legs).
-- **Portfolio**: wallet vs vault holdings, allocation chart, token chart (Birdeye).
-- **Earn Ideas**: curated loops (e.g. collateral → borrow USDC → Kamino) with **explicit user confirmation** per step; uses `/api/earn-ideas` and the same rebalance / protocol builders as the vault card.
-- **Yield reads**: `/api/yields` and earn-ideas path for APR/APY hints where available.
-
-### Earn Ideas vs AI chat
-- **Earn Ideas (`EarnIdeasCards`)** — **shipped in the live UI**; orchestrates multi-step flows with clear labels and signatures.
-- **AI chat (`AIChat`, Vercel AI SDK + OpenRouter)** — **optional**; enable by setting `SHOW_AI_CHAT` to `true` in [`web/src/config/features.ts`](web/src/config/features.ts). When on, it is grounded on live snapshots and only executes after explicit confirmation (`rebalance`, `convert_all`, individual swaps). If a Jupiter route needs extra programs, responses include `needs_whitelist` + missing program IDs for `set_allowed_programs`.
-
----
-
-## 🧩 Architecture (for GitHub)
-Production behavior matches the **Next.js app in `web/`**: React UI → `web/src/app/api/*` routes → `web/src/server/agent/*` (rebalance engine, vault swap build, Kamino, Jupiter Lend borrow) → external APIs and Solana RPC → **user-signed** transactions against the vault program (`execute_swap_cpi`, deposits, withdraws, etc.).
-
-A standalone [`agent/`](agent/) Node package remains for **local experiments**; it is not required to run the live dashboard.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Browser — web/src/app (React, Wallet Adapter)                  │
-│  page.tsx → components → hooks                                  │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ fetch / sign
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Next.js API — web/src/app/api/*                                │
-│  rebalance, earn-ideas, jupiter/*, kamino/*, vault-holdings, … │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Server modules — web/src/server/agent/*                        │
-│  rebalance engine · buildVaultSwapTx · kaminoKvault · jupiterBorrow │
-└───────────────┬─────────────────────────────┬────────────────────┘
-                │                             │
-                ▼                             ▼
-        Jupiter / Kamino / Birdeye              Solana RPC
-                │                             │
-                └──────────────┬──────────────┘
-                               ▼
-                ┌──────────────────────────────┐
-                │  Vault program (Anchor) + PDAs│
-                │  allowlisted CPI only       │
-                └──────────────────────────────┘
-```
-
-Swaps and protocol legs execute as **CPI from the vault** into **allowlisted program IDs** (Jupiter router, route legs, SPL Token, plus Kamino / Jupiter Lend programs once added to the owner’s list).
-
----
-
-## 🔐 Security model (high-level)
-- **PDA custody**: vault token accounts are owned by a PDA; no private key exists for the vault authority.
-- **Owner-only withdrawals**: `withdraw` and `withdraw_spl` require the `owner` signer.
-- **CPI allowlist**: swaps are executed only via CPI into **explicitly whitelisted program IDs** (`allowed_programs`), reducing the “arbitrary instruction” attack surface.
-- **Agent is not a custodian**: the `agent` can execute swaps (when allowed), but cannot withdraw funds.
-- **Explicit user intent for execution**: chat proposes actions and requires explicit confirmation before running them.
-
----
-
-## 📦 Repo structure (where things live)
-- `programs/yield-vault/`: Anchor program (vault + CPI execution)
-- `web/`: Next.js app (UI + API routes + “agent” server modules)
-- `client/`: TypeScript smoke tests (initialize/deposit/withdraw)
-- `agent/`: standalone Node package (dev/experiments; not required for production MVP)
-
----
-
-## 🌐 Web API routes (current)
-Routes live under [`web/src/app/api/`](web/src/app/api/):
-
-| Method | Path | Role |
-|--------|------|------|
-| `POST` | `/api/chat` | Streaming AI chat + tool hooks (when chat UI is enabled). |
-| `POST` | `/api/rebalance` | Build/sign flow for rebalance and convert-all. |
-| `POST` | `/api/cron/rebalance` | Same as rebalance; requires `x-cron-secret`. |
-| `GET` | `/api/earn-ideas` | Server-composed earn ideas (APY / pool hints) for the UI cards. |
-| `GET` | `/api/vault-history?owner=<pubkey>` | Deposit / withdraw history summary. |
-| `GET` | `/api/vault-holdings` | Aggregated vault token view for the dashboard. |
-| `GET` | `/api/yields` | Yield / APY payload for selected tokens. |
-| `GET` / `POST` | `/api/jupiter/prices` | Token prices (cached RPC `getAssetBatch`). |
-| `GET` / `POST` | `/api/jupiter/tokens` | Token metadata (cached). |
-| `GET` | `/api/protocols/jupiter/borrowLend` | Jupiter Lend / borrow-lend market payload for UI. |
-| `GET` | `/api/jupiter/borrow/positions` | Borrow positions for the connected vault context. |
-| `POST` | `/api/jupiter/borrow/borrow-usdc` | Build borrow leg (unsigned tx / ix for wallet). |
-| `POST` | `/api/jupiter/borrow/repay-usdc` | Build repay leg. |
-| `POST` | `/api/jupiter/borrow/deposit-collateral` | Collateral deposit leg. |
-| `POST` | `/api/jupiter/borrow/withdraw-collateral` | Collateral withdraw leg. |
-| `GET` | `/api/kamino/kvault/positions` | Kamino kVault positions. |
-| `POST` | `/api/kamino/kvault/deposit` | kVault deposit tx build. |
-| `POST` | `/api/kamino/kvault/withdraw` | kVault withdraw tx build. |
-| `GET` | `/api/birdeye/history?address=<mint>&type=4H&time_from=...&time_to=...` | Historical candles (rate-limited). |
-
----
-
-## 🛠️ Development & deployment
-
-### Prerequisites
-- Rust + `cargo`; use [rust-toolchain.toml](rust-toolchain.toml) (**1.89.x** for Anchor **0.32** IDL). Run `rustup toolchain install 1.89.0` if prompted; use `rustup override unset` in this repo if an old override hides the toolchain file.
-- [Anchor](https://www.anchor-lang.com/docs/installation) CLI **0.32.1** — match [Anchor.toml](Anchor.toml) `anchor_version` (`avm install 0.32.1 && avm use 0.32.1`).
-
-### Solana / Agave CLI and `cargo-build-sbf` (recommended)
-Older **platform-tools** can ship an old Cargo version that cannot parse some modern manifests.
-Install a current **Agave** release so `cargo-build-sbf` uses a new enough toolchain (e.g. platform-tools **v1.52** with **rustc 1.89**).
-
-```bash
-# Optional: remove stale install/cache (only if you are fixing a broken toolchain)
-rm -rf ~/.cache/solana
-rm -rf ~/.local/share/solana/install
-
-# Install Agave / Solana CLI (stable)
-sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-
-solana --version
-cargo-build-sbf --version   # expect platform-tools v1.52+ / rustc 1.89+ in the output
-```
-
-Then align [Anchor.toml](Anchor.toml) `solana_version` with the version `anchor build` expects. After upgrading CLI: `cargo clean` and `anchor build` from the repo root.
-
-### Build the program
-
-```bash
-anchor build
-```
-
-Match CLI versions to [Anchor.toml](Anchor.toml) (`anchor_version` / `solana_version`). Example with **avm**:
-
-```bash
-avm install 0.32.1
-avm use 0.32.1
-```
-
-### Deploying to devnet
-1. Set cluster + get SOL
-
-```bash
-solana config set --url devnet
-solana airdrop 2
-solana balance
-```
-
-2. Keep program ID in sync
-- `declare_id!` in `programs/yield-vault/src/lib.rs`
-- `[programs.devnet]` in `Anchor.toml`
-- keypair at `target/deploy/yield_vault-keypair.json`
-
-3. Deploy
-
-```bash
-anchor build
-anchor deploy --provider.cluster devnet
-```
-
-### Client: devnet smoke test (TypeScript)
-The [`client/`](client/) package runs **`initialize`** (Conservative, empty allowlist), **`deposit`**, and **`withdraw`** on devnet.
-
-The script loads the IDL from `target/idl/yield_vault.json`. Run `anchor build` from the repo root if the file is missing or after changing the Rust program.
-
----
-
-## ⚙️ Environment variables (selected)
-Use [`web/.env.local.example`](web/.env.local.example) as the template for the dashboard (`cp` step in Quick start). [`client/.env.example`](client/.env.example) and [`agent/.env.example`](agent/.env.example) cover the TypeScript smoke client and the standalone agent package.
-
-**Web (`web/`)**
-- `NEXT_PUBLIC_RPC_URL`: Solana RPC endpoint (often a Helius URL for token metadata/prices)
-- `NEXT_PUBLIC_PROGRAM_ID`: vault program ID
-- `OPENROUTER_API_KEY`: LLM access for chat
-- `JUPITER_API_KEY`: Jupiter API key for quote/build
-- `CRON_SECRET`: shared secret for `/api/cron/rebalance` (`x-cron-secret` header)
-
-**Standalone agent (`web` server modules / `agent/` package)**
-- `AUTHORITY_SECRET_KEY`: authority keypair used for sending transactions (JSON array or base58 secret key)
-- `SLIPPAGE_BPS`: swap slippage in bps
-
----
-
-## Spec
-See [what-we-build.md](what-we-build.md) for the MVP architecture spec.
+Mobile app contributors are listed in [its README](https://github.com/ssadkov/yield-ai-mobile).

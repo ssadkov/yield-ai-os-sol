@@ -4,7 +4,8 @@ Deposit USDC from a phone, choose **flexible** or **fixed**, and keep custody. F
 personal **Safe** on Solana that only the owner can withdraw from. An agent can act on the Safe
 only through typed instructions and within limits the owner sets.
 
-[Mobile app (Android / Seeker)](https://github.com/ssadkov/yield-ai-mobile) ·
+**[Download the Android app (APK, mainnet)](https://github.com/ssadkov/yield-ai-mobile/releases/tag/apk-mainnet-2026-10-08)** ·
+[Mobile app repo](https://github.com/ssadkov/yield-ai-mobile) ·
 [Program on Solscan](https://solscan.io/account/yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih) ·
 [Mainnet API config](https://yield-ai-solana-mainnet.vercel.app/api/mobile/v1/config) ·
 [Owner protocol API](docs/yield-ai-v2-owner-protocol-api.md) ·

@@ -158,7 +158,7 @@ mobile API and the Android app were built during the hackathon, from 2026-09-23.
 | Name | Role |
 |---|---|
 | Sergei Sadkov | Founder, product and core development. Built and sold AutoOffice, an online-education platform with 200,000+ users. [X](https://x.com/ssadkov) · [YouTube](https://www.youtube.com/@crypto_rentier) |
-| Andrey Aniskov | Core developer: Jupiter and Kamino integrations |
+| Rustam Galiev | Frontend developer |
 | Alexander Rybakov | Marketing and growth. [X](https://x.com/rybakov_alv) |
 
 Mobile app contributors are listed in [its README](https://github.com/ssadkov/yield-ai-mobile).

@@ -73,42 +73,14 @@ export function parseStrategy(s: VaultAccount["strategy"]): StrategyName {
  * Max 16 entries on-chain in v2 (was 64); keep this list merged with existing vault entries
  * when updating, because set_allowed_programs rewrites the whole list.
  */
-export const DEFAULT_ALLOWED_PROGRAMS: PublicKey[] = [
-  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",  // Jupiter Aggregator v6
-  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",   // SPL Token
-  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",   // Token-2022
-  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",  // Associated Token
-  "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc",   // Orca Whirlpool
-  "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8",  // Raydium AMM v4
-  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK",  // Raydium CLMM
-  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",   // Meteora DLMM
-  "Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB",  // Meteora Pools
-  "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY",   // Phoenix
-  "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX",    // Serum/OpenBook
-  "opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb",   // OpenBook v2
-  "jup3YeL8QhtSx1e253b2FDvsMNC87fDrgQZivbrndc9",   // Jupiter Earn
-  "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi",   // Jupiter Borrow
-  "KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd",   // Kamino kVault
-  "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",   // Kamino Lend
-  "FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr",  // Kamino Farms
-  "11111111111111111111111111111111",              // System Program
-].map((s) => new PublicKey(s));
-
-export function mergeAllowedPrograms(
-  existing: PublicKey[],
-  required: PublicKey[] = DEFAULT_ALLOWED_PROGRAMS,
-): PublicKey[] {
-  const merged = new Map<string, PublicKey>();
-  for (const p of existing) merged.set(p.toBase58(), p);
-  for (const p of required) merged.set(p.toBase58(), p);
-  return [...merged.values()];
-}
-
-export function getMissingDefaultAllowedPrograms(vault: VaultAccount | null): PublicKey[] {
-  if (!vault) return [];
-  const existing = new Set(vault.allowedPrograms.map((p) => p.toBase58()));
-  return DEFAULT_ALLOWED_PROGRAMS.filter((p) => !existing.has(p.toBase58()));
-}
+/**
+ * The Safe's generic-CPI allowlist is not managed from this app. Additions need a
+ * propose -> 48 h -> activate flow on-chain (docs/safe-cpi-policy-and-orca.md), and the agent
+ * never uses generic CPI. Routes that need a program outside the allowlist are unavailable.
+ */
+export const ALLOWLIST_DISABLED_MESSAGE =
+  "This action needs a program outside the Safe's allowlist. The app no longer asks you to add programs: " +
+  "agent actions use dedicated Safe instructions, and allowlist additions are a timelocked owner action.";
 
 export async function initializeVault(
   provider: AnchorProvider,
@@ -334,25 +306,6 @@ export async function resolveTransferHookAccounts(args: {
     [args.source, args.mint, args.destination, args.owner].map((p) => p.toBase58()),
   );
   return ix.keys.filter((meta) => !baseKeys.has(meta.pubkey.toBase58()));
-}
-
-export async function setAllowedPrograms(
-  provider: AnchorProvider,
-  programs: PublicKey[],
-) {
-  if (programs.length > 16) {
-    throw new Error("Allowed program list cannot exceed 16 entries");
-  }
-
-  const program = getProgram(provider);
-  const owner = provider.wallet.publicKey;
-
-  const sig = await program.methods
-    .setAllowedPrograms(programs)
-    .accounts({ owner, systemProgram: SystemProgram.programId })
-    .rpc();
-
-  return sig;
 }
 
 export async function getVaultUsdcBalance(

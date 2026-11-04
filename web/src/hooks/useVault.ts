@@ -12,8 +12,6 @@ import {
   withdrawUsdc,
   withdrawSpl,
   parseStrategy,
-  setAllowedPrograms,
-  mergeAllowedPrograms,
   type VaultAccount,
   type StrategyName,
 } from "@/lib/vault";
@@ -194,28 +192,6 @@ export function useVault() {
     [getProvider]
   );
 
-  const updateAllowlist = useCallback(async () => {
-    const provider = getProvider();
-    if (!provider) throw new Error("Wallet not connected");
-    if (!vault) throw new Error("Vault not found");
-
-    setTxPending(true);
-    setError(null);
-    try {
-      const mergedPrograms = mergeAllowedPrograms(vault.allowedPrograms ?? []);
-      const sig = await setAllowedPrograms(provider, mergedPrograms);
-      setLastTxSig(sig);
-      triggerBalanceRefresh();
-      return sig;
-      } catch (err: unknown) {
-      const msg = formatWalletError(err);
-      setError(msg);
-      throw err;
-    } finally {
-      setTxPending(false);
-    }
-  }, [getProvider, vault]);
-
   const strategyName: StrategyName | null = vault
     ? parseStrategy(vault.strategy)
     : null;
@@ -233,7 +209,6 @@ export function useVault() {
     depositAsset,
     withdraw,
     withdrawAsset,
-    updateAllowlist,
     refresh,
   };
 }

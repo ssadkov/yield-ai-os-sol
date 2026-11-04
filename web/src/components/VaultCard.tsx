@@ -12,7 +12,7 @@ import { useJupiterBorrowPositions } from "@/hooks/useJupiterBorrowPositions";
 import { useRebalance } from "@/hooks/useRebalance";
 import { AssetRowItem, formatUsd, isUsdcMint } from "@/components/AssetRow";
 import { VaultAllocationChart } from "@/components/VaultAllocationChart";
-import { deriveVaultPda, getMissingDefaultAllowedPrograms, type StrategyName } from "@/lib/vault";
+import { deriveVaultPda, ALLOWLIST_DISABLED_MESSAGE, type StrategyName } from "@/lib/vault";
 import { STRATEGY_DEFS, formatTargetMix } from "@/lib/strategies";
 import { USDC_DECIMALS, USDC_MINT_STR } from "@/lib/constants";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
@@ -246,7 +246,7 @@ const strategyHelp: Record<StrategyName, string> = {
 
 export function VaultCard() {
   const { publicKey } = useWallet();
-  const { vault, strategyName, txPending, error, lastTxSig, refresh, loading, updateAllowlist } = useVault();
+  const { vault, strategyName, txPending, error, lastTxSig, refresh, loading } = useVault();
   const {
     rebalance,
     convertAssetToUsdc,
@@ -255,7 +255,6 @@ export function VaultCard() {
     withdrawJupiterBorrowCollateral,
     borrowJupiterUsdc,
     repayJupiterUsdc,
-    approveWhitelist,
     rebalancing,
     convertingMint,
     result: rebalanceResult,
@@ -330,7 +329,7 @@ export function VaultCard() {
         throw new Error(data.error ?? `Kamino withdraw failed (${res.status})`);
       }
       if (data.status === "needs_whitelist") {
-        throw new Error("Vault allowlist needs an update before Kamino withdraw can run.");
+        throw new Error(ALLOWLIST_DISABLED_MESSAGE);
       }
       await handleRefreshAll();
       // Chain state typically propagates within a few seconds after the
@@ -402,7 +401,7 @@ export function VaultCard() {
           throw new Error(`Kamino unstake: ${data.error ?? `HTTP ${res.status}`}`);
         }
         if (data.status === "needs_whitelist") {
-          throw new Error("Kamino unstake needs an allowlist update first.");
+          throw new Error(ALLOWLIST_DISABLED_MESSAGE);
         }
         update(0, { status: "done", signature: data.signatures?.[data.signatures.length - 1] });
         triggerBalanceRefresh();
@@ -682,8 +681,6 @@ export function VaultCard() {
   const lastRebalance = vault.lastRebalanceTs
     ? vault.lastRebalanceTs.toNumber()
     : 0;
-  const missingDefaultPrograms = getMissingDefaultAllowedPrograms(vault);
-  const allowlistNeedsUpdate = missingDefaultPrograms.length > 0;
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
@@ -1513,28 +1510,6 @@ export function VaultCard() {
         </div>
       </div>
 
-      {allowlistNeedsUpdate && (
-        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium">Protocol access update</div>
-              <div className="text-xs text-muted-foreground">
-                Your vault is missing {missingDefaultPrograms.length} program
-                {missingDefaultPrograms.length === 1 ? "" : "s"} required for current swap and lending actions.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={updateAllowlist}
-              disabled={txPending}
-              className="cursor-pointer shrink-0 text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {txPending ? "Updating..." : "Update"}
-            </button>
-          </div>
-        </div>
-      )}
-
       {error && (
         <div className="text-sm text-destructive mt-3 p-2 bg-destructive/10 rounded">
           {error}
@@ -1556,20 +1531,8 @@ export function VaultCard() {
       )}
 
       {needsWhitelist && (
-        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
-          <div className="text-sm font-medium">One-time setup required</div>
-          <div className="text-xs text-muted-foreground">
-            Your vault needs to whitelist programs required by this route before
-            the agent can execute it. This is a one-time on-chain transaction
-            that you sign as the vault owner.
-          </div>
-          <button
-            onClick={approveWhitelist}
-            disabled={rebalancing}
-            className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {rebalancing ? "Approving..." : "Approve & Retry"}
-          </button>
+        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded text-xs text-muted-foreground">
+          {ALLOWLIST_DISABLED_MESSAGE}
         </div>
       )}
 

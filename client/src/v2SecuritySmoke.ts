@@ -225,7 +225,9 @@ async function run() {
   const candidate = Keypair.generate().publicKey;
   await expectFailure("direct allowlist addition", () => setAllowed([candidate]), /UseTimelock/);
   for (const denied of [TOKEN_PROGRAM_ID, SystemProgram.programId, BPF_LOADER_UPGRADEABLE, program.programId]) {
-    await expectFailure(`propose denied ${denied.toBase58()}`, () => propose(owner, denied), /ProgramDenied/);
+    // The System Program id equals Pubkey::default(), which proposal_slot rejects as InvalidProgram first.
+    const reason = denied.equals(SystemProgram.programId) ? /InvalidProgram/ : /ProgramDenied/;
+    await expectFailure(`propose denied ${denied.toBase58()}`, () => propose(owner, denied), reason);
   }
   await expectFailure("propose program with a typed route", () => propose(owner, KAMINO_KVAULT_PROGRAM), /UseDedicatedInstruction/);
   await expectFailure("non-owner propose", () => propose(attacker, candidate), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);

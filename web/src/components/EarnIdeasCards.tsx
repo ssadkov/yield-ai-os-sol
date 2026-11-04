@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ShieldCheck, Sparkles, Check, Loader2, X as XIcon, Zap } from "lucide-react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { deriveVaultPda } from "@/lib/vault";
+import { deriveVaultPda, ALLOWLIST_DISABLED_MESSAGE } from "@/lib/vault";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useWalletAssets } from "@/hooks/useWalletAssets";
@@ -153,7 +153,7 @@ interface OwnedMatch {
 export function EarnIdeasCards() {
   const { publicKey } = useWallet();
   const { setVisible: setWalletModalVisible } = useWalletModal();
-  const { vault, updateAllowlist } = useVault();
+  const { vault } = useVault();
   const vaultPda = publicKey && vault ? deriveVaultPda(publicKey)[0] : null;
   const { assets: vaultAssets } = useVaultAssets(vaultPda);
   const { assets: walletAssets } = useWalletAssets();
@@ -370,25 +370,7 @@ export function EarnIdeasCards() {
       });
       const data = (await res.json()) as ActionResponse;
       if (data.status === "needs_whitelist") {
-        await updateAllowlist();
-        const retry = await fetch("/api/kamino/kvault/deposit", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            ownerPubkey: ownerStr,
-            kvault: loopAction.kvault,
-            amountRaw: borrowRawStr,
-            decimals: loopAction.kvaultTokenDecimals,
-          }),
-        });
-        const retryData = (await retry.json()) as ActionResponse;
-        if (retryData.status !== "success") {
-          throw new Error(retryData.error ?? "Kamino deposit failed after allowlist update");
-        }
-        updateStep(idea.id, 2, {
-          status: "done",
-          signature: retryData.signatures?.[retryData.signatures.length - 1],
-        });
+        throw new Error(ALLOWLIST_DISABLED_MESSAGE);
       } else if (data.status !== "success") {
         throw new Error(data.error ?? `Kamino deposit failed: ${data.status ?? "unknown"}`);
       } else {
@@ -432,9 +414,7 @@ export function EarnIdeasCards() {
     try {
       let data = await postKaminoDeposit(idea);
       if (data.status === "needs_whitelist") {
-        setActionMessage("Allowlist update required. Confirm the wallet transaction, then deposit will retry.");
-        await updateAllowlist();
-        data = await postKaminoDeposit(idea);
+        throw new Error(ALLOWLIST_DISABLED_MESSAGE);
       }
       if (data.status !== "success") {
         throw new Error(data.error ?? `Kamino deposit failed: ${data.status ?? "unknown"}`);

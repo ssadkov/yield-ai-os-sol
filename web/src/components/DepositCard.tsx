@@ -1,14 +1,12 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { AnchorProvider } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { useEffect, useState, useMemo } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useVault } from "@/hooks/useVault";
 import { useVaultAssets } from "@/hooks/useVaultAssets";
 import { useWalletAssets } from "@/hooks/useWalletAssets";
 import { USDC_MINT_STR, USDC_DECIMALS } from "@/lib/constants";
-import { deriveVaultPda, setAllowedPrograms } from "@/lib/vault";
+import { deriveVaultPda, ALLOWLIST_DISABLED_MESSAGE } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { VAULT_DEPOSIT_ASSETS } from "@/lib/vaultDepositAssets";
 import { isProtocolPositionOrShareToken } from "@/lib/vaultPositionTokens";
@@ -23,7 +21,6 @@ type WithdrawStep =
   | "idle"
   | "converting"
   | "whitelist_needed"
-  | "approving"
   | "withdrawing";
 
 interface ConvertResult {
@@ -89,9 +86,7 @@ function fromVaultAsset(row: AssetRow): UiAsset {
 }
 
 export function DepositCard() {
-  const { connection } = useConnection();
-  const wallet = useWallet();
-  const { publicKey, signTransaction, signAllTransactions } = wallet;
+  const { publicKey } = useWallet();
   const { vault, vaultUsdcBalance, txPending, error, depositAsset, withdraw, withdrawAsset, refresh } =
     useVault();
   const { assets: walletAssets } = useWalletAssets();
@@ -104,7 +99,6 @@ export function DepositCard() {
   const [selectedWithdrawMint, setSelectedWithdrawMint] = useState(USDC_MINT_STR);
   const [withdrawStep, setWithdrawStep] = useState<WithdrawStep>("idle");
   const [convertError, setConvertError] = useState<string | null>(null);
-  const [pendingPrograms, setPendingPrograms] = useState<string[]>([]);
 
   const depositAssets = useMemo(() => {
     return VAULT_DEPOSIT_ASSETS.map((asset) => {
@@ -192,15 +186,6 @@ export function DepositCard() {
     );
   }, [vaultAssets]);
 
-  const getProvider = useCallback(() => {
-    if (!publicKey || !signTransaction || !signAllTransactions) return null;
-    return new AnchorProvider(
-      connection,
-      { publicKey, signTransaction, signAllTransactions } as never,
-      { preflightCommitment: "confirmed" }
-    );
-  }, [connection, publicKey, signTransaction, signAllTransactions]);
-
   if (!publicKey || !vault) return null;
 
   const isDeposit = tab === "deposit";
@@ -215,7 +200,6 @@ export function DepositCard() {
   const busy =
     txPending ||
     withdrawStep === "converting" ||
-    withdrawStep === "approving" ||
     withdrawStep === "withdrawing";
 
   const setHalf = () => {
@@ -278,7 +262,6 @@ export function DepositCard() {
 
   const handleWithdrawAll = async () => {
     setConvertError(null);
-    setPendingPrograms([]);
 
     try {
       if (hasNonUsdcHoldings) {
@@ -291,11 +274,7 @@ export function DepositCard() {
           return;
         }
 
-        if (
-          data.status === "needs_whitelist" &&
-          data.missingPrograms?.length
-        ) {
-          setPendingPrograms(data.missingPrograms);
+        if (data.status === "needs_whitelist") {
           setWithdrawStep("whitelist_needed");
           return;
         }
@@ -311,54 +290,9 @@ export function DepositCard() {
     }
   };
 
-  const handleApproveAndWithdraw = async () => {
-    setConvertError(null);
-
-    try {
-      const provider = getProvider();
-      if (!provider) {
-        setConvertError("Wallet not connected");
-        return;
-      }
-
-      setWithdrawStep("approving");
-      const existingSet = new Set(
-        (vault.allowedPrograms ?? []).map((p: PublicKey) => p.toBase58())
-      );
-      for (const p of pendingPrograms) existingSet.add(p);
-      const mergedPrograms = [...existingSet].map((p) => new PublicKey(p));
-      await setAllowedPrograms(provider, mergedPrograms);
-      setPendingPrograms([]);
-
-      // Retry convert_all after whitelist approval
-      setWithdrawStep("converting");
-      const data = await callConvertAll();
-
-      if (data.status === "error") {
-        setConvertError(data.error ?? "Conversion failed after approval");
-        setWithdrawStep("idle");
-        return;
-      }
-
-      if (data.status === "needs_whitelist") {
-        setConvertError("Still missing whitelist programs. Please try Rebalance first.");
-        setWithdrawStep("idle");
-        return;
-      }
-
-      triggerBalanceRefresh();
-      await doWithdrawAll();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setConvertError(msg);
-      setWithdrawStep("idle");
-    }
-  };
-
   const resetWithdrawState = () => {
     setWithdrawStep("idle");
     setConvertError(null);
-    setPendingPrograms([]);
   };
 
   const handleAssetDrop = (asset: DragAsset) => {
@@ -522,7 +456,7 @@ export function DepositCard() {
       )}
 
       {/* Withdraw all as USDC */}
-      {!isDeposit && withdrawStep !== "whitelist_needed" && withdrawStep !== "approving" && (
+      {!isDeposit && withdrawStep !== "whitelist_needed" && (
         <div className="mt-3 pt-3 border-t border-border">
           <button
             type="button"
@@ -546,25 +480,10 @@ export function DepositCard() {
         </div>
       )}
 
-      {/* Whitelist approval prompt */}
-      {!isDeposit && (withdrawStep === "whitelist_needed" || withdrawStep === "approving") && (
-        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded space-y-2">
-          <div className="text-sm font-medium">One-time setup required</div>
-          <div className="text-xs text-muted-foreground">
-            Your vault needs to whitelist swap programs before tokens can be
-            converted to USDC. Sign this one-time transaction, then the
-            withdrawal will continue automatically.
-          </div>
-          <button
-            type="button"
-            onClick={handleApproveAndWithdraw}
-            disabled={busy}
-            className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {withdrawStep === "approving"
-              ? "Approving..."
-              : "Approve & Withdraw all"}
-          </button>
+      {/* Conversion needs a program outside the allowlist: no in-app approval anymore */}
+      {!isDeposit && withdrawStep === "whitelist_needed" && (
+        <div className="mt-3 p-3 bg-primary/10 border border-primary/30 rounded text-xs text-muted-foreground">
+          {ALLOWLIST_DISABLED_MESSAGE} Withdraw each token directly instead.
         </div>
       )}
 

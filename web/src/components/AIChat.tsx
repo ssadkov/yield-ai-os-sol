@@ -6,16 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { AnchorProvider } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { useWallet } from "@solana/wallet-adapter-react";
 import { useChat, type UIMessage } from "@ai-sdk/react";
 import ReactMarkdown from "react-markdown";
 import { DefaultChatTransport } from "ai";
-import {
-  fetchVaultAccount,
-  setAllowedPrograms,
-} from "@/lib/vault";
+import { ALLOWLIST_DISABLED_MESSAGE } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { CHAT_HINTS } from "@/config/chat-hints";
 import { useVault } from "@/hooks/useVault";
@@ -506,9 +501,7 @@ const chatTransport = new DefaultChatTransport({ api: "/api/chat" });
 /* -- Main component --------------------------------------- */
 
 export function AIChat({ compact = false }: { compact?: boolean }) {
-  const { connection } = useConnection();
-  const wallet = useWallet();
-  const { publicKey, signTransaction, signAllTransactions } = wallet;
+  const { publicKey } = useWallet();
   const { vault } = useVault();
 
   const ownerPubkey = publicKey?.toBase58() ?? null;
@@ -528,8 +521,6 @@ export function AIChat({ compact = false }: { compact?: boolean }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
 
-  const [approveBusy, setApproveBusy] = useState(false);
-  const [approveError, setApproveError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [confirmingAction, setConfirmingAction] = useState<
     "rebalance" | "convert_all" | null
@@ -581,11 +572,8 @@ export function AIChat({ compact = false }: { compact?: boolean }) {
     return parseClientActionResult(txt);
   }, [lastAssistant]);
 
-  const missingPrograms = (lastResult?.missingPrograms ?? []) as string[];
   const needsWhitelist =
-    (lastResult?.status === "needs_whitelist" ||
-      lastResult?.httpStatus === 428) &&
-    missingPrograms.length > 0;
+    lastResult?.status === "needs_whitelist" || lastResult?.httpStatus === 428;
 
   const scrollToBottom = (behavior: ScrollBehavior) => {
     const el = scrollRef.current;
@@ -679,44 +667,6 @@ export function AIChat({ compact = false }: { compact?: boolean }) {
     void sendText("Cancelled — action not executed.");
   };
 
-  const approveWhitelist = async () => {
-    setApproveError(null);
-    if (!ownerPubkey || !publicKey || !signTransaction || !signAllTransactions) {
-      setApproveError("Wallet not connected");
-      return;
-    }
-    if (!needsWhitelist) return;
-
-    setApproveBusy(true);
-    try {
-      const provider = new AnchorProvider(
-        connection,
-        { publicKey, signTransaction, signAllTransactions } as never,
-        { preflightCommitment: "confirmed" }
-      );
-
-      const vault = await fetchVaultAccount(connection, publicKey);
-      if (!vault) throw new Error("Vault not found for this wallet");
-
-      const existing = new Set(
-        (vault.allowedPrograms ?? []).map((p) => p.toBase58())
-      );
-      for (const p of missingPrograms) existing.add(p);
-
-      const merged = [...existing].map((p) => new PublicKey(p));
-      await setAllowedPrograms(provider, merged);
-
-      await sendText(
-        "I signed the whitelist approval transaction. Please retry the action that failed."
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setApproveError(msg);
-    } finally {
-      setApproveBusy(false);
-    }
-  };
-
   /* -- Render message with type detection ------------------- */
 
   const renderMessage = (msg: UIMessage) => {
@@ -787,29 +737,8 @@ export function AIChat({ compact = false }: { compact?: boolean }) {
       </div>
 
       {needsWhitelist && (
-        <div className="px-4 py-3 border-b border-border bg-primary/10">
-          <div className="text-sm font-medium">One-time whitelist required</div>
-          <div className="text-xs text-muted-foreground mt-1">
-            Your vault must whitelist swap programs before the agent can execute
-            routes. You will sign a one-time on-chain transaction as the vault
-            owner.
-          </div>
-          <div className="mt-2">
-            <button
-              type="button"
-              onClick={() => void approveWhitelist()}
-              disabled={approveBusy}
-              className="cursor-pointer text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
-              {approveBusy ? "Approving..." : "Approve whitelist"}
-            </button>
-          </div>
-            <div className="mt-2 text-[11px] text-muted-foreground font-mono break-all">
-            Missing: {missingPrograms.join(", ")}
-          </div>
-          {approveError && (
-            <div className="mt-2 text-xs text-destructive">{approveError}</div>
-          )}
+        <div className="px-4 py-3 border-b border-border bg-primary/10 text-xs text-muted-foreground">
+          {ALLOWLIST_DISABLED_MESSAGE}
         </div>
       )}
 
@@ -865,7 +794,6 @@ export function AIChat({ compact = false }: { compact?: boolean }) {
 
       <form
         onSubmit={(e) => {
-          setApproveError(null);
           e.preventDefault();
           clearError();
           const text = input.trim();

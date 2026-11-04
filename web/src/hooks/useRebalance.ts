@@ -1,10 +1,8 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { AnchorProvider } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
-import { setAllowedPrograms, fetchVaultAccount } from "@/lib/vault";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { ALLOWLIST_DISABLED_MESSAGE } from "@/lib/vault";
 import { triggerBalanceRefresh } from "@/lib/refreshEvent";
 import { SOL_MINT, USDC_MINT_STR } from "@/lib/constants";
 import type { AssetRow } from "@/lib/portfolioAssets";
@@ -60,27 +58,14 @@ type PendingAction =
     };
 
 export function useRebalance() {
-  const { connection } = useConnection();
-  const wallet = useWallet();
-  const { publicKey, signTransaction, signAllTransactions } = wallet;
+  const { publicKey } = useWallet();
 
   const [rebalancing, setRebalancing] = useState(false);
   const [result, setResult] = useState<RebalanceResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsWhitelist, setNeedsWhitelist] = useState(false);
-  const [pendingPrograms, setPendingPrograms] = useState<string[]>([]);
-  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [lastActionLabel, setLastActionLabel] = useState<string>("Action");
   const [convertingMint, setConvertingMint] = useState<string | null>(null);
-
-  const getProvider = useCallback(() => {
-    if (!publicKey || !signTransaction || !signAllTransactions) return null;
-    return new AnchorProvider(
-      connection,
-      { publicKey, signTransaction, signAllTransactions } as never,
-      { preflightCommitment: "confirmed" },
-    );
-  }, [connection, publicKey, signTransaction, signAllTransactions]);
 
   const callRebalanceApi = useCallback(async (): Promise<RebalanceResult> => {
     const res = await fetch("/api/rebalance", {
@@ -179,9 +164,9 @@ export function useRebalance() {
 
   const handleResult = useCallback((data: RebalanceResult) => {
     setResult(data);
-    if (data.status === "needs_whitelist" && data.missingPrograms?.length) {
+    if (data.status === "needs_whitelist") {
       setNeedsWhitelist(true);
-      setPendingPrograms(data.missingPrograms);
+      setError(ALLOWLIST_DISABLED_MESSAGE);
       return;
     }
     if (data.status === "error") {
@@ -200,7 +185,6 @@ export function useRebalance() {
     setNeedsWhitelist(false);
 
     try {
-      setPendingAction({ kind: "rebalance" });
       setLastActionLabel("Rebalance");
       const data = await callRebalanceApi();
       handleResult(data);
@@ -238,7 +222,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Swap");
         const data = await callIndividualSwapApi(action);
         handleResult(data);
@@ -276,7 +259,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Trade");
         const data = await callIndividualSwapApi(action);
         handleResult(data);
@@ -309,7 +291,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Jupiter Lend deposit");
         const data = await callJupiterBorrowDepositApi(action);
         handleResult(data);
@@ -342,7 +323,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Jupiter Lend withdraw");
         const data = await callJupiterBorrowWithdrawApi(action);
         handleResult(data);
@@ -377,7 +357,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Jupiter Lend borrow");
         const data = await callJupiterBorrowUsdcApi(action);
         handleResult(data);
@@ -415,7 +394,6 @@ export function useRebalance() {
       };
 
       try {
-        setPendingAction(action);
         setLastActionLabel("Jupiter Lend repay");
         const data = await callJupiterRepayUsdcApi(action);
         handleResult(data);
@@ -429,50 +407,6 @@ export function useRebalance() {
     [publicKey, callJupiterRepayUsdcApi, handleResult],
   );
 
-  const approveWhitelist = useCallback(async () => {
-    if (!pendingPrograms.length) return;
-    setRebalancing(true);
-    setError(null);
-
-    try {
-      const provider = getProvider();
-      if (!provider) {
-        setError("Wallet not connected");
-        return;
-      }
-
-      const vault = await fetchVaultAccount(connection, publicKey!);
-      const existingSet = new Set(
-        (vault?.allowedPrograms ?? []).map((p) => p.toBase58())
-      );
-      for (const p of pendingPrograms) existingSet.add(p);
-      const mergedPrograms = [...existingSet].map((p) => new PublicKey(p));
-      await setAllowedPrograms(provider, mergedPrograms);
-
-      setNeedsWhitelist(false);
-      setPendingPrograms([]);
-
-      const data =
-        pendingAction?.kind === "individual_swap"
-          ? await callIndividualSwapApi(pendingAction)
-          : pendingAction?.kind === "jupiter_borrow_deposit"
-            ? await callJupiterBorrowDepositApi(pendingAction)
-            : pendingAction?.kind === "jupiter_borrow_withdraw"
-              ? await callJupiterBorrowWithdrawApi(pendingAction)
-              : pendingAction?.kind === "jupiter_borrow_usdc"
-                ? await callJupiterBorrowUsdcApi(pendingAction)
-                : pendingAction?.kind === "jupiter_repay_usdc"
-                  ? await callJupiterRepayUsdcApi(pendingAction)
-            : await callRebalanceApi();
-      handleResult(data);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-    } finally {
-      setRebalancing(false);
-    }
-  }, [pendingPrograms, pendingAction, connection, publicKey, getProvider, callRebalanceApi, callIndividualSwapApi, callJupiterBorrowDepositApi, callJupiterBorrowWithdrawApi, callJupiterBorrowUsdcApi, callJupiterRepayUsdcApi, handleResult]);
-
   return {
     rebalance,
     convertAssetToUsdc,
@@ -481,7 +415,6 @@ export function useRebalance() {
     withdrawJupiterBorrowCollateral,
     borrowJupiterUsdc,
     repayJupiterUsdc,
-    approveWhitelist,
     rebalancing,
     convertingMint,
     result,

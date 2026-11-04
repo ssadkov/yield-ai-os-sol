@@ -45,6 +45,14 @@ derived from the owner's wallet (`["vault", owner]`).
   owner-only, and they cannot touch Kamino kVault shares or Exponent position tokens. An approved
   executor can call only typed instructions: `kamino_deposit` / `kamino_withdraw` and Exponent
   `buy` / `sell` / `redeem`.
+- **Generic CPI is fenced (in source, not deployed yet).** It can never target SPL Token,
+  Token-2022, System, ATA, loaders or this program; programs with typed routes are refused
+  anywhere in the call; adding a program needs two owner signatures 48 hours apart; after the
+  call every Safe token account must still belong to the Safe with no delegate. See
+  [docs/safe-cpi-policy-and-orca.md](docs/safe-cpi-policy-and-orca.md).
+- **Orca route (in source, not deployed yet).** Swaps and LP positions on two pinned BTC pools,
+  outputs only into the Safe's own token accounts, floors and price bands from Pyth. Yield AI
+  takes 10% of collected LP trading fees by default, hard-capped at 20%.
 - **Executors are allowlisted and limited.** A global executor registry (max 16, admin-managed)
   plus per-Safe limits set by the owner: allowed actions, rolling 24-hour USDC volume, principal.
   No executor can move USDC until the owner enables limits for that Safe.
@@ -59,9 +67,9 @@ Instructions by role:
 
 | Role | Instructions |
 |---|---|
-| Owner | `initialize`, `initialize_with_limits`, `deposit`, `deposit_spl`, `withdraw`, `withdraw_spl`, `set_allocation`, `set_agent`, `set_executor_limits`, `set_allowed_programs`, `execute_swap_cpi`, `execute_protocol_cpi`, `init_exponent_position`, `set_exponent_policy`, `deposit_onyc`, `withdraw_onyc`, `recover_exponent`, `close_empty_token_account`, `withdraw_excess_lamports`, `close_safe` |
-| Owner or approved executor, within limits | `kamino_deposit`, `kamino_withdraw`, `exponent_buy_pt`, `exponent_sell_pt`, `exponent_redeem_pt` |
-| Admin | `init_config`, `set_config` (treasury, fee ≤ 20%), `init_executor_registry`, `set_executor_registry` |
+| Owner | `initialize`, `initialize_with_limits`, `deposit`, `deposit_spl`, `withdraw`, `withdraw_spl`, `set_allocation`, `set_agent`, `set_executor_limits`, `set_allowed_programs` (removal only), `propose_allowed_program`, `activate_allowed_program`, `cancel_allowed_program`, `execute_swap_cpi`, `execute_protocol_cpi`, `init_exponent_position`, `set_exponent_policy`, `deposit_onyc`, `withdraw_onyc`, `recover_exponent`, `set_orca_policy`, `orca_lp_exit_nft`, `close_empty_token_account`, `withdraw_excess_lamports`, `refund_excess_lamports`, `close_safe` |
+| Owner or approved executor, within limits | `kamino_deposit`, `kamino_withdraw`, `exponent_buy_pt`, `exponent_sell_pt`, `exponent_redeem_pt`, `orca_swap`, `orca_lp_open`, `orca_lp_increase`, `orca_lp_decrease`, `orca_lp_collect`, `orca_lp_close` |
+| Admin | `init_config`, `set_config` (treasury, fee ≤ 20%), `init_executor_registry`, `set_executor_registry`, `init_lp_fee_config`, `set_lp_fee` (LP fee ≤ 20%, default 10%) |
 | Anyone | `create_safe_for` (sponsored Safe creation; the PDA is bound to the owner), transfers into the Safe |
 
 ## What is live, and what is not
@@ -77,6 +85,7 @@ Instructions by role:
 | USDC from Base via Circle CCTP into the Safe | Testnet only |
 | Safe owned by an EVM address (EIP-712 signatures, relayer) | Devnet only |
 | Upgrade authority in a Squads 2-of-3 multisig with timelock | Rehearsed on devnet; mainnet authority is still a single key |
+| Generic CPI timelock and deny-list, Orca swaps and LP, owner-only lamport refund, `close_safe` principal guard | In source; SBF build and LiteSVM fork test against live Orca/Token-2022 ELFs pass (53 steps, 45 expected rejections); not audited or deployed ([plan](docs/safe-cpi-policy-and-orca.md)) |
 | Autonomous agent with a decision journal | Not built yet |
 
 ### Deployed binary
@@ -88,7 +97,8 @@ Instructions by role:
 | Upgrade authority | `8xwjNX3hWwG9BEBVL3SCZqtsqPGgA8ARXq7eSzCTee9A` (single key) |
 
 The hash was re-checked against a fresh mainnet dump on 2026-10-12. The deployed source is
-`main` without one later instruction, `refund_excess_lamports`, which is **not deployed**. The
+`main` as of 2026-10-12 without one later instruction, `refund_excess_lamports`, which is **not
+deployed**; the CPI policy and Orca code added on 2026-11-04 is not deployed either. The
 build is not yet registered as a verifiable build (OtterSec); that, the multisig and a
 `security.txt` come with the next program upgrade.
 

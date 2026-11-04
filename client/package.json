@@ -12,7 +12,10 @@
     "exponent:deployment-test": "tsx src/exponentDeploymentTest.ts",
     "exponent:inspect": "tsx src/exponentInspect.ts",
     "exponent:fork-prepare": "tsx src/exponentForkPrepare.ts",
-    "exponent:fork": "tsx src/v2ExponentFork.ts"
+    "exponent:fork": "tsx src/v2ExponentFork.ts",
+    "orca:fork-prepare": "tsx src/orcaForkPrepare.ts",
+    "orca:probe-build": "cargo build-sbf --manifest-path fixtures/cpi-probe/Cargo.toml",
+    "orca:fork": "tsx src/v2OrcaFork.ts"
   },
   "engines": {
     "node": ">=20"

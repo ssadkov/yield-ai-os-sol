@@ -85,7 +85,7 @@ Instructions by role:
 | USDC from Base via Circle CCTP into the Safe | Testnet only |
 | Safe owned by an EVM address (EIP-712 signatures, relayer) | Devnet only |
 | Upgrade authority in a Squads 2-of-3 multisig with timelock | Rehearsed on devnet; mainnet authority is still a single key |
-| Generic CPI timelock and deny-list, Orca swaps and LP, owner-only lamport refund, `close_safe` principal guard | In source with host tests; not built for SBF, fork-tested or deployed ([plan](docs/safe-cpi-policy-and-orca.md)) |
+| Generic CPI timelock and deny-list, Orca swaps and LP, owner-only lamport refund, `close_safe` principal guard | In source; SBF build and LiteSVM fork test against live Orca/Token-2022 ELFs pass (53 steps, 45 expected rejections); not audited or deployed ([plan](docs/safe-cpi-policy-and-orca.md)) |
 | Autonomous agent with a decision journal | Not built yet |
 
 ### Deployed binary

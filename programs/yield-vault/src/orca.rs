@@ -32,8 +32,15 @@ const MIN_SQRT_PRICE: u128 = 4_295_048_016;
 const MAX_SQRT_PRICE: u128 = 79_226_673_515_401_279_992_447_579_055;
 
 pub const ROUTE_ORCA_LP: usize = 2;
-/// Sponsored Pyth feeds were 22-93 s old at review time; tune after observing mainnet cadence.
-pub const ORACLE_MAX_AGE_SECONDS: i64 = 120;
+/// Pyth sponsored-feed cadence measured on mainnet 2026-11-04 (30 min, 4 s sampling):
+/// BTC/USD every ~13 s (max gap 54 s), USDC/USD and WBTC/USD every ~54 s (max 56 s),
+/// cbBTC/USD only every ~270 s. Prices therefore come from BTC/USD for both wrappers; the
+/// wrapper feeds are used only as a peg check, with a looser age limit.
+pub const PRICE_MAX_AGE_SECONDS: i64 = 90;
+pub const USDC_MAX_AGE_SECONDS: i64 = 120;
+pub const PEG_MAX_AGE_SECONDS: i64 = 600;
+/// A wrapper (cbBTC, WBTC) must trade within 1% of BTC/USD on its own Pyth feed.
+pub const MAX_PEG_DEVIATION_BPS: u16 = 100;
 /// Refuse prices whose confidence interval exceeds 1%.
 pub const MAX_ORACLE_CONF_BPS: u128 = 100;
 pub const DEFAULT_LP_FEE_BPS: u16 = 1_000;
@@ -44,35 +51,58 @@ pub const MAX_ORCA_POSITIONS: u8 = 4;
 pub const MAX_OPENS_PER_DAY_CAP: u8 = 24;
 const SECONDS_PER_DAY: i64 = 86_400;
 
+pub struct Feed {
+    pub address: Pubkey,
+    pub feed_id: [u8; 32],
+    pub max_age: i64,
+}
+
+pub const FEED_USDC: usize = 0;
+pub const FEED_BTC: usize = 1;
+pub const FEED_CBBTC: usize = 2;
+pub const FEED_WBTC: usize = 3;
+/// Pyth sponsored push feeds (shard 0), owned by the Pyth receiver. Checked 2026-11-04.
+pub const FEEDS: [Feed; 4] = [
+    Feed {
+        address: pubkey!("Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX"),
+        feed_id: [234, 160, 32, 198, 28, 196, 121, 113, 40, 19, 70, 28, 225, 83, 137, 74, 150, 166, 192, 11, 33, 237, 12, 252, 39, 152, 209, 249, 169, 233, 201, 74],
+        max_age: USDC_MAX_AGE_SECONDS,
+    },
+    Feed { // BTC/USD
+        address: pubkey!("4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo"),
+        feed_id: [230, 45, 246, 200, 180, 168, 95, 225, 166, 125, 180, 77, 193, 45, 229, 219, 51, 15, 122, 198, 107, 114, 220, 101, 138, 254, 223, 15, 74, 65, 91, 67],
+        max_age: PRICE_MAX_AGE_SECONDS,
+    },
+    Feed { // cbBTC/USD, peg check only
+        address: pubkey!("7oqYpv5YbjJ2PEsNeVVB5ZEZ8ZE6ufkj8hAvAiaiftbe"),
+        feed_id: [40, 23, 215, 191, 229, 198, 75, 142, 169, 86, 233, 162, 111, 87, 62, 246, 78, 114, 228, 215, 137, 31, 45, 106, 249, 188, 201, 63, 122, 255, 154, 151],
+        max_age: PEG_MAX_AGE_SECONDS,
+    },
+    Feed { // WBTC/USD, peg check only
+        address: pubkey!("9gNX5vguzarZZPjTnE1hWze3s6UsZ7dsU3UnAmKPnMHG"),
+        feed_id: [201, 216, 176, 117, 165, 198, 147, 3, 54, 90, 226, 54, 51, 212, 224, 133, 25, 155, 245, 197, 32, 163, 185, 15, 237, 19, 34, 160, 52, 47, 252, 51],
+        max_age: PEG_MAX_AGE_SECONDS,
+    },
+];
+
 pub struct Asset {
     pub mint: Pubkey,
     pub decimals: u8,
-    pub feed: Pubkey,
-    pub feed_id: [u8; 32],
+    /// Feed that prices the asset.
+    pub price_feed: usize,
+    /// Optional feed of the asset itself, compared with `price_feed` (wrapper depeg check).
+    pub peg_feed: Option<usize>,
 }
 
 pub const ASSET_USDC: usize = 0;
 pub const ASSET_COUNT: usize = 3;
 /// Index 0 must stay USDC: values and executor limits are in USDC base units.
 pub const ASSETS: [Asset; ASSET_COUNT] = [
-    Asset {
-        mint: pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
-        decimals: 6,
-        feed: pubkey!("Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX"),
-        feed_id: [234, 160, 32, 198, 28, 196, 121, 113, 40, 19, 70, 28, 225, 83, 137, 74, 150, 166, 192, 11, 33, 237, 12, 252, 39, 152, 209, 249, 169, 233, 201, 74],
-    },
-    Asset { // cbBTC
-        mint: pubkey!("cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"),
-        decimals: 8,
-        feed: pubkey!("7oqYpv5YbjJ2PEsNeVVB5ZEZ8ZE6ufkj8hAvAiaiftbe"),
-        feed_id: [40, 23, 215, 191, 229, 198, 75, 142, 169, 86, 233, 162, 111, 87, 62, 246, 78, 114, 228, 215, 137, 31, 45, 106, 249, 188, 201, 63, 122, 255, 154, 151],
-    },
-    Asset { // WBTC (Wormhole)
-        mint: pubkey!("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"),
-        decimals: 8,
-        feed: pubkey!("9gNX5vguzarZZPjTnE1hWze3s6UsZ7dsU3UnAmKPnMHG"),
-        feed_id: [201, 216, 176, 117, 165, 198, 147, 3, 54, 90, 226, 54, 51, 212, 224, 133, 25, 155, 245, 197, 32, 163, 185, 15, 237, 19, 34, 160, 52, 47, 252, 51],
-    },
+    Asset { mint: pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), decimals: 6, price_feed: FEED_USDC, peg_feed: None },
+    // cbBTC: priced by BTC/USD, own feed as peg check.
+    Asset { mint: pubkey!("cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"), decimals: 8, price_feed: FEED_BTC, peg_feed: Some(FEED_CBBTC) },
+    // WBTC (Wormhole): priced by BTC/USD, own feed as peg check.
+    Asset { mint: pubkey!("3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh"), decimals: 8, price_feed: FEED_BTC, peg_feed: Some(FEED_WBTC) },
 ];
 
 pub struct Pool {
@@ -177,8 +207,8 @@ pub fn parse_price_update(data: &[u8], feed_id: &[u8; 32]) -> Result<Price> {
     Ok(Price { price: price as u64, conf, expo, publish_time })
 }
 
-pub fn check_price(p: &Price, now: i64) -> Result<()> {
-    require!(p.publish_time <= now + 30 && now - p.publish_time <= ORACLE_MAX_AGE_SECONDS, OrcaError::StaleOracle);
+pub fn check_price(p: &Price, now: i64, max_age: i64) -> Result<()> {
+    require!(p.publish_time <= now + 30 && now - p.publish_time <= max_age, OrcaError::StaleOracle);
     require!(u128::from(p.conf) * 10_000 <= u128::from(p.price) * MAX_ORACLE_CONF_BPS, OrcaError::OracleConfidence);
     Ok(())
 }
@@ -436,12 +466,34 @@ fn require_orca_owned(infos: &[&AccountInfo]) -> Result<()> {
     Ok(())
 }
 
-fn load_price(info: &AccountInfo, asset: usize, now: i64) -> Result<Price> {
-    require_keys_eq!(info.key(), ASSETS[asset].feed, OrcaError::InvalidOracle);
+fn load_feed(info: &AccountInfo, feed: usize, now: i64) -> Result<Price> {
+    require_keys_eq!(info.key(), FEEDS[feed].address, OrcaError::InvalidOracle);
     require_keys_eq!(*info.owner, PYTH_RECEIVER, OrcaError::InvalidOracle);
-    let price = parse_price_update(&info.try_borrow_data()?, &ASSETS[asset].feed_id)?;
-    check_price(&price, now)?;
+    let price = parse_price_update(&info.try_borrow_data()?, &FEEDS[feed].feed_id)?;
+    check_price(&price, now, FEEDS[feed].max_age)?;
     Ok(price)
+}
+
+/// Price of an asset from its price feed. A wrapper's own feed must be within
+/// MAX_PEG_DEVIATION_BPS of it; for an asset without a peg feed, `peg` must be the price feed.
+fn load_asset_price(price_info: &AccountInfo, peg_info: &AccountInfo, asset: usize, now: i64) -> Result<Price> {
+    let price = load_feed(price_info, ASSETS[asset].price_feed, now)?;
+    match ASSETS[asset].peg_feed {
+        Some(peg_feed) => {
+            let peg = load_feed(peg_info, peg_feed, now)?;
+            require!(within_peg(&peg, &price), OrcaError::Depeg);
+        }
+        None => require_keys_eq!(peg_info.key(), FEEDS[ASSETS[asset].price_feed].address, OrcaError::InvalidOracle),
+    }
+    Ok(price)
+}
+
+/// Same-unit prices (both USD) within MAX_PEG_DEVIATION_BPS of each other.
+pub fn within_peg(peg: &Price, reference: &Price) -> bool {
+    match oracle_price_x64(peg, 0, reference, 0) {
+        Some(ratio) => within_band(ratio, 1u128 << 64, MAX_PEG_DEVIATION_BPS),
+        None => false,
+    }
 }
 
 /// Prices for both pool assets and USDC, and the pool-vs-oracle band check.
@@ -451,10 +503,11 @@ struct Quotes {
     usdc: Price,
 }
 
-fn load_quotes(pool: &Pool, feeds: [&AccountInfo; 3], state: &PoolState, max_dev_bps: u16, now: i64) -> Result<Quotes> {
-    let a = load_price(feeds[0], pool.asset_a, now)?;
-    let b = load_price(feeds[1], pool.asset_b, now)?;
-    let usdc = load_price(feeds[2], ASSET_USDC, now)?;
+/// feeds = [price A, price B, USDC/USD, peg A, peg B].
+fn load_quotes(pool: &Pool, feeds: [&AccountInfo; 5], state: &PoolState, max_dev_bps: u16, now: i64) -> Result<Quotes> {
+    let a = load_asset_price(feeds[0], feeds[3], pool.asset_a, now)?;
+    let b = load_asset_price(feeds[1], feeds[4], pool.asset_b, now)?;
+    let usdc = load_feed(feeds[2], FEED_USDC, now)?;
     let oracle = oracle_price_x64(&a, ASSETS[pool.asset_a].decimals, &b, ASSETS[pool.asset_b].decimals)
         .ok_or(OrcaError::MathOverflow)?;
     let spot = pool_price_x64(state.sqrt_price).ok_or(OrcaError::MathOverflow)?;
@@ -617,12 +670,16 @@ pub struct OrcaSwap<'info> {
     /// CHECK: must equal the pinned Orca oracle PDA of the pool.
     #[account(mut)]
     pub orca_oracle: UncheckedAccount<'info>,
-    /// CHECK: pinned Pyth feed of pool asset A.
+    /// CHECK: pinned Pyth price feed of pool asset A (BTC/USD for cbBTC and WBTC).
     pub feed_a: UncheckedAccount<'info>,
-    /// CHECK: pinned Pyth feed of pool asset B.
+    /// CHECK: pinned Pyth price feed of pool asset B.
     pub feed_b: UncheckedAccount<'info>,
     /// CHECK: pinned Pyth USDC/USD feed.
     pub feed_usdc: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset A (its own Pyth feed), or its price feed if it has none.
+    pub peg_a: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset B, or its price feed if it has none.
+    pub peg_b: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// CHECK: Orca Whirlpool program.
     #[account(address = ORCA_PROGRAM)]
@@ -660,7 +717,7 @@ pub fn handle_orca_swap<'info>(ctx: Context<'_, '_, '_, 'info, OrcaSwap<'info>>,
     require_orca_owned(&[&a.tick_array_0, &a.tick_array_1, &a.tick_array_2])?;
 
     let policy = &a.orca_policy;
-    let q = load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc], &state, policy.max_oracle_deviation_bps, now)?;
+    let q = load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc, &a.peg_a, &a.peg_b], &state, policy.max_oracle_deviation_bps, now)?;
     let (in_asset, out_asset, in_price, out_price) =
         if a_to_b { (pool.asset_a, pool.asset_b, q.a, q.b) } else { (pool.asset_b, pool.asset_a, q.b, q.a) };
     let expected = convert(amount_in, &in_price, ASSETS[in_asset].decimals, &out_price, ASSETS[out_asset].decimals)
@@ -745,12 +802,16 @@ pub struct OrcaOpenPosition<'info> {
     #[account(init, payer = authority, space = 8 + OrcaPositionRecord::INIT_SPACE,
         seeds = [b"orca_position", vault.key().as_ref(), position_mint.key().as_ref()], bump)]
     pub position_record: Box<Account<'info, OrcaPositionRecord>>,
-    /// CHECK: pinned Pyth feed of pool asset A.
+    /// CHECK: pinned Pyth price feed of pool asset A (BTC/USD for cbBTC and WBTC).
     pub feed_a: UncheckedAccount<'info>,
-    /// CHECK: pinned Pyth feed of pool asset B.
+    /// CHECK: pinned Pyth price feed of pool asset B.
     pub feed_b: UncheckedAccount<'info>,
     /// CHECK: pinned Pyth USDC/USD feed.
     pub feed_usdc: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset A (its own Pyth feed), or its price feed if it has none.
+    pub peg_a: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset B, or its price feed if it has none.
+    pub peg_b: UncheckedAccount<'info>,
     pub token_2022_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -778,7 +839,7 @@ pub fn handle_orca_open<'info>(ctx: Context<'_, '_, '_, 'info, OrcaOpenPosition<
         let policy = &a.orca_policy;
         require!(policy.pools_mask & (1 << pool_index) != 0, OrcaError::PoolDisabled);
         require!(a.vault.allocation_bps[ROUTE_ORCA_LP] > 0, ErrorCode::RouteDisabled);
-        load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc], &state, policy.max_oracle_deviation_bps, now)?;
+        load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc, &a.peg_a, &a.peg_b], &state, policy.max_oracle_deviation_bps, now)?;
         check_agent_range(tick_lower, tick_upper, pool.tick_spacing, state.tick_current,
             policy.min_width_ticks, policy.max_width_ticks)?;
     }
@@ -870,12 +931,16 @@ pub struct OrcaLiquidity<'info> {
     /// CHECK: Orca-owned; Orca checks it covers tick_upper.
     #[account(mut)]
     pub tick_array_upper: UncheckedAccount<'info>,
-    /// CHECK: pinned Pyth feed of pool asset A.
+    /// CHECK: pinned Pyth price feed of pool asset A (BTC/USD for cbBTC and WBTC).
     pub feed_a: UncheckedAccount<'info>,
-    /// CHECK: pinned Pyth feed of pool asset B.
+    /// CHECK: pinned Pyth price feed of pool asset B.
     pub feed_b: UncheckedAccount<'info>,
     /// CHECK: pinned Pyth USDC/USD feed.
     pub feed_usdc: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset A (its own Pyth feed), or its price feed if it has none.
+    pub peg_a: UncheckedAccount<'info>,
+    /// CHECK: pinned peg feed of asset B, or its price feed if it has none.
+    pub peg_b: UncheckedAccount<'info>,
     pub token_program: Program<'info, Token>,
     /// CHECK: SPL Memo, required by Orca v2 instructions.
     #[account(address = MEMO_PROGRAM)]
@@ -957,7 +1022,7 @@ pub fn handle_orca_increase<'info>(ctx: Context<'_, '_, '_, 'info, OrcaLiquidity
         require!(a.orca_policy.pools_mask & (1 << a.position_record.pool) != 0, OrcaError::PoolDisabled);
         require!(a.vault.allocation_bps[ROUTE_ORCA_LP] > 0, ErrorCode::RouteDisabled);
     }
-    let q = load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc], &state, a.orca_policy.max_oracle_deviation_bps, now)?;
+    let q = load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc, &a.peg_a, &a.peg_b], &state, a.orca_policy.max_oracle_deviation_bps, now)?;
     let (before_a, before_b) = (a.safe_token_a.amount, a.safe_token_b.amount);
     liquidity_cpi(a, IX_INCREASE_LIQUIDITY_V2, liquidity, token_max_a, token_max_b)?;
     ctx.accounts.safe_token_a.reload()?;
@@ -995,7 +1060,7 @@ pub fn handle_orca_decrease<'info>(ctx: Context<'_, '_, '_, 'info, OrcaLiquidity
     let (pool, state, position) = check_liquidity_accounts(a)?;
     require!(liquidity > 0 && liquidity <= position.liquidity, OrcaError::InvalidLiquidity);
     let quotes = if executor {
-        Some(load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc], &state, a.orca_policy.max_oracle_deviation_bps, now)?)
+        Some(load_quotes(pool, [&a.feed_a, &a.feed_b, &a.feed_usdc, &a.peg_a, &a.peg_b], &state, a.orca_policy.max_oracle_deviation_bps, now)?)
     } else {
         None
     };
@@ -1355,6 +1420,7 @@ pub enum OrcaError {
     #[msg("Rent receiver must be the position funder")] InvalidReceiver,
     #[msg("Tick array is not owned by Orca")] InvalidTickArray,
     #[msg("Math overflow")] MathOverflow,
+    #[msg("Wrapped asset is off its BTC peg")] Depeg,
 }
 
 #[cfg(test)]
@@ -1405,6 +1471,19 @@ mod tests {
     }
 
     #[test]
+    fn wrapper_peg_check() {
+        let btc = Price { price: 7_787_272_748_154, conf: 8_722_251_846, expo: -8, publish_time: 1_000 };
+        assert!(within_peg(&cbbtc(), &btc)); // 3 bps apart in the live snapshot
+        assert!(within_peg(&wbtc(), &btc)); // 25 bps apart
+        let off = Price { price: btc.price * 98 / 100, ..btc };
+        assert!(!within_peg(&off, &btc));
+        let edge = Price { price: btc.price * 9_901 / 10_000, ..btc }; // 99.01%
+        assert!(within_peg(&edge, &btc));
+        let exp6 = Price { price: btc.price / 100, expo: -6, ..btc }; // same value, other exponent
+        assert!(within_peg(&exp6, &btc));
+    }
+
+    #[test]
     fn swap_floor_and_price_limit() {
         assert_eq!(apply_bps_floor(10_000, 50), 9_950);
         assert_eq!(apply_bps_floor(10_000, 10_000), 0);
@@ -1434,19 +1513,20 @@ mod tests {
 
     #[test]
     fn pyth_parsing_freshness_and_confidence() {
-        let id = ASSETS[1].feed_id;
+        let id = FEEDS[FEED_CBBTC].feed_id;
         let p = parse_price_update(&feed_bytes(&id, 7_785_024_792_801, 16_316_777_696, -8, 1_000, 1), &id).unwrap();
         assert_eq!(p, Price { price: 7_785_024_792_801, conf: 16_316_777_696, expo: -8, publish_time: 1_000 });
         assert!(parse_price_update(&feed_bytes(&id, 1, 0, -8, 0, 0), &id).is_err()); // partial verification
-        assert!(parse_price_update(&feed_bytes(&ASSETS[2].feed_id, 1, 0, -8, 0, 1), &id).is_err()); // wrong feed
+        assert!(parse_price_update(&feed_bytes(&FEEDS[FEED_WBTC].feed_id, 1, 0, -8, 0, 1), &id).is_err()); // wrong feed
         assert!(parse_price_update(&feed_bytes(&id, -1, 0, -8, 0, 1), &id).is_err());
         let mut bad = feed_bytes(&id, 1, 0, -8, 0, 1); bad[0] ^= 1;
         assert!(parse_price_update(&bad, &id).is_err());
-        assert!(check_price(&p, 1_000 + ORACLE_MAX_AGE_SECONDS).is_ok());
-        assert!(check_price(&p, 1_001 + ORACLE_MAX_AGE_SECONDS).is_err());
-        assert!(check_price(&p, 900).is_err()); // published far in the future
+        assert!(check_price(&p, 1_000 + PRICE_MAX_AGE_SECONDS, PRICE_MAX_AGE_SECONDS).is_ok());
+        assert!(check_price(&p, 1_001 + PRICE_MAX_AGE_SECONDS, PRICE_MAX_AGE_SECONDS).is_err());
+        assert!(check_price(&p, 1_000 + PEG_MAX_AGE_SECONDS, PEG_MAX_AGE_SECONDS).is_ok());
+        assert!(check_price(&p, 900, PRICE_MAX_AGE_SECONDS).is_err()); // published far in the future
         let wide = Price { conf: p.price / 50, ..p }; // 2%
-        assert!(check_price(&wide, 1_000).is_err());
+        assert!(check_price(&wide, 1_000, PRICE_MAX_AGE_SECONDS).is_err());
     }
 
     fn policy_args() -> OrcaPolicyArgs {
@@ -1555,9 +1635,13 @@ mod tests {
         }
         let shard = 0u16.to_le_bytes();
         let push = pubkey!("pythWSnswVUd12oZpeFP8e9CVaEqJg25g1Vtc2biRsT");
-        for asset in ASSETS.iter() {
-            let feed = Pubkey::find_program_address(&[&shard, &asset.feed_id], &push).0;
-            assert_eq!(feed, asset.feed);
+        for feed in FEEDS.iter() {
+            assert_eq!(Pubkey::find_program_address(&[&shard, &feed.feed_id], &push).0, feed.address);
         }
+        for asset in ASSETS.iter() {
+            assert!(asset.price_feed < FEEDS.len() && asset.peg_feed.map_or(true, |f| f < FEEDS.len() && f != asset.price_feed));
+        }
+        // Measured cadence (see constants): every price feed's limit is above its observed max gap.
+        assert!(PRICE_MAX_AGE_SECONDS > 54 && USDC_MAX_AGE_SECONDS > 56 && PEG_MAX_AGE_SECONDS > 270);
     }
 }

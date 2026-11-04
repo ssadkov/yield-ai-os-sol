@@ -2,10 +2,12 @@
 
 Дата: 2026-11-04. Ветка `claude/ecstatic-allen-hw0dme`. Это спецификация того, что уже написано в коде, и план выкатки.
 
-**Статус:**
+**Статус на 2026-11-04:**
 - Код в `programs/yield-vault/src/cpi_policy.rs`, `orca.rs` и `lib.rs`.
-- `cargo test -p yield-vault --lib`: 30 тестов проходят. `cargo check --features idl-build` проходит, IDL генерируется.
-- **Не сделано:** SBF-сборка (`anchor build`), прогон на форке, деплой, аудит. Без форк-тестов и аудита на mainnet не выкатывать (порядок — в разделе 6).
+- `cargo test -p yield-vault --lib`: 31 тест проходит.
+- **SBF-сборка** (`cargo build-sbf`, platform-tools v1.52, Agave 3.1.12) проходит без предупреждений о стеке. ELF — 1,027,352 байта, SHA-256 `f4bd23ff…` при закоммиченном `Cargo.lock`. IDL собирается `anchor idl build` (Anchor CLI 0.32.1).
+- **Форк-тест** на LiteSVM с живыми ELF Orca и Token-2022 и снимком mainnet: 53 успешных шага и 45 ожидаемых отказов, все с нужной ошибкой (раздел 5).
+- **Не сделано:** деплой и аудит. Без аудита на mainnet не выкатывать (порядок — в разделе 6).
 
 Связанные документы:
 - [hackathon-contract-review-2026-11.md](hackathon-contract-review-2026-11.md) — ревью, из которого выросли эти изменения;
@@ -45,7 +47,7 @@
 
 **Что остаётся.** Через активированную программу (например, Jupiter) владелец может отправить результат свапа на чужой аккаунт. От подменённого фронтенда защищают только 48 часов: UI обязан показывать заявки в ожидании, а владелец может их отменить. Полное решение — убрать generic CPI, когда для всех нужных действий появятся типизированные маршруты.
 
-**Миграция не нужна.** У всех пяти Safe на mainnet allowlist пустой (проверено 2026-11-03). Старые клиенты, которые добавляют программы через `set_allowed_programs`, получат `UseTimelock`. Старый список `DEFAULT_ALLOWED_PROGRAMS` в `web/src/lib/vault.ts` уже и так не работал (18 записей при лимите 16). Его и вызовы `setAllowedPrograms` в `DepositCard`, `AIChat`, `useRebalance`, `useVault` нужно удалить отдельным PR.
+**Миграция не нужна.** У всех пяти Safe на mainnet allowlist пустой (проверено 2026-11-03). Старые клиенты, которые добавляют программы через `set_allowed_programs`, получат `UseTimelock`. Старый список `DEFAULT_ALLOWED_PROGRAMS` в `web/src/lib/vault.ts` уже и так не работал (18 записей при лимите 16); он и все вызовы `setAllowedPrograms` удаляются в [ssadkov/yield-ai-os-sol#41](https://github.com/ssadkov/yield-ai-os-sol/pull/41).
 
 ## 3. Маршрут Orca
 
@@ -56,16 +58,28 @@
 | 0 | cbBTC/USDC | `HxA6SKW5qA4o12fjVgTpXdq2YnZ5Zv1s7SB4FFomsyLM` | 4 | 0.04% | `FWiLr7…`, `5ahiXj…` |
 | 1 | cbBTC/WBTC | `4v8ufj8Hj7UvFgtofQJAtzUud5xomwZfEqfCTHZ4wM72` | 1 | 0.01% | `Br2L7L…`, `4WBthD…` |
 
-| Актив | Mint | Decimals | Pyth feed (sponsored, shard 0) |
-|---|---|---:|---|
-| USDC | `EPjFWdd5…` | 6 | `Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX` |
-| cbBTC | `cbbtcf3a…` | 8 | `7oqYpv5YbjJ2PEsNeVVB5ZEZ8ZE6ufkj8hAvAiaiftbe` |
-| WBTC (Wormhole) | `3NZ9JMVB…` | 8 | `9gNX5vguzarZZPjTnE1hWze3s6UsZ7dsU3UnAmKPnMHG` |
+| Актив | Mint | Decimals | Цена из фида | Проверка привязки |
+|---|---|---:|---|---|
+| USDC | `EPjFWdd5…` | 6 | USDC/USD | — |
+| cbBTC | `cbbtcf3a…` | 8 | BTC/USD | cbBTC/USD в пределах 1% от BTC/USD |
+| WBTC (Wormhole) | `3NZ9JMVB…` | 8 | BTC/USD | WBTC/USD в пределах 1% от BTC/USD |
+
+**Частота обновления фидов Pyth.** Замер на mainnet 2026-11-04: 30 минут, опрос каждые 4 с, 429 снимков.
+
+| Фид (sponsored, shard 0) | Адрес | Интервал: медиана / максимум | Возраст p99 | Предел в контракте |
+|---|---|---|---|---|
+| BTC/USD | `4cSM2e6rvbGQUFiJbqytoVMi5GgghSMr8LwVrT9VPSPo` | 13 с / 54 с | 47 с | 90 с (`PRICE_MAX_AGE_SECONDS`) |
+| USDC/USD | `Dpw1EAVrSB1ibxiDQyTAW6Zip3J4Btk2x4SgApQCeFbX` | 54 с / 56 с | 57 с | 120 с |
+| WBTC/USD | `9gNX5vguzarZZPjTnE1hWze3s6UsZ7dsU3UnAmKPnMHG` | 54 с / 56 с | 56 с | 600 с (только привязка) |
+| cbBTC/USD | `7oqYpv5YbjJ2PEsNeVVB5ZEZ8ZE6ufkj8hAvAiaiftbe` | **270 с / 270 с** | 280 с | 600 с (только привязка) |
+
+Фид cbBTC обновляется раз в ~4.5 минуты. С прежним пределом 120 с агент стоял бы больше половины времени, а поднимать предел до 300 с значило бы считать цену BTC по пятиминутному значению. Поэтому оба BTC-актива оцениваются по BTC/USD (обновляется каждые ~13 с). Собственные фиды обёрток проверяют только, что обёртка не отвязалась от BTC: отклонение больше 1% → `Depeg`. Для этой проверки старое значение допустимо.
 
 - Адреса Orca oracle PDA и Pyth feed пересчитываются в тесте `pinned_constants_are_consistent`.
 - Все три mint — классический SPL Token. Пулы с Token-2022 активами пока не поддерживаются.
-- **Оракул.** Pyth `PriceUpdateV2` с полной верификацией. Владелец аккаунта — Pyth receiver `rec5EK…`, feed id сверяется. Возраст цены — не больше 120 с: на 2026-11-04 фиды были свежими на 22–93 с, порог надо подстроить по реальной частоте обновлений. Цена отвергается, если доверительный интервал шире 1%. Стоимость считается в базовых единицах USDC через фид USDC/USD.
-- **Полоса цены.** Цена пула (`sqrt_price²`) должна отличаться от цены по оракулу не больше чем на `max_oracle_deviation_bps`. Так одновременно ловятся манипуляция пулом и отвязка cbBTC или WBTC: для пары cbBTC/WBTC отношение двух фидов около 1, и при отвязке пул выходит из полосы.
+- **Оракул.** Pyth `PriceUpdateV2` с полной верификацией. Владелец аккаунта — Pyth receiver `rec5EK…`, адрес и feed id сверяются. Цена отвергается, если доверительный интервал шире 1%. Стоимость считается в базовых единицах USDC через фид USDC/USD.
+- **Аккаунты.** Каждая инструкция с оракулом принимает `feed_a`, `feed_b` (фиды цены, для cbBTC и WBTC — BTC/USD), `feed_usdc`, `peg_a`, `peg_b`. Для актива без проверки привязки (USDC) в `peg_*` передаётся его фид цены.
+- **Полоса цены.** Цена пула (`sqrt_price²`) должна отличаться от цены по оракулу не больше чем на `max_oracle_deviation_bps`. Для пары cbBTC/WBTC оракульная цена — ровно 1 (оба по BTC/USD). Отвязка одной из обёрток ловится дважды: пул выходит из полосы, а проверка привязки даёт `Depeg`.
 
 ### Политика владельца: `set_orca_policy` (PDA `["orca_policy", vault]`)
 
@@ -123,8 +137,15 @@
 
 - **`refund_excess_lamports`** — теперь только владелец (MEDIUM-2 из ревью). Агентский путь пользовался только старый v1-код Jupiter Borrow.
 - **Тестовые скрипты.** `client/src/v2SecuritySmoke.ts`, `v2KaminoFork.ts` и `v2ExponentFork.ts` переведены на новые правила: пустой allowlist при создании, timelock, deny-list, вывод владельца через `withdraw`.
+- **Новый форк-тест:** `client/src/orcaForkPrepare.ts`, `client/src/v2OrcaFork.ts` и тестовая программа `client/fixtures/cpi-probe` (не деплоить).
+- **`Cargo.lock` в репозитории.** Раньше он был в `.gitignore`, поэтому задеплоенный хэш нельзя было воспроизвести: сборка `main` даёт `da29a3c7…`, 693,072 байта, а не `48da204e…`.
+- **`web/`:** удаление `DEFAULT_ALLOWED_PROGRAMS` и кнопок «Approve whitelist» — отдельный PR [ssadkov/yield-ai-os-sol#41](https://github.com/ssadkov/yield-ai-os-sol/pull/41).
 
 ## 5. Сборка и проверка у себя
+
+Нужны: Rust 1.89, Agave 3.1.12 (platform-tools v1.52), Anchor CLI 0.32.1, Node ≥ 22, Linux или WSL. `Cargo.lock` теперь в репозитории: сборка должна дать тот же SHA-256 `f4bd23ffc8084c7ed3855e83c8b59a968e4d8987fa5b1e221c5079b8587a09b4`.
+
+Сборка и unit-тесты:
 
 ```bash
 cargo test -p yield-vault --lib
@@ -135,38 +156,71 @@ NO_DNA=1 anchor build
 ```
 
 ```bash
+sha256sum target/deploy/yield_vault.so
+```
+
+Копировать IDL в веб — только после деплоя нового ELF: веб сверяет задеплоенный хэш с проверенным.
+
+```bash
 cp target/idl/yield_vault.json web/src/idl/yield_vault.json
 ```
 
-На что смотреть:
-1. **SBF stack warnings в `anchor build`.** Крупные аккаунты обёрнуты в `Box`, но `OrcaLiquidity` и `OrcaCollect` большие. Если будет предупреждение о стеке, вынести проверки в отдельные функции или разбить структуры.
-2. **Размер ELF.** Свободного места в ProgramData — около 6 KB (697245 против 690944 байт). Новый код почти наверняка потребует `solana program extend` (минимум 10240 байт; прошлый extend на 10240 байт стоил 0.052 SOL ренты). Точное число станет известно после сборки.
-3. **Локальный validator:** `npx tsx src/v2SecuritySmoke.ts` из `client/` — новые проверки timelock и deny-list.
+Форк-тест Orca (только чтение mainnet, в сеть ничего не отправляется):
 
-Форк-тесты, которые нужно написать до деплоя (LiteSVM, по образцу `exponentForkPrepare.ts`, с ELF Orca, настоящими пулами и фидами Pyth):
+```bash
+cd client && npm ci
+```
 
-| Сценарий | Ожидание |
+```bash
+npm run orca:probe-build
+```
+
+```bash
+ORCA_FORK_DIR=/tmp/orca-fork npm run orca:fork-prepare
+```
+
+```bash
+ORCA_FORK_DIR=/tmp/orca-fork npm run orca:fork
+```
+
+Ожидаемый результат: `53 successful steps, 45 expected rejections`. Отчёт пишется в `/tmp/orca-fork/orca-fork-report.json` (CU, размеры транзакций, комиссии, отказы).
+
+### Результаты форк-теста 2026-11-04
+
+Снимок mainnet на слоте 465220140, живые ELF Orca Whirlpool (`c422b22f…`) и Token-2022 (`15a2e615…`).
+
+| Что проверено | Результат |
 |---|---|
-| `orca_swap` USDC→cbBTC и обратно, owner и agent | Балансы сходятся; `min_out` ниже оракульного минимума → `Slippage` |
-| Сдвинуть цену пула перед swap / increase / open агента | `PriceOutOfBand` |
-| Подменить ATA Safe, vault пула, фид, пул, tick array, oracle PDA | Откат |
-| Устаревший фид (warp clock > 120 с) | Агент: `StaleOracle`; owner decrease проходит |
-| Open → increase → swap для накопления комиссий → collect | Комиссия 10% на ATA treasury, 90% в Safe |
-| `set_lp_fee(2000)` после open | Открытая позиция платит по своей зафиксированной ставке |
-| decrease 50% → decrease 100% → collect → close | Себестоимость 0, рента вернулась funder |
-| `orca_lp_exit_nft` с несобранными комиссиями | `CollectFirst`; после collect NFT у владельца |
-| `withdraw_spl` / `deposit_spl` с mint позиции | `UseDedicatedInstruction` |
-| Агент: пул вне маски, `agent_enabled = false`, ширина вне границ, 5-я позиция, 5-е открытие за сутки, превышение `max_hold_usdc` и лимитов агента | Откат с соответствующей ошибкой |
-| Generic CPI: SPL Token как цель, Orca в аккаунтах, Token-2022-аккаунт Safe, программа делает `Approve` | `ProgramDenied` / `UseDedicatedInstruction` / `Token2022NotAllowed` / `SafeAccountChanged` |
-| CU и размер транзакции для open + increase в одной транзакции | Уложиться в 1.4M CU и 1232 байта (с ALT) |
+| `orca_swap` 20,000 USDC → cbBTC (владелец), 10,000 (агент), cbBTC → WBTC (агент) | Проходит; недобор к цене Pyth — 24 bps (комиссия пула 4 bps + проскальзывание) |
+| `min_out` ниже минимума по Pyth; сдвиг цены пула на 1%; цена BTC старше 90 с; привязка cbBTC старше 600 с; cbBTC на 2% ниже BTC; WBTC на 3% выше BTC; доверительный интервал 2%; подмена фида, привязки, ATA, vault, пула, tick array | `Slippage`, `PriceOutOfBand`, `StaleOracle`, `Depeg`, `OracleConfidence`, `InvalidOracle`, `ConstraintTokenOwner`, `InvalidPoolState`, `UnknownPool`, `InvalidTickArray` |
+| Агент: лимит хранения cbBTC, действие > 50,000 USDC, пул вне маски, `agent_enabled = false`, чужой ключ | `HoldLimit`, `ExecutorActionLimit`, `PoolDisabled`, `AgentDisabled`, `Unauthorized` |
+| open → increase → объём трейдера → collect | 22,083 сатоши cbBTC и 17.34 USDC комиссий; на treasury ровно 10% (2,208 / 1,734,146 raw), остальное в Safe |
+| `set_lp_fee(2000)` после открытия | Старая позиция платит 10%, новая записывает 20% |
+| decrease 50% → decrease остатка с устаревшим оракулом (владелец) → close | Себестоимость уходит в 0; агенту с устаревшим оракулом — `StaleOracle`; close до collect — `ClosePositionNotEmpty` (Orca); рента — только funder (`InvalidReceiver`) |
+| `orca_lp_exit_nft` | До collect — `CollectFirst`; после — NFT у владельца, запись закрыта, себестоимость снята |
+| `withdraw_spl` / `deposit_spl` с NFT позиции | `UseDedicatedInstruction` |
+| 4-е открытие агента за сутки; 5-я позиция; ширина ниже минимума; principal выше `max_lp_principal_usdc` | `RebalanceLimit`, `TooManyPositions`, `InvalidRange`, `ExecutorPositionLimit` |
+| Generic CPI: propose SPL Token / Orca; добавление через `set_allowed_programs`; активация за 1 с до 48 ч | `ProgramDenied`, `UseDedicatedInstruction`, `UseTimelock`, `TimelockActive` |
+| Тестовая программа `cpi-probe` после активации: `Approve`, `SetAuthority` на USDC ATA Safe; Token-2022-аккаунт Safe; Orca в аккаунтах | `SafeAccountChanged`, `SafeAccountChanged`, `Token2022NotAllowed`, `UseDedicatedInstruction` |
+| **Остаточный риск:** та же активированная программа делает `Transfer` 1 USDC с Safe на чужой аккаунт | **Проходит.** Защищают только 48 часов и проверка заявок в UI (раздел 2) |
+| `close_safe` при открытой себестоимости; `refund_excess_lamports` от агента | `OpenRoutePrincipal`, `Unauthorized` |
+
+Вычислительные и размерные затраты:
+- **CU:** swap ~76–90k, open ~92–107k, increase ~72–79k, decrease ~60–80k, collect ~69–79k, close ~47k.
+- **Размер транзакций без ALT:** swap 834 байта, open 856, increase 980, collect 913.
+- **Open и increase вместе — 1240 байт, больше лимита 1232.** Клиент должен отправлять их двумя транзакциями или использовать lookup table.
+
+**Размер программы.** 1,027,352 байта против 697,200 доступных в текущем ProgramData. Нужен `solana program extend` примерно на 330,152 байта — это около **2.30 SOL** ренты (возвращается при закрытии программы). Основная прибавка — код проверки аккаунтов Anchor на каждую инструкцию (10–14 KB на структуру). Сократить можно, объединив инструкции LP в одну с диспетчером, но это хуже для аудита.
+
+**Старый форк-тест Exponent** (`npm run exponent:fork`) на снимке 2026-11-04 падает на первой покупке с `Residual` (`exponent.rs:419`). Падает одинаково и с задеплоенным ELF `48da204e…`, так что это не регрессия этой ветки. Живая покупка при этом работает: план покупки через публичный mainnet API (`/protocols/exponent/deposits/plan`, источник `safe`, 0.1 и 0.5 USDC) проходит симуляцию, ~466k CU. Харнес Exponent нужно разобрать отдельно (вероятно, размер первой покупки $100 на текущем состоянии пула).
 
 ## 6. Порядок выкатки
 
 Не раньше 2026-11-14: в неделю хакатона апгрейд программы не нужен.
 
 1. Upgrade authority и admin `Config` переводятся на Squads. Treasury — отдельный кошелёк.
-2. Форк-тесты из раздела 5 проходят. Внешний аудит — хотя бы `cpi_policy.rs` и `orca.rs`.
-3. Upgrade: extend ProgramData, буфер, upgrade. После — сверка хэша, authority и ренты.
+2. Форк-тест из раздела 5 проходит на свежем снимке. Внешний аудит — хотя бы `cpi_policy.rs` и `orca.rs`.
+3. Upgrade: extend ProgramData примерно на 330 KB (~2.30 SOL), буфер, upgrade. После — сверка хэша, authority и ренты.
 4. `init_lp_fee_config`. Создать ATA treasury для cbBTC и WBTC.
 5. Малый цикл владельца ($5–20): swap → open → increase → collect → decrease → close, затем `exit_nft` на отдельной позиции.
 6. Только после этого — `agent_enabled = true` для одного пилотного Safe с лимитами из раздела 3.

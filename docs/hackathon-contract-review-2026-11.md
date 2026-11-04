@@ -2,7 +2,7 @@
 
 Review date: 2026-11-03. Reviewer: Claude Code, at Sergei's request. This is a read-only review. No program code was changed, nothing was deployed, and no keys or mainnet funds were touched.
 
-**Status 2026-11-04.** Fixes from this review are now in source on this branch, with host tests. They are not built for SBF, fork-tested or deployed. Details: [safe-cpi-policy-and-orca.md](safe-cpi-policy-and-orca.md).
+**Status 2026-11-04.** Fixes from this review are now in source on this branch. They pass host tests, an SBF build and a LiteSVM fork test against the live Orca and Token-2022 ELFs; they are not audited or deployed. Details: [safe-cpi-policy-and-orca.md](safe-cpi-policy-and-orca.md).
 
 | Finding | State |
 |---|---|

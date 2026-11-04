@@ -13,7 +13,11 @@ declare_id!("yie1Jjq6y3rjsiGkgMYnwTveSgpSrSh4n41JHRNyBih");
 
 mod exponent;
 mod exponent_accounts;
+pub mod cpi_policy;
+pub mod orca;
 pub use exponent::*;
+pub use cpi_policy::*;
+pub use orca::*;
 
 /// Owner CPI allowlist size. 16 keeps Safe rent low (the list is reserved in full at creation).
 const MAX_ALLOWED_PROGRAMS: usize = 16;
@@ -203,7 +207,8 @@ fn initialize_vault_state(
     allocation_bps: [u16; MAX_ROUTES], allowed_programs: Vec<Pubkey>,
     registry: &Account<ExecutorRegistry>,
 ) -> Result<()> {
-    require!(allowed_programs.len() <= MAX_ALLOWED_PROGRAMS, ErrorCode::TooManyPrograms);
+    // Generic CPI programs are only added through the timelocked propose/activate flow.
+    require!(allowed_programs.is_empty(), cpi_policy::CpiPolicyError::UseTimelock);
     validate_allocation(&allocation_bps)?;
     require!(agent != Pubkey::default(), ErrorCode::InvalidExecutor);
     require!(registry.approved.contains(&agent), ErrorCode::ExecutorNotApproved);
@@ -314,6 +319,40 @@ pub mod yield_vault {
     }
     pub fn recover_exponent(ctx: Context<RecoverExponent>, amount: u64) -> Result<()> {
         exponent::recover(ctx, amount)
+    }
+
+    /// Admin: create the LP fee config at DEFAULT_LP_FEE_BPS (10% of collected LP fees).
+    pub fn init_lp_fee_config(ctx: Context<InitLpFeeConfig>) -> Result<()> {
+        orca::handle_init_lp_fee_config(ctx)
+    }
+    /// Admin: LP fee for positions opened from now on, 0..=MAX_LP_FEE_BPS (20%).
+    pub fn set_lp_fee(ctx: Context<SetLpFee>, lp_fee_bps: u16) -> Result<()> {
+        orca::handle_set_lp_fee(ctx, lp_fee_bps)
+    }
+    /// Owner: Orca agent policy (switch, pools, slippage, oracle band, caps, range, rebalances).
+    pub fn set_orca_policy(ctx: Context<SetOrcaPolicy>, args: OrcaPolicyArgs) -> Result<()> {
+        orca::handle_set_orca_policy(ctx, args)
+    }
+    pub fn orca_swap<'info>(ctx: Context<'_, '_, '_, 'info, OrcaSwap<'info>>, pool: u8, a_to_b: bool, amount_in: u64, min_out: u64) -> Result<()> {
+        orca::handle_orca_swap(ctx, pool, a_to_b, amount_in, min_out)
+    }
+    pub fn orca_lp_open<'info>(ctx: Context<'_, '_, '_, 'info, OrcaOpenPosition<'info>>, pool: u8, tick_lower: i32, tick_upper: i32) -> Result<()> {
+        orca::handle_orca_open(ctx, pool, tick_lower, tick_upper)
+    }
+    pub fn orca_lp_increase<'info>(ctx: Context<'_, '_, '_, 'info, OrcaLiquidity<'info>>, liquidity: u128, token_max_a: u64, token_max_b: u64) -> Result<()> {
+        orca::handle_orca_increase(ctx, liquidity, token_max_a, token_max_b)
+    }
+    pub fn orca_lp_decrease<'info>(ctx: Context<'_, '_, '_, 'info, OrcaLiquidity<'info>>, liquidity: u128, token_min_a: u64, token_min_b: u64) -> Result<()> {
+        orca::handle_orca_decrease(ctx, liquidity, token_min_a, token_min_b)
+    }
+    pub fn orca_lp_collect<'info>(ctx: Context<'_, '_, '_, 'info, OrcaCollect<'info>>) -> Result<()> {
+        orca::handle_orca_collect(ctx)
+    }
+    pub fn orca_lp_close<'info>(ctx: Context<'_, '_, '_, 'info, OrcaClosePosition<'info>>) -> Result<()> {
+        orca::handle_orca_close(ctx)
+    }
+    pub fn orca_lp_exit_nft<'info>(ctx: Context<'_, '_, '_, 'info, OrcaExitNft<'info>>) -> Result<()> {
+        orca::handle_orca_exit_nft(ctx)
     }
 
     pub fn initialize(
@@ -448,9 +487,26 @@ pub mod yield_vault {
             allowed_programs.len() <= MAX_ALLOWED_PROGRAMS,
             ErrorCode::TooManyPrograms
         );
+        // Removal only, effective immediately. Additions: propose_allowed_program + activate.
+        cpi_policy::require_removal_only(&ctx.accounts.vault.allowed_programs, &allowed_programs)?;
         let vault = &mut ctx.accounts.vault;
         vault.allowed_programs = allowed_programs;
         Ok(())
+    }
+
+    /// Owner proposes a generic-CPI program. It can be activated after ALLOWLIST_DELAY_SECONDS.
+    pub fn propose_allowed_program(ctx: Context<ProposeAllowedProgram>, program: Pubkey) -> Result<()> {
+        cpi_policy::propose(ctx, program)
+    }
+
+    /// Owner activates a proposal whose timelock expired (second, separate signature).
+    pub fn activate_allowed_program(ctx: Context<ChangePendingProgram>, program: Pubkey) -> Result<()> {
+        cpi_policy::activate(ctx, program)
+    }
+
+    /// Owner cancels a pending proposal.
+    pub fn cancel_allowed_program(ctx: Context<ChangePendingProgram>, program: Pubkey) -> Result<()> {
+        cpi_policy::cancel(ctx, program)
     }
 
     /// The owner may rotate or revoke the agent. Pubkey::default() revokes it.
@@ -489,6 +545,7 @@ pub mod yield_vault {
         require!(amount > 0, ErrorCode::ZeroAmount);
         require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
+        require!(!orca::is_orca_position_mint(&ctx.accounts.mint.to_account_info()), ErrorCode::UseDedicatedInstruction);
         token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -541,6 +598,8 @@ pub mod yield_vault {
         require!(amount > 0, ErrorCode::ZeroAmount);
         require!(!exponent::protected_mint(&ctx.accounts.mint.key()), exponent::ExponentError::ProtectedAsset);
         require_keys_neq!(ctx.accounts.mint.key(), KAMINO_USDC_KVAULT_SHARES, ErrorCode::UseDedicatedInstruction);
+        // Orca position NFTs leave only through orca_lp_exit_nft (fees collected first).
+        require!(!orca::is_orca_position_mint(&ctx.accounts.mint.to_account_info()), ErrorCode::UseDedicatedInstruction);
         let vault = &ctx.accounts.vault;
         let owner_key = ctx.accounts.owner.key();
         let seeds: &[&[u8]] = &[b"vault", owner_key.as_ref(), &[vault.bump]];
@@ -567,88 +626,16 @@ pub mod yield_vault {
     /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
     /// The vault PDA may sign as authority via seeds `[b"vault", owner.key(), bump]`.
     pub fn execute_swap_cpi(ctx: Context<ExecuteSwap>, data: Vec<u8>) -> Result<()> {
-        let vault = &mut ctx.accounts.vault;
-        require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
-        exponent::protect_generic(vault, ctx.remaining_accounts)?;
-        let rem = ctx.remaining_accounts;
-        require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
-        let program_id = rem[0].key();
-        require!(
-            vault.allowed_programs.iter().any(|p| *p == program_id),
-            ErrorCode::ProgramNotWhitelisted
-        );
-        // Routes with fee and principal accounting must go through their dedicated instructions.
-        require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
-        let vault_key = vault.key();
-        let shares_ata = kamino_shares_ata(&vault_key);
-        require!(!rem.iter().any(|a| a.key() == shares_ata), ErrorCode::UseDedicatedInstruction);
-        let account_metas: Vec<AccountMeta> = rem[1..]
-            .iter()
-            .map(|a| {
-                // Outer tx cannot include a PDA signature; the inner protocol ix may still
-                // expect the vault PDA as a signer. `invoke_signed` authorizes it via seeds.
-                let is_signer = a.key() == vault_key || a.is_signer;
-                if a.is_writable {
-                    AccountMeta::new(a.key(), is_signer)
-                } else {
-                    AccountMeta::new_readonly(a.key(), is_signer)
-                }
-            })
-            .collect();
-        let ix = Instruction {
-            program_id,
-            accounts: account_metas,
-            data,
-        };
-        let seeds: &[&[u8]] = &[b"vault", vault.owner.as_ref(), &[vault.bump]];
-        let signer: &[&[&[u8]]] = &[seeds];
-        invoke_signed(&ix, rem, signer)?;
-        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
-        Ok(())
+        let authority = ctx.accounts.authority.key();
+        cpi_policy::run_generic_cpi(&mut ctx.accounts.vault, &authority, ctx.remaining_accounts, data)
     }
 
     /// Owner-only generic CPI gateway into a whitelisted protocol program. Pass remaining accounts as:
     /// `[program_id_account, ...accounts matching Instruction.accounts order for that program]`.
     /// The vault PDA may sign as authority via seeds `[b"vault", owner.key(), bump]`.
     pub fn execute_protocol_cpi(ctx: Context<ExecuteProtocol>, data: Vec<u8>) -> Result<()> {
-        let vault = &mut ctx.accounts.vault;
-        require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
-        exponent::protect_generic(vault, ctx.remaining_accounts)?;
-        let rem = ctx.remaining_accounts;
-        require!(!rem.is_empty(), ErrorCode::MissingCpiProgram);
-        let program_id = rem[0].key();
-        require!(
-            vault.allowed_programs.iter().any(|p| *p == program_id),
-            ErrorCode::ProgramNotWhitelisted
-        );
-        // Routes with fee and principal accounting must go through their dedicated instructions.
-        require!(program_id != KAMINO_KVAULT_PROGRAM, ErrorCode::UseDedicatedInstruction);
-        let vault_key = vault.key();
-        let shares_ata = kamino_shares_ata(&vault_key);
-        require!(!rem.iter().any(|a| a.key() == shares_ata), ErrorCode::UseDedicatedInstruction);
-        let account_metas: Vec<AccountMeta> = rem[1..]
-            .iter()
-            .map(|a| {
-                // Outer tx cannot include a PDA signature; the inner protocol ix may still
-                // expect the vault PDA as a signer. `invoke_signed` authorizes it via seeds.
-                let is_signer = a.key() == vault_key || a.is_signer;
-                if a.is_writable {
-                    AccountMeta::new(a.key(), is_signer)
-                } else {
-                    AccountMeta::new_readonly(a.key(), is_signer)
-                }
-            })
-            .collect();
-        let ix = Instruction {
-            program_id,
-            accounts: account_metas,
-            data,
-        };
-        let seeds: &[&[u8]] = &[b"vault", vault.owner.as_ref(), &[vault.bump]];
-        let signer: &[&[&[u8]]] = &[seeds];
-        invoke_signed(&ix, rem, signer)?;
-        vault.last_rebalance_ts = Clock::get()?.unix_timestamp;
-        Ok(())
+        let authority = ctx.accounts.authority.key();
+        cpi_policy::run_generic_cpi(&mut ctx.accounts.vault, &authority, ctx.remaining_accounts, data)
     }
 
     /// Owner or agent: move `amount` USDC from the Safe into the Kamino USDC kVault.
@@ -815,21 +802,15 @@ pub mod yield_vault {
         Ok(())
     }
 
-    /// Return SOL that the caller temporarily funded into the vault PDA for protocol setup rent.
-    /// Unlike `withdraw_excess_lamports` (owner-only, drains all excess), this variant lets
-    /// either the agent or the owner refund a capped amount while keeping a safety reserve.
-    /// The frontend encodes this with a distinct Anchor discriminator.
+    /// Owner-only capped refund of Safe PDA lamports above rent plus `reserve_lamports`.
+    /// The agent path was removed: a stolen or registry-revoked agent key could sweep the PDA.
     pub fn refund_excess_lamports(
         ctx: Context<RefundExcessLamports>,
         max_amount: u64,
         reserve_lamports: u64,
     ) -> Result<()> {
         let vault = &ctx.accounts.vault;
-        require!(
-            ctx.accounts.authority.key() == vault.agent
-                || ctx.accounts.authority.key() == vault.owner,
-            ErrorCode::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), vault.owner, ErrorCode::Unauthorized);
 
         let vault_info = ctx.accounts.vault.to_account_info();
         let authority_info = ctx.accounts.authority.to_account_info();
@@ -860,6 +841,9 @@ pub mod yield_vault {
     /// Anything left behind stays recoverable: the PDA is derived from the owner, and
     /// `initialize` accepts an existing USDC ATA, so re-initializing restores control.
     pub fn close_safe<'info>(ctx: Context<'_, '_, 'info, 'info, CloseSafe<'info>>) -> Result<()> {
+        // Closing with tracked route principal would reset the cost basis on re-init and charge
+        // the performance fee on principal. Exit every route first.
+        require!(ctx.accounts.vault.route_principal.iter().all(|p| *p == 0), ErrorCode::OpenRoutePrincipal);
         // Legacy clients pass only owner + vault. Current clients append the
         // policy PDA so its refundable rent is returned in the same transaction.
         if let Some(policy_info) = ctx.remaining_accounts.first() {
@@ -1419,6 +1403,8 @@ pub enum ErrorCode {
     LamportsUnderflow,
     #[msg("Lamports overflow")]
     LamportsOverflow,
+    #[msg("Exit every route before closing the Safe")]
+    OpenRoutePrincipal,
 }
 
 #[cfg(test)]

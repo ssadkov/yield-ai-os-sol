@@ -2,6 +2,21 @@
 
 Review date: 2026-11-03. Reviewer: Claude Code, at Sergei's request. This is a read-only review. No program code was changed, nothing was deployed, and no keys or mainnet funds were touched.
 
+**Status 2026-11-04.** Fixes from this review are now in source on this branch, with host tests. They are not built for SBF, fork-tested or deployed. Details: [safe-cpi-policy-and-orca.md](safe-cpi-policy-and-orca.md).
+
+| Finding | State |
+|---|---|
+| CRITICAL-1 single upgrade/admin key | Open, ops task (Squads) |
+| HIGH-1 generic CPI | Mitigated in code: deny-list, 48 h timelock on additions, post-CPI token-account invariants, no Safe Token-2022 accounts. A Jupiter-style output redirect through an activated program remains; that is why generic CPI should be removed eventually |
+| MEDIUM-1 self-attested Exponent quote | Open; set `max_loss_bps` about 100. The new Orca route uses Pyth floors |
+| MEDIUM-2 agent lamport sweep | Fixed: `refund_excess_lamports` is owner-only |
+| MEDIUM-3 retroactive fee change | Open for Kamino. The new LP fee is snapshotted per position |
+| LOW-1 `close_safe` with open principal | Fixed: `OpenRoutePrincipal` |
+| LOW-2 `create_safe_for` griefing | Unchanged (UI handles an existing Safe) |
+| LOW-3 stale clients | `DEFAULT_ALLOWED_PROGRAMS` cleanup still needed in `web/` |
+
+Section 4's "proper route" sketch is superseded by the implemented Orca design in the document above.
+
 **What was reviewed**
 
 - Source: `main` at commit `6d4030d` (2026-10-13). The program source last changed in `f91cf72` (2026-10-05). Files: `programs/yield-vault/src/lib.rs`, `exponent.rs`, `exponent_accounts.rs`, plus `web/src/lib/vault.ts`, `agent/` and the docs listed in the task.

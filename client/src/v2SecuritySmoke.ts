@@ -164,7 +164,12 @@ async function run() {
         systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /ExecutorNotApproved/);
   }
 
-  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
+  await expectFailure("initialize with a non-empty CPI allowlist", () => (program.methods as any)
+    .initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
+    .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
+      tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId }).signers([owner]).rpc(), /UseTimelock/);
+  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [])
     .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
@@ -209,13 +214,31 @@ async function run() {
   await expectFailure("non-owner set_allocation", () => (program.methods as any).setAllocation(ZERO_ALLOCATION)
     .accounts({ owner: attacker.publicKey, vault }).signers([attacker]).rpc(), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);
 
-  // Allowlist is capped at 16 programs (keeps Safe rent low); TOKEN_PROGRAM_ID stays first for the CPI tests below.
-  const sixteen = [TOKEN_PROGRAM_ID, KAMINO_KVAULT_PROGRAM, ...Array.from({ length: 14 }, () => Keypair.generate().publicKey)];
+  // Generic CPI allowlist: additions only via propose -> 48h -> activate; set_allowed_programs only removes.
   const setAllowed = (programs: PublicKey[]) => (program.methods as any).setAllowedPrograms(programs)
     .accounts({ owner: owner.publicKey, vault, systemProgram: SystemProgram.programId }).signers([owner]).rpc();
-  await expectFailure("allowlist of 17 programs", () => setAllowed([...sixteen, Keypair.generate().publicKey]), /TooManyPrograms/);
-  await setAllowed(sixteen);
-  assert.equal((await (program.account as any).vault.fetch(vault)).allowedPrograms.length, 16);
+  const [cpiPolicy] = PublicKey.findProgramAddressSync([Buffer.from("cpi_policy"), vault.toBuffer()], program.programId);
+  const propose = (signer: Keypair, target: PublicKey) => (program.methods as any).proposeAllowedProgram(target)
+    .accounts({ owner: signer.publicKey, vault, cpiPolicy, systemProgram: SystemProgram.programId }).signers([signer]).rpc();
+  const pending = (method: "activateAllowedProgram" | "cancelAllowedProgram", target: PublicKey) =>
+    (program.methods as any)[method](target).accounts({ owner: owner.publicKey, vault, cpiPolicy }).signers([owner]).rpc();
+  const candidate = Keypair.generate().publicKey;
+  await expectFailure("direct allowlist addition", () => setAllowed([candidate]), /UseTimelock/);
+  for (const denied of [TOKEN_PROGRAM_ID, SystemProgram.programId, BPF_LOADER_UPGRADEABLE, program.programId]) {
+    await expectFailure(`propose denied ${denied.toBase58()}`, () => propose(owner, denied), /ProgramDenied/);
+  }
+  await expectFailure("propose program with a typed route", () => propose(owner, KAMINO_KVAULT_PROGRAM), /UseDedicatedInstruction/);
+  await expectFailure("non-owner propose", () => propose(attacker, candidate), /ConstraintSeeds|ConstraintHasOne|AccountNotInitialized/);
+  await propose(owner, candidate);
+  await expectFailure("activate before the timelock", () => pending("activateAllowedProgram", candidate), /TimelockActive/);
+  await pending("cancelAllowedProgram", candidate);
+  await expectFailure("activate a cancelled proposal", () => pending("activateAllowedProgram", candidate), /NotPending/);
+  await setAllowed([]);
+  assert.equal((await (program.account as any).vault.fetch(vault)).allowedPrograms.length, 0);
+  await expectFailure("owner generic CPI into SPL Token", () => program.methods.executeProtocolCpi(Buffer.from([0]))
+    .accounts({ authority: owner.publicKey, vault })
+    .remainingAccounts([{ pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }])
+    .signers([owner]).rpc(), /ProgramDenied/);
   await expectFailure("generic CPI into Kamino kVault", () => program.methods.executeProtocolCpi(Buffer.from([0]))
     .accounts({ authority: owner.publicKey, vault })
     .remainingAccounts([{ pubkey: KAMINO_KVAULT_PROGRAM, isSigner: false, isWritable: false }])
@@ -257,13 +280,18 @@ async function run() {
       .accounts({ owner: owner.publicKey, vault, executorRegistry }).signers([owner]).rpc(), /ExecutorNotApproved/);
   }
 
+  // Owner recovery goes through withdraw; generic CPI into SPL Token is refused even for the owner.
   const ownerRecovery = createTransferInstruction(vaultAta, ownerAta, vault, 200_000);
-  await program.methods.executeProtocolCpi(Buffer.from(ownerRecovery.data))
+  await expectFailure("owner generic CPI transfer", () => program.methods.executeProtocolCpi(Buffer.from(ownerRecovery.data))
     .accounts({ authority: owner.publicKey, vault })
     .remainingAccounts([
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ...ownerRecovery.keys.map((key) => ({ ...key, isSigner: false })),
     ])
+    .signers([owner]).rpc(), /ProgramDenied/);
+  await program.methods.withdraw(new BN(200_000))
+    .accounts({ owner: owner.publicKey, vault, usdcMint: mint, ownerUsdcAta: ownerAta,
+      vaultUsdcAta: vaultAta, tokenProgram: TOKEN_PROGRAM_ID })
     .signers([owner]).rpc();
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
   assert.equal((await getAccount(connection, ownerAta)).amount, 200_000n);
@@ -289,7 +317,7 @@ async function run() {
   assert.equal(await connection.getAccountInfo(vault), null, "Safe account still exists after close_safe");
   assert.equal(await connection.getAccountInfo(executorLimits), null, "Executor limits rent was not returned on close_safe");
   assert.equal((await getAccount(connection, vaultAta)).amount, 800_000n);
-  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [TOKEN_PROGRAM_ID])
+  await (program.methods as any).initializeWithLimits(agent.publicKey, ZERO_ALLOCATION, [])
     .accounts({ owner: owner.publicKey, vault, executorLimits, executorRegistry, usdcMint: mint, vaultUsdcAta: vaultAta,
       tokenProgram: TOKEN_PROGRAM_ID, associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId })
@@ -401,7 +429,7 @@ async function run() {
     console.log(`devnet payer balance after ${(await connection.getBalance(payer.publicKey, "confirmed")) / 1e9} SOL`);
   }
   console.log("PASS: executor whitelist, default limits, owner-only changes, pause, missing-policy denial and policy rent recovery; " +
-    "agent CPI drains rejected; owner rotation, CPI recovery, legacy initialize/close_safe, close/re-init recovery, empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
+    "agent CPI drains rejected; owner rotation, CPI allowlist timelock and deny-list, legacy initialize/close_safe, close/re-init recovery, empty-ATA close, excess-lamport withdrawal, final close_safe, owner allocation, sponsored create_safe_for, " +
     "config access control and the Kamino generic-CPI block succeeded");
 }
 

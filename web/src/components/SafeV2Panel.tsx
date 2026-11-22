@@ -400,6 +400,12 @@ export function SafeV2Panel() {
           onClick={() => void runFullExit()}>
           <ArrowUpFromLine className="h-4 w-4" /> Withdraw all USDC
         </button>
+        <button type="button" className={`${button} border border-border hover:bg-accent`}
+          disabled={!!busy || metaMaskBlocked || !isMainnet || kaminoShares === BigInt(0)}
+          onClick={() => void run("Withdraw all from Kamino", buildKaminoWithdrawAll)}>
+          <ArrowUpFromLine className="h-4 w-4" /> Withdraw all from Kamino
+        </button>
+        <p className="text-muted-foreground">Withdraw all from Kamino redeems every share back into USDC inside the Safe. It does not send that USDC to your wallet. Use Withdraw amount afterwards.</p>
         {kaminoShares > BigInt(0) && <p className="text-muted-foreground">This may require several wallet approvals: first redeem Kamino shares, then send USDC to your wallet. Each confirmed step can be resumed after interruption.</p>}
         {otherHeldTokens.length > 0 && <p className="text-amber-200">The Safe also has other assets. Withdraw those separately before using full USDC withdrawal.</p>}
       </section>}
@@ -478,10 +484,6 @@ export function SafeV2Panel() {
           <button type="button" className={`${button} bg-primary text-primary-foreground hover:bg-primary/90`} disabled={!!busy || !canKaminoDeposit}
             onClick={() => void run(`Put ${usd(kaminoPut)} USDC into Kamino`, buildKaminoDeposit)}>
             <ArrowDownToLine className="h-4 w-4" /> Put {usd(kaminoPut)} USDC to work
-          </button>
-          <button type="button" className={`${button} border border-border hover:bg-accent`} disabled={!!busy || !isMainnet || kaminoShares === BigInt(0)}
-            onClick={() => void run("Withdraw all from Kamino", buildKaminoWithdrawAll)}>
-            <ArrowUpFromLine className="h-4 w-4" /> Withdraw all from Kamino
           </button>
         </div>
       </section>}

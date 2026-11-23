@@ -47,80 +47,19 @@ Off-chain risk logic still needs liquidation buffer, health factor, utilization,
 
 The loop cards are ideas. Execution remains manual in the Vault card: buy/hold collateral, deposit collateral to Jupiter Lend, borrow USDC, route USDC to earn, then repay and withdraw collateral when closing.
 
-## Contract capability check
+## Execution status
 
-The current on-chain program is not hardcoded to the USDC mint, despite the account names `usdc_mint`, `owner_usdc_ata`, and `vault_usdc_ata`.
+The sections that used to be here described the v1 program (`3Vtz…`, closed 2026-09-23): an
+executor signing `execute_protocol_cpi` with SPL Token, Kamino and Jupiter Lend in the Safe
+allowlist. That model is gone. In the current Safe (`yie1…`):
 
-What works technically:
-- `deposit` can transfer any classic SPL Token mint if the caller supplies:
-  - the mint account,
-  - the owner's token account for that mint,
-  - the vault PDA associated token account for that mint.
-- `withdraw` has the same mint-flexible constraints even though it is named USDC in code.
-- `withdraw_spl` is explicitly generic for any vault-owned classic SPL Token account with `token::authority = vault`.
-- `execute_protocol_cpi` can call whitelisted lending protocols and lets the vault PDA sign via seeds.
+- money moves only through typed instructions: `kamino_deposit` / `kamino_withdraw`,
+  `exponent_*`, and `orca_swap` / `orca_lp_*` (in source, not deployed yet);
+- generic CPI is owner-only, can never target token or system programs, and adding a program
+  takes a 48-hour timelock.
 
-Current blockers:
-- The web helpers `depositUsdc` and `withdrawUsdc` hardcode `USDC_MINT`.
-- The deposit path does not create the vault ATA for arbitrary mints. The ATA must exist before `deposit` is called.
-- Direct deposit/withdraw instructions use `anchor_spl::token::{Token, TokenAccount}` and therefore target the classic SPL Token Program. Token-2022 assets need a separate `token_interface` or Token-2022 compatible instruction path.
-- Existing PnL/history code assumes USDC decimals and USDC-only deposits/withdrawals.
-
-Conclusion:
-- Classic SPL deposits/withdrawals are not fundamentally blocked by the contract, but the web surface is currently USDC-only.
-- Token-2022 direct deposits/withdrawals are effectively blocked until we add token-interface support.
-- Protocol CPI actions are the right path for Kamino/Jupiter positions, but position accounting and liquidation checks stay off-chain for MVP.
-
-## Kamino kVault execution
-
-Kamino Earn deposits are built server-side through `POST /ktx/kvault/deposit-instructions`.
-
-Execution model:
-- `wallet` in the Kamino request is the vault PDA.
-- The backend executor signs the outer transaction with `AUTHORITY_SECRET_KEY`.
-- The vault program wraps Kamino kVault and farm instructions through `execute_protocol_cpi`.
-- The vault PDA signs inner Kamino instructions with `invoke_signed`.
-- ATA setup is sent directly with the backend executor as payer, because the vault PDA is program-owned and cannot pay System Program rent.
-
-Required allowlist entries:
-- `KvauGMspG5k6rtzrqqn7WNn3oZdyKqLKwK2XWQ8FLjd` - Kamino kVault.
-- `FarmsPZpWu9i7Kky8tPN37rs2TpmMrAZrC7S7vJa91Hr` - Kamino Farms.
-- `KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD` - Kamino Lend, included for upcoming direct borrow/lend actions.
-
-## Jupiter Lend collateral execution
-
-Status: launched in the UI for xStocks / USDC collateral positions.
-
-What is live:
-- Deposit xStocks collateral from the vault into Jupiter Lend borrow positions.
-- Borrow USDC manually from an existing Jupiter Lend position into the vault.
-- Repay USDC manually from the vault into an existing Jupiter Lend position.
-- Reuse an existing Jupiter position NFT held by the vault PDA.
-- Create a position NFT only when none exists, then transfer it into the vault PDA.
-- Withdraw all Jupiter collateral back to the vault when debt is zero.
-- Show Jupiter Lend positions inside the Vault card with collateral, debt, USD value, APY/APR, net APY, market, and position id.
-
-Current enabled collateral markets:
-- `TSLAx / USDC` - Jupiter borrow vault `77`.
-- `SPYx / USDC` - Jupiter borrow vault `78`.
-- `QQQx / USDC` - Jupiter borrow vault `79`.
-- `NVDAx / USDC` - Jupiter borrow vault `80`.
-
-Execution model:
-- The executor signs the outer transaction with `AUTHORITY_SECRET_KEY`.
-- The vault program wraps Jupiter Borrow `Operate` through `execute_protocol_cpi`.
-- The vault PDA signs the inner Jupiter instructions with `invoke_signed`.
-- Initial position NFT creation is paid by the executor because a program-owned vault PDA cannot pay System Program rent directly.
-- After the position NFT is transferred to the vault PDA, the executor-owned temporary position ATA is closed back to the executor.
-- When the executor temporarily tops up the vault PDA for Jupiter setup rent, the follow-up refund instruction returns remaining excess SOL back to the executor, capped by that operation's top-up amount.
-
-Known behavior:
-- Jupiter Borrow position accounting uses 9-decimal internal precision even when the collateral token has 8 decimals.
-- The UI displays user-friendly token units from this accounting value.
-- MAX collateral deposits leave one raw token unit in the vault to avoid Token-2022 transfer rounding failures.
-- Withdraw is currently all-collateral only and disabled while the position has debt.
-- Borrow is currently a manual USDC amount input. The protocol simulation enforces borrow limits and health factor; product-level risk limits are not automated yet.
-- Repay is currently a manual USDC amount input. The source of repayment is USDC already inside the vault. If borrowed USDC was deposited into Kamino Earn, withdraw from Kamino back to the vault first, then repay.
+See [safe-cpi-policy-and-orca.md](safe-cpi-policy-and-orca.md). Jupiter Lend xStocks loops and
+Kamino borrow loops need their own typed routes before they can be executed from a Safe.
 
 ## Vault value, APY, and PnL display
 

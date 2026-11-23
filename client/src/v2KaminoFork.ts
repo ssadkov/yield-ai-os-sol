@@ -146,7 +146,7 @@ async function run() {
     createAssociatedTokenAccountIdempotentInstruction(agent.publicKey, treasuryUsdc, treasury.publicKey, USDC)), [agent]);
 
   // Owner: Safe with an agent, Kamino target 60%, 100 USDC.
-  await methods.initializeWithLimits(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [TOKEN_PROGRAM_ID])
+  await methods.initializeWithLimits(agent.publicKey, [6_000, 0, 0, 0, 0, 0, 0, 0], [])
     .accounts({ owner: owner.publicKey, vault: safe, executorLimits, executorRegistry, usdcMint: USDC, vaultUsdcAta: safeUsdc, tokenProgram: TOKEN_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId })
     .signers([owner]).rpc();
@@ -204,7 +204,7 @@ async function run() {
     .accounts({ authority: owner.publicKey, vault: safe })
     .remainingAccounts([{ pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ...sharesTransfer.keys.map((k) => ({ ...k, isSigner: false }))])
-    .signers([owner]).rpc(), /UseDedicatedInstruction/);
+    .signers([owner]).rpc(), /ProgramDenied|UseDedicatedInstruction/);
 
   const principalAfterDeposit = BigInt((await (program.account as any).vault.fetch(safe)).routePrincipal[0].toString());
   console.log(`  Kamino principal tracked: ${principalAfterDeposit}`);

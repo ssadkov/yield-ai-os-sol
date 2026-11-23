@@ -95,7 +95,7 @@ const mutate=async(tx:VersionedTransaction,change:(ix:import('@solana/web3.js').
  return new VersionedTransaction(message.compileToV0Message(tables));
 };
 try {
- await send([await methods.initializeWithLimits(agent.publicKey,[0,10_000,0,0,0,0,0,0],[TOKEN_PROGRAM_ID]).accounts({owner:owner.publicKey,vault:safe,usdcMint:mint,vaultUsdcAta:safeUsdc,executorRegistry:registry,executorLimits:limits,systemProgram:SystemProgram.programId,tokenProgram:TOKEN_PROGRAM_ID}).instruction()]);
+ await send([await methods.initializeWithLimits(agent.publicKey,[0,10_000,0,0,0,0,0,0],[]).accounts({owner:owner.publicKey,vault:safe,usdcMint:mint,vaultUsdcAta:safeUsdc,executorRegistry:registry,executorLimits:limits,systemProgram:SystemProgram.programId,tokenProgram:TOKEN_PROGRAM_ID}).instruction()]);
  await send([await methods.deposit(new BN(20_000_000_000)).accounts({owner:owner.publicKey,vault:safe,usdcMint:mint,ownerUsdcAta:ownerUsdc,vaultUsdcAta:safeUsdc,tokenProgram:TOKEN_PROGRAM_ID}).instruction()]);
  const setup=await unsignedSetup(connection,owner.publicKey.toBase58());await send(VersionedTransaction.deserialize(Buffer.from(setup.unsignedTransaction,'base64')));
  await setLimits(20_000_000_000,100_000_000_000,30_000_000_000);

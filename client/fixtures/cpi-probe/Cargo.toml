@@ -1,0 +1,14 @@
+# Test-only program for client/src/v2OrcaFork.ts. Never deploy.
+# It forwards the Safe PDA's CPI signature to SPL Token to prove the post-CPI invariants.
+[package]
+name = "cpi-probe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "2.3"
+
+[workspace]

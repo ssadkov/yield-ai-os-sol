@@ -13,10 +13,8 @@
   - From the chat, trigger existing execution flows:
     - rebalance via `POST /api/rebalance`
     - convert-all-to-USDC via `POST /api/rebalance` with `action="convert_all"`
-  - Handle `needs_whitelist` gracefully:
-    - surface missing program IDs in the chat UI
-    - let the vault owner sign a one-time `set_allowed_programs` transaction
-    - retry the requested action after approval
+  - Do not ask the owner to extend the CPI allowlist from chat: additions are timelocked (48 h)
+    and agent actions use typed instructions only. See `docs/safe-cpi-policy-and-orca.md`.
   - Add guardrails: never run execution tools without a clear confirmation/click.
 - **Phase 2: Add historical context (after Phase 1 works)**
   - Add `vault-history` summary to the chat context (deposits/withdrawals + net deposited + basic PnL).

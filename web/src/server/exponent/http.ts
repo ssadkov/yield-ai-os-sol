@@ -1,11 +1,21 @@
 import { Connection } from '@solana/web3.js';
 import { NextResponse } from 'next/server';
 import { V2_MAINNET_RPC_URL, v2MainnetRpcHeaders } from '../../lib/v2MainnetRpc.server';
+import { createRpcReadFetch } from '../../lib/rpcReadFetch';
 import { rawAmount, type ExponentAction } from '../../lib/exponentV2';
 import type { QuoteRequest } from './adapter';
+
+// One market load is about 16 RPC reads. A parallel burst trips the provider limit,
+// and the web3.js retry then burns the whole function budget.
+const exponentRpcFetch = createRpcReadFetch(fetch, { intervalMs: 120, timeoutMs: 12_000 });
+
 export function rpc() {
-  return new Connection(V2_MAINNET_RPC_URL,{commitment:'confirmed',httpHeaders:v2MainnetRpcHeaders(),
-    fetch:async (url,options)=>fetch(url,{...options,signal:AbortSignal.timeout(20_000)})});
+  return new Connection(V2_MAINNET_RPC_URL, {
+    commitment: 'confirmed',
+    disableRetryOnRateLimit: true,
+    httpHeaders: v2MainnetRpcHeaders(),
+    fetch: exponentRpcFetch,
+  });
 }
 export function parseRequest(value:Record<string,unknown>):QuoteRequest {
   if(!['buy','sell','redeem'].includes(String(value.action)))throw Error('invalid action');

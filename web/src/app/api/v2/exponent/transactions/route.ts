@@ -5,6 +5,7 @@ import { rpc, parseRequest, unavailable } from '@/server/exponent/http';
 import { rawAmount } from '@/lib/exponentV2';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
+export const maxDuration=60;
 export async function POST(request:Request) {
   let body:Record<string,unknown>;
   try {

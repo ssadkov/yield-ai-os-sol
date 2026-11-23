@@ -3,6 +3,7 @@ import { marketInfo } from '@/server/exponent/adapter';
 import { rpc, unavailable } from '@/server/exponent/http';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
+export const maxDuration=60;
 export async function GET() {
   try{return NextResponse.json({markets:[await marketInfo(rpc())]},{headers:{'Cache-Control':'no-store'}});}
   catch{return unavailable();}

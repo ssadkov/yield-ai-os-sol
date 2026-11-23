@@ -3,6 +3,7 @@ import { quote } from '@/server/exponent/adapter';
 import { rpc, parseRequest, unavailable } from '@/server/exponent/http';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
+export const maxDuration=60;
 export async function GET(request:Request) {
   const params=new URL(request.url).searchParams;
   const values:Record<string,unknown>=Object.fromEntries(params);
